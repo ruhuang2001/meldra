@@ -2,6 +2,8 @@
 
 Meldra is an early-stage command-line coding agent. It uses the OpenAI Responses API to chat with you and can list, read, create, and edit files in the directory where it runs.
 
+Meldra was inspired by Amp's article, [How to Build an Agent](https://ampcode.com/notes/how-to-build-an-agent).
+
 > **Early stage:** Meldra is experimental. Review every change it makes and avoid running it in directories containing sensitive or irreplaceable files.
 
 ## Requirements
