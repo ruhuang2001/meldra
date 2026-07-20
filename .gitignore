@@ -1,3 +1,6 @@
-.env
+/dist/
+/coverage.out
+/.env
+/.references/
 meldra
 *.swp
