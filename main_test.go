@@ -211,6 +211,41 @@ func TestExecuteToolCallsReturnsEveryResult(t *testing.T) {
 	}
 }
 
+func TestToolFollowUpInputIncludesCallsBeforeTheirOutputs(t *testing.T) {
+	var output []responses.ResponseOutputItemUnion
+	if err := json.Unmarshal([]byte(`[
+		{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{\"value\":\"one\"}"}
+	]`), &output); err != nil {
+		t.Fatal(err)
+	}
+
+	input := toolFollowUpInput(output, responses.ResponseInputParam{
+		responses.ResponseInputItemParamOfFunctionCallOutput("call_1", "one"),
+	})
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got []struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+		Name   string `json:"name"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("tool follow-up has %d items, want 2", len(got))
+	}
+	if got[0].Type != "function_call" || got[0].CallID != "call_1" || got[0].Name != "echo" {
+		t.Fatalf("first item is %#v, want the original function call", got[0])
+	}
+	if got[1].Type != "function_call_output" || got[1].CallID != "call_1" {
+		t.Fatalf("second item is %#v, want the matching function output", got[1])
+	}
+}
+
 func TestValidateResponse(t *testing.T) {
 	if err := validateResponse(&responses.Response{Status: responses.ResponseStatusCompleted}); err != nil {
 		t.Fatalf("completed response was rejected: %v", err)

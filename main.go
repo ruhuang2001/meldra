@@ -136,6 +136,9 @@ func (a *Agent) Run(ctx context.Context) error {
 		input := responses.ResponseNewParamsInputUnion{
 			OfString: openai.String(userInput),
 		}
+		customBaseURLInput := responses.ResponseInputParam{
+			responses.ResponseInputItemParamOfMessage(userInput, responses.EasyInputMessageRoleUser),
+		}
 
 		for {
 			response, err := a.runInference(ctx, input, previousResponseID)
@@ -154,6 +157,18 @@ func (a *Agent) Run(ctx context.Context) error {
 			toolResults := a.executeToolCalls(response.Output)
 			if len(toolResults) == 0 {
 				break
+			}
+			if usesCustomBaseURL() {
+				// Some OpenAI-compatible providers do not retain function calls
+				// referenced by previous_response_id. Include those calls again so
+				// their corresponding outputs can be matched by call_id. Keep the
+				// original user request and every tool exchange from this turn too.
+				customBaseURLInput = append(customBaseURLInput, toolFollowUpInput(response.Output, toolResults)...)
+				input = responses.ResponseNewParamsInputUnion{
+					OfInputItemList: customBaseURLInput,
+				}
+				previousResponseID = ""
+				continue
 			}
 			input = responses.ResponseNewParamsInputUnion{
 				OfInputItemList: toolResults,
@@ -196,6 +211,10 @@ func modelName() string {
 	return defaultModel
 }
 
+func usesCustomBaseURL() bool {
+	return os.Getenv("OPENAI_BASE_URL") != ""
+}
+
 func validateResponse(response *responses.Response) error {
 	if response.Status == responses.ResponseStatusCompleted {
 		return nil
@@ -226,6 +245,19 @@ func (a *Agent) executeToolCalls(output []responses.ResponseOutputItemUnion) res
 		results = append(results, responses.ResponseInputItemParamOfFunctionCallOutput(call.CallID, result))
 	}
 	return results
+}
+
+func toolFollowUpInput(output []responses.ResponseOutputItemUnion, toolResults responses.ResponseInputParam) responses.ResponseInputParam {
+	input := make(responses.ResponseInputParam, 0, len(output)+len(toolResults))
+	for _, item := range output {
+		if item.Type != "function_call" {
+			continue
+		}
+
+		call := item.AsFunctionCall()
+		input = append(input, responses.ResponseInputItemParamOfFunctionCall(call.Arguments, call.CallID, call.Name))
+	}
+	return append(input, toolResults...)
 }
 
 func (a *Agent) executeTool(name string, input json.RawMessage) (string, error) {
