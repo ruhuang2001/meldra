@@ -151,6 +151,29 @@ func TestTUIIgnoresStaleReadyAfterSubmit(t *testing.T) {
 	}
 }
 
+func TestTUIToolCompletionReturnsToThinking(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 24
+	model.resize()
+
+	model.applyEvent(UIEvent{Kind: UIEventToolStarted, Name: "list_files"})
+	if model.status != "Running list_files" || !model.busy {
+		t.Fatalf("tool start state = status %q, busy %v", model.status, model.busy)
+	}
+
+	model.applyEvent(UIEvent{Kind: UIEventToolFinished, Name: "list_files", Detail: "[\"main.go\"]"})
+	if model.status != "Thinking" || !model.busy {
+		t.Fatalf("tool finish state = status %q, busy %v", model.status, model.busy)
+	}
+	if model.activeTool != -1 || model.entries[0].active {
+		t.Fatalf("tool entry remained active: %#v", model.entries)
+	}
+	if !strings.Contains(model.renderTimeline(), "done") {
+		t.Fatalf("completed tool was not rendered as done: %q", model.renderTimeline())
+	}
+}
+
 func TestTUIPendingApprovalRequiresExplicitY(t *testing.T) {
 	controller := newTUIController(nil)
 	model := newTUIModel(controller, tuiInitialState{})

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,6 +43,81 @@ func (s *scriptedResponseStream) Err() error {
 
 func (s *scriptedResponseStream) Close() error {
 	s.closed = true
+	return nil
+}
+
+type stallingResponseStream struct {
+	event     responses.ResponseStreamEventUnion
+	sent      bool
+	released  chan struct{}
+	closeOnce sync.Once
+}
+
+func newStallingResponseStream(event responses.ResponseStreamEventUnion) *stallingResponseStream {
+	return &stallingResponseStream{
+		event:    event,
+		released: make(chan struct{}),
+	}
+}
+
+func (s *stallingResponseStream) Next() bool {
+	if !s.sent {
+		s.sent = true
+		return true
+	}
+	<-s.released
+	return false
+}
+
+func (s *stallingResponseStream) Current() responses.ResponseStreamEventUnion {
+	return s.event
+}
+
+func (s *stallingResponseStream) Err() error { return nil }
+
+func (s *stallingResponseStream) Close() error {
+	s.closeOnce.Do(func() { close(s.released) })
+	return nil
+}
+
+type delayedResponseStream struct {
+	events    []responses.ResponseStreamEventUnion
+	delays    []time.Duration
+	index     int
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (s *delayedResponseStream) Next() bool {
+	if s.index >= len(s.events) {
+		return false
+	}
+	if delay := s.delays[s.index]; delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-s.closed:
+			return false
+		}
+	}
+	select {
+	case <-s.closed:
+		return false
+	default:
+	}
+	s.index++
+	return true
+}
+
+func (s *delayedResponseStream) Current() responses.ResponseStreamEventUnion {
+	return s.events[s.index-1]
+}
+
+func (s *delayedResponseStream) Err() error { return nil }
+
+func (s *delayedResponseStream) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
 	return nil
 }
 
@@ -249,7 +325,7 @@ func TestAgentReconstructsGatewayOutputItemsAfterToolCall(t *testing.T) {
 	}
 }
 
-func TestAgentUsesStatefulToolFollowUpForCustomBaseURL(t *testing.T) {
+func TestAgentReplaysFullToolContextForCustomBaseURL(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://provider.example/v1")
 	first := responseFromJSON(t, `{
 		"id":"resp_call",
@@ -286,22 +362,24 @@ func TestAgentUsesStatefulToolFollowUpForCustomBaseURL(t *testing.T) {
 	var followUp struct {
 		PreviousResponseID string `json:"previous_response_id"`
 		Input              []struct {
-			Type   string `json:"type"`
-			CallID string `json:"call_id"`
+			Type    string          `json:"type"`
+			Role    string          `json:"role"`
+			CallID  string          `json:"call_id"`
+			Content json.RawMessage `json:"content"`
 		} `json:"input"`
 	}
 	if err := json.Unmarshal(encoded, &followUp); err != nil {
 		t.Fatal(err)
 	}
-	if followUp.PreviousResponseID != "resp_call" {
-		t.Fatalf("previous_response_id = %q, want resp_call; request: %s", followUp.PreviousResponseID, encoded)
+	if followUp.PreviousResponseID != "" {
+		t.Fatalf("custom tool follow-up sent previous_response_id: %s", encoded)
 	}
-	if len(followUp.Input) != 1 || followUp.Input[0].Type != "function_call_output" || followUp.Input[0].CallID != "call_1" {
-		t.Fatalf("stateful tool follow-up input = %s", encoded)
+	if len(followUp.Input) != 3 || followUp.Input[0].Role != "user" || !bytes.Contains(followUp.Input[0].Content, []byte("use the tool")) || followUp.Input[1].Type != "function_call" || followUp.Input[2].Type != "function_call_output" || followUp.Input[2].CallID != "call_1" {
+		t.Fatalf("custom tool follow-up did not replay the full context: %s", encoded)
 	}
 }
 
-func TestAgentRetriesEmptyStatefulToolFollowUpStatelessly(t *testing.T) {
+func TestAgentRejectsEmptyCustomToolFollowUpWithoutRetry(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://provider.example/v1")
 	first := responseFromJSON(t, `{
 		"id":"resp_call",
@@ -312,68 +390,6 @@ func TestAgentRetriesEmptyStatefulToolFollowUpStatelessly(t *testing.T) {
 	streams := []*scriptedResponseStream{
 		{events: []responses.ResponseStreamEventUnion{{Type: "response.completed", Response: *first}}},
 		{events: []responses.ResponseStreamEventUnion{{Type: "response.completed", Response: empty}}},
-		{events: []responses.ResponseStreamEventUnion{{Type: "response.completed", Response: streamedCompletedResponse(t, "stateless reply")}}},
-	}
-	toolCalls := 0
-	var params []responses.ResponseNewParams
-	var output bytes.Buffer
-	agent := Agent{
-		getUserMessage: userMessages("use the tool"),
-		output:         &output,
-		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
-			toolCalls++
-			return "ok", nil
-		}}},
-		createStream: func(_ context.Context, request responses.ResponseNewParams) responseStream {
-			params = append(params, request)
-			stream := streams[len(params)-1]
-			return stream
-		},
-	}
-
-	if err := agent.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if toolCalls != 1 || len(params) != 3 {
-		t.Fatalf("tool calls = %d, requests = %d; want 1 and 3", toolCalls, len(params))
-	}
-	encoded, err := json.Marshal(params[2])
-	if err != nil {
-		t.Fatal(err)
-	}
-	var fallback struct {
-		PreviousResponseID string `json:"previous_response_id"`
-		Input              []struct {
-			Type   string `json:"type"`
-			Role   string `json:"role"`
-			CallID string `json:"call_id"`
-		} `json:"input"`
-	}
-	if err := json.Unmarshal(encoded, &fallback); err != nil {
-		t.Fatal(err)
-	}
-	if fallback.PreviousResponseID != "" {
-		t.Fatalf("stateless fallback still sent previous_response_id: %s", encoded)
-	}
-	if len(fallback.Input) != 3 || fallback.Input[0].Role != "user" || fallback.Input[1].Type != "function_call" || fallback.Input[2].Type != "function_call_output" || fallback.Input[2].CallID != "call_1" {
-		t.Fatalf("stateless tool follow-up input = %s", encoded)
-	}
-	if !strings.Contains(output.String(), "stateless reply") {
-		t.Fatalf("fallback reply was not shown: %q", output.String())
-	}
-}
-
-func TestAgentRetriesStatelesslyWhenCustomEndpointRejectsPreviousResponseID(t *testing.T) {
-	t.Setenv("OPENAI_BASE_URL", "https://provider.example/v1")
-	first := responseFromJSON(t, `{
-		"id":"resp_call",
-		"status":"completed",
-		"output":[{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{}"}]
-	}`)
-	streams := []*scriptedResponseStream{
-		{events: []responses.ResponseStreamEventUnion{{Type: "response.completed", Response: *first}}},
-		{err: &openai.Error{StatusCode: http.StatusBadRequest, Message: "responses to chat conversion does not support stateful fields: previous_response_id"}},
-		{events: []responses.ResponseStreamEventUnion{{Type: "response.completed", Response: streamedCompletedResponse(t, "fallback reply")}}},
 	}
 	toolCalls := 0
 	var params []responses.ResponseNewParams
@@ -390,21 +406,19 @@ func TestAgentRetriesStatelesslyWhenCustomEndpointRejectsPreviousResponseID(t *t
 		},
 	}
 
-	if err := agent.Run(context.Background()); err != nil {
-		t.Fatal(err)
+	err := agent.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "without assistant output or tool call") {
+		t.Fatalf("empty custom follow-up error = %v", err)
 	}
-	if toolCalls != 1 || len(params) != 3 {
-		t.Fatalf("tool calls = %d, requests = %d; want 1 and 3", toolCalls, len(params))
+	if toolCalls != 1 || len(params) != 2 {
+		t.Fatalf("tool calls = %d, requests = %d; want 1 and 2", toolCalls, len(params))
 	}
-	if !agent.customStatefulToolFollowUpUnsupported {
-		t.Fatal("endpoint previous-response rejection was not remembered")
-	}
-	encoded, err := json.Marshal(params[2])
+	encoded, err := json.Marshal(params[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(encoded, []byte(`"previous_response_id"`)) {
-		t.Fatalf("fallback request still contains previous_response_id: %s", encoded)
+		t.Fatalf("custom tool follow-up sent previous_response_id: %s", encoded)
 	}
 }
 
@@ -733,6 +747,99 @@ func TestRunInferenceReturnsStreamReadError(t *testing.T) {
 	}
 	if !stream.closed {
 		t.Fatal("stream was not closed")
+	}
+}
+
+func TestRunInferenceTimesOutAnIdleStreamAfterPartialOutput(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	stream := newStallingResponseStream(responses.ResponseStreamEventUnion{
+		Type:  "response.output_text.delta",
+		Delta: "partial",
+	})
+	agent := Agent{
+		streamIdleTimeout: 20 * time.Millisecond,
+		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
+			return stream
+		},
+	}
+
+	started := time.Now()
+	result, err := agent.runInference(context.Background(), responses.ResponseNewParamsInputUnion{}, "")
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("idle timeout took too long: %s", elapsed)
+	}
+	var timeoutErr *responseStreamIdleTimeoutError
+	if !errors.As(err, &timeoutErr) {
+		t.Fatalf("idle stream error = %v, want responseStreamIdleTimeoutError", err)
+	}
+	if result.streamedText != "partial" || !result.streamedTextShown {
+		t.Fatalf("partial stream result = %#v", result)
+	}
+	select {
+	case <-stream.released:
+		// The watchdog closed the blocked stream rather than leaving Next stuck.
+	default:
+		t.Fatal("idle watchdog did not close the blocked stream")
+	}
+}
+
+func TestRunInferenceResetsIdleTimeoutAfterEachSSEEvent(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	stream := &delayedResponseStream{
+		events: []responses.ResponseStreamEventUnion{
+			{Type: "response.created"},
+			{Type: "response.output_text.delta", Delta: "still streaming"},
+			{Type: "response.completed", Response: streamedCompletedResponse(t, "still streaming")},
+		},
+		delays: []time.Duration{0, 100 * time.Millisecond, 100 * time.Millisecond},
+		closed: make(chan struct{}),
+	}
+	agent := Agent{
+		streamIdleTimeout: 150 * time.Millisecond,
+		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
+			return stream
+		},
+	}
+
+	result, err := agent.runInference(context.Background(), responses.ResponseNewParamsInputUnion{}, "")
+	if err != nil {
+		t.Fatalf("stream with regular events timed out: %v", err)
+	}
+	if result.response == nil || result.response.OutputText() != "still streaming" {
+		t.Fatalf("stream response = %#v", result.response)
+	}
+}
+
+func TestRunInferenceTimesOutBeforeStreamingResponseArrives(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	started := make(chan struct{})
+	agent := Agent{
+		streamIdleTimeout: 20 * time.Millisecond,
+		createStream: func(ctx context.Context, _ responses.ResponseNewParams) responseStream {
+			close(started)
+			<-ctx.Done()
+			return &scriptedResponseStream{err: ctx.Err()}
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := agent.runInference(context.Background(), responses.ResponseNewParamsInputUnion{}, "")
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("stream creation did not start")
+	}
+	select {
+	case err := <-done:
+		var timeoutErr *responseStreamIdleTimeoutError
+		if !errors.As(err, &timeoutErr) {
+			t.Fatalf("pre-stream timeout error = %v, want responseStreamIdleTimeoutError", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle watchdog did not cancel a stalled stream creation")
 	}
 }
 

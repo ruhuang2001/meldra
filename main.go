@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -22,6 +24,7 @@ const (
 	defaultBaseURL           = "https://api.openai.com/v1"
 	defaultMaxInferenceSteps = 20
 	defaultMaxToolCalls      = 50
+	defaultStreamIdleTimeout = 90 * time.Second
 )
 
 const agentInstructions = `You are Meldra, a coding agent operating inside a bounded workspace.
@@ -104,12 +107,11 @@ type Agent struct {
 	createStream      responseStreamCreateFunc
 	events            UIEventSink
 	streamUnsupported bool
-	// Set only after a compatible endpoint explicitly rejects a
-	// previous_response_id continuation. Empty completed responses retry
-	// statelessly for the current turn but do not permanently disable it.
-	customStatefulToolFollowUpUnsupported bool
-	maxInferenceSteps                     int
-	maxToolCalls                          int
+	// streamIdleTimeout is only overridden by tests. A zero value uses the
+	// conservative default; a negative value disables the watchdog.
+	streamIdleTimeout time.Duration
+	maxInferenceSteps int
+	maxToolCalls      int
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -168,18 +170,6 @@ func (a *Agent) Run(ctx context.Context) error {
 		customBaseURLInput := responses.ResponseInputParam{
 			responses.ResponseInputItemParamOfMessage(modelInput, responses.EasyInputMessageRoleUser),
 		}
-		forceStatelessToolFollowUp := a.customStatefulToolFollowUpUnsupported
-		statefulToolFollowUp := false
-		useStatelessToolFollowUp := func(isRetry bool) {
-			input = responses.ResponseNewParamsInputUnion{
-				OfInputItemList: customBaseURLInput,
-			}
-			previousResponseID = ""
-			statefulToolFollowUp = false
-			if isRetry {
-				a.emit(UIEvent{Kind: UIEventStatus, Text: "Retrying without response context"})
-			}
-		}
 
 		inferenceSteps := 0
 		toolCalls := 0
@@ -198,16 +188,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			inferenceSteps++
 			result, err := a.runInference(ctx, input, previousResponseID)
 			if err != nil {
-				if statefulToolFollowUp && result.streamedText == "" && usesCustomBaseURL() && isUnsupportedPreviousResponseError(err) {
-					// A Chat-compatible gateway can reject response IDs that it
-					// created itself. Replay this completed tool exchange once,
-					// without executing the local tool a second time.
-					inferenceSteps--
-					a.customStatefulToolFollowUpUnsupported = true
-					forceStatelessToolFollowUp = true
-					useStatelessToolFollowUp(true)
-					continue
-				}
 				if result.streamedTextShown {
 					a.finishAssistantStream()
 				}
@@ -221,13 +201,6 @@ func (a *Agent) Run(ctx context.Context) error {
 				return err
 			}
 			response := result.response
-			if statefulToolFollowUp && result.streamedText == "" && usesCustomBaseURL() && responseSignalsUnsupportedPreviousResponse(response) {
-				inferenceSteps--
-				a.customStatefulToolFollowUpUnsupported = true
-				forceStatelessToolFollowUp = true
-				useStatelessToolFollowUp(true)
-				continue
-			}
 			if err := validateResponse(response); err != nil {
 				if result.streamedTextShown {
 					a.finishAssistantStream()
@@ -247,14 +220,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			requestedCalls := countToolCalls(response.Output)
 			if requestedCalls == 0 && assistantText == "" {
-				if statefulToolFollowUp && !result.streamedTextShown && usesCustomBaseURL() {
-					// The endpoint accepted the response ID but failed to produce a
-					// usable continuation. Retry the same completed tool exchange in
-					// stateless form once; a second empty response is reported below.
-					forceStatelessToolFollowUp = true
-					useStatelessToolFollowUp(true)
-					continue
-				}
 				if result.streamedTextShown {
 					a.finishAssistantStream()
 				}
@@ -301,27 +266,18 @@ func (a *Agent) Run(ctx context.Context) error {
 				return a.handleInterruption(true)
 			}
 			if usesCustomBaseURL() {
-				// Some OpenAI-compatible providers do not retain function calls
-				// referenced by previous_response_id. Include those calls again so
-				// their corresponding outputs can be matched by call_id. Keep the
-				// original user request and every tool exchange from this turn too.
+				// A third-party endpoint can accept previous_response_id without
+				// retaining its actual context. Replay the complete current turn so
+				// it always receives the original user request, calls, and outputs.
 				followUp, err := toolFollowUpInput(response.Output, toolResults)
 				if err != nil {
 					return err
 				}
 				customBaseURLInput = append(customBaseURLInput, followUp...)
-				if !forceStatelessToolFollowUp && response.ID != "" {
-					// Prefer a native Responses continuation when the provider
-					// supports it. The complete stateless replay remains available
-					// for gateways which reject response IDs.
-					input = responses.ResponseNewParamsInputUnion{
-						OfInputItemList: toolResults,
-					}
-					previousResponseID = response.ID
-					statefulToolFollowUp = true
-				} else {
-					useStatelessToolFollowUp(false)
+				input = responses.ResponseNewParamsInputUnion{
+					OfInputItemList: customBaseURLInput,
 				}
+				previousResponseID = ""
 				continue
 			}
 			input = responses.ResponseNewParamsInputUnion{
@@ -331,6 +287,140 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+type responseStreamIdleTimeoutError struct {
+	timeout time.Duration
+}
+
+func (e *responseStreamIdleTimeoutError) Error() string {
+	return fmt.Sprintf("response stream was idle for %s without a terminal event; the API gateway did not finish the response. Retry, or use a gateway with Responses streaming support", e.timeout)
+}
+
+// responseStreamCloser makes it safe for a watchdog to request closure before
+// the synchronous SDK call has returned a stream object.
+type responseStreamCloser struct {
+	mu             sync.Mutex
+	stream         responseStream
+	closeRequested bool
+}
+
+func (c *responseStreamCloser) set(stream responseStream) {
+	c.mu.Lock()
+	c.stream = stream
+	shouldClose := c.closeRequested
+	c.mu.Unlock()
+	if shouldClose && stream != nil {
+		_ = stream.Close()
+	}
+}
+
+func (c *responseStreamCloser) close() {
+	c.mu.Lock()
+	if c.closeRequested {
+		c.mu.Unlock()
+		return
+	}
+	c.closeRequested = true
+	stream := c.stream
+	c.mu.Unlock()
+	if stream != nil {
+		_ = stream.Close()
+	}
+}
+
+// responseStreamIdleWatchdog tracks gaps between decoded SSE events. It is not
+// a total request deadline: every event gives the provider a fresh interval to
+// continue the response. The callback must unblock a pending Stream.Next call.
+type responseStreamIdleWatchdog struct {
+	timeout   time.Duration
+	onTimeout func()
+
+	mu         sync.Mutex
+	timer      *time.Timer
+	generation uint64
+	stopped    bool
+	timedOut   bool
+}
+
+func newResponseStreamIdleWatchdog(timeout time.Duration, onTimeout func()) *responseStreamIdleWatchdog {
+	if timeout <= 0 {
+		return nil
+	}
+	watchdog := &responseStreamIdleWatchdog{
+		timeout:   timeout,
+		onTimeout: onTimeout,
+	}
+	watchdog.resetLocked()
+	return watchdog
+}
+
+// noteEvent resets the timeout after a complete, successfully decoded SSE
+// event. It returns false when the watchdog has already expired.
+func (w *responseStreamIdleWatchdog) noteEvent() bool {
+	if w == nil {
+		return true
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.stopped || w.timedOut {
+		return false
+	}
+	w.resetLocked()
+	return true
+}
+
+func (w *responseStreamIdleWatchdog) resetLocked() {
+	w.generation++
+	generation := w.generation
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	w.timer = time.AfterFunc(w.timeout, func() {
+		w.expire(generation)
+	})
+}
+
+func (w *responseStreamIdleWatchdog) expire(generation uint64) {
+	w.mu.Lock()
+	if w.stopped || w.timedOut || generation != w.generation {
+		w.mu.Unlock()
+		return
+	}
+	w.timedOut = true
+	onTimeout := w.onTimeout
+	w.mu.Unlock()
+	if onTimeout != nil {
+		onTimeout()
+	}
+}
+
+func (w *responseStreamIdleWatchdog) stop() {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	w.stopped = true
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	w.mu.Unlock()
+}
+
+func (w *responseStreamIdleWatchdog) expired() bool {
+	if w == nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.timedOut
+}
+
+func (a *Agent) effectiveStreamIdleTimeout() time.Duration {
+	if a.streamIdleTimeout != 0 {
+		return a.streamIdleTimeout
+	}
+	return defaultStreamIdleTimeout
 }
 
 func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewParamsInputUnion, previousResponseID string) (inferenceResult, error) {
@@ -364,23 +454,37 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 		return inferenceResult{response: response}, err
 	}
 
-	stream := a.createStream(ctx, params)
+	idleTimeout := a.effectiveStreamIdleTimeout()
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	streamCloser := &responseStreamCloser{}
+	idleWatchdog := newResponseStreamIdleWatchdog(idleTimeout, func() {
+		// Canceling the request context is the normal SDK path; Close is also
+		// needed for compatible stream implementations that are already blocked
+		// in a body read and do not observe context cancellation.
+		cancelStream()
+		streamCloser.close()
+	})
+	defer idleWatchdog.stop()
+	stream := a.createStream(streamCtx, params)
+	streamCloser.set(stream)
+	if idleWatchdog.expired() {
+		return inferenceResult{}, &responseStreamIdleTimeoutError{timeout: idleTimeout}
+	}
 	if stream == nil {
 		return a.fallbackFromUnsupportedStream(ctx, params, inferenceResult{}, fmt.Errorf("response stream is not configured"))
 	}
-	streamClosed := false
-	closeStream := func() {
-		if !streamClosed {
-			_ = stream.Close()
-			streamClosed = true
-		}
-	}
+	closeStream := streamCloser.close
 	defer closeStream()
 
 	var result inferenceResult
 	var text strings.Builder
 	var completedOutput []responses.ResponseOutputItemUnion
 	for stream.Next() {
+		if !idleWatchdog.noteEvent() {
+			result.streamedText = text.String()
+			return result, &responseStreamIdleTimeoutError{timeout: idleTimeout}
+		}
 		result.streamHadEvent = true
 		event := stream.Current()
 		switch event.Type {
@@ -431,15 +535,17 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 			return result, fmt.Errorf("response stream failed")
 		}
 	}
+	result.streamedText = text.String()
+	if idleWatchdog.expired() {
+		return result, &responseStreamIdleTimeoutError{timeout: idleTimeout}
+	}
 	if err := stream.Err(); err != nil {
-		result.streamedText = text.String()
 		if !result.streamHadEvent && isUnsupportedStreamError(err) {
 			closeStream()
 			return a.fallbackFromUnsupportedStream(ctx, params, result, err)
 		}
 		return result, err
 	}
-	result.streamedText = text.String()
 	err := fmt.Errorf("response stream ended without a terminal response")
 	return result, err
 }
@@ -505,51 +611,6 @@ func isUnsupportedStreamError(err error) bool {
 	}
 	message := strings.ToLower(apiErr.Message + " " + apiErr.RawJSON())
 	return strings.Contains(message, "stream") && (strings.Contains(message, "unsupported") || strings.Contains(message, "not supported") || strings.Contains(message, "not allowed") || strings.Contains(message, "not available"))
-}
-
-func isUnsupportedPreviousResponseError(err error) bool {
-	var apiErr *openai.Error
-	if errors.As(err, &apiErr) {
-		if apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
-			return false
-		}
-		return isPreviousResponseContinuationMessage(apiErr.Message + " " + apiErr.RawJSON())
-	}
-	return err != nil && isPreviousResponseContinuationMessage(err.Error())
-}
-
-func responseSignalsUnsupportedPreviousResponse(response *responses.Response) bool {
-	if response == nil {
-		return false
-	}
-	return isPreviousResponseContinuationMessage(response.Error.Message + " " + string(response.Error.Code))
-}
-
-func isPreviousResponseContinuationMessage(message string) bool {
-	message = strings.ToLower(message)
-	mentionsPreviousResponse := strings.Contains(message, "previous_response") ||
-		strings.Contains(message, "previous response") ||
-		strings.Contains(message, "previous-response")
-	if !mentionsPreviousResponse {
-		return false
-	}
-	for _, marker := range []string{
-		"unsupported",
-		"not supported",
-		"does not support",
-		"not allowed",
-		"not available",
-		"not found",
-		"does not exist",
-		"unknown",
-		"invalid",
-		"expired",
-	} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // normalizeNonSSEStreamingResponse preserves the result when a compatible
