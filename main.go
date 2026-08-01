@@ -94,6 +94,7 @@ type inferenceResult struct {
 	response          *responses.Response
 	streamedText      string
 	streamedTextShown bool
+	receivedTextDelta bool
 	streamHadEvent    bool
 }
 
@@ -241,6 +242,9 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 				if a.session != nil {
 					a.session.appendMessage("assistant", assistantText)
+				}
+				if !result.receivedTextDelta && a.events != nil {
+					a.emit(UIEvent{Kind: UIEventNotice, Text: "No text deltas received; the provider delivered this reply after completion."})
 				}
 			}
 			if requestedCalls == 0 {
@@ -492,6 +496,7 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 			a.emit(UIEvent{Kind: UIEventStatus, Text: "Thinking"})
 		case "response.output_text.delta":
 			if event.Delta != "" {
+				result.receivedTextDelta = true
 				text.WriteString(event.Delta)
 				if delta := sanitizeTerminalText(event.Delta); delta != "" {
 					firstDelta := !result.streamedTextShown
