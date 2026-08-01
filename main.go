@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -55,12 +59,40 @@ func NewAgent(client *openai.Client, getUserMessage func() (string, bool), tools
 		createResponse: func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
 			return client.Responses.New(ctx, params)
 		},
+		createStream: func(ctx context.Context, params responses.ResponseNewParams) responseStream {
+			streamOptions := []option.RequestOption{
+				// The SDK otherwise defaults to Accept: application/json. Some
+				// OpenAI-compatible gateways forward that header upstream and
+				// buffer the response even when stream=true is present.
+				option.WithHeader("Accept", "text/event-stream"),
+			}
+			if usesCustomBaseURL() {
+				streamOptions = append(streamOptions, option.WithMiddleware(normalizeNonSSEStreamingResponse))
+			}
+			return client.Responses.NewStreaming(ctx, params, streamOptions...)
+		},
 		maxInferenceSteps: defaultMaxInferenceSteps,
 		maxToolCalls:      defaultMaxToolCalls,
 	}
 }
 
 type responseCreateFunc func(context.Context, responses.ResponseNewParams) (*responses.Response, error)
+
+type responseStream interface {
+	Next() bool
+	Current() responses.ResponseStreamEventUnion
+	Err() error
+	Close() error
+}
+
+type responseStreamCreateFunc func(context.Context, responses.ResponseNewParams) responseStream
+
+type inferenceResult struct {
+	response          *responses.Response
+	streamedText      string
+	streamedTextShown bool
+	streamHadEvent    bool
+}
 
 type Agent struct {
 	getUserMessage    func() (string, bool)
@@ -69,8 +101,15 @@ type Agent struct {
 	session           *Session
 	store             *SessionStore
 	createResponse    responseCreateFunc
-	maxInferenceSteps int
-	maxToolCalls      int
+	createStream      responseStreamCreateFunc
+	events            UIEventSink
+	streamUnsupported bool
+	// Set only after a compatible endpoint explicitly rejects a
+	// previous_response_id continuation. Empty completed responses retry
+	// statelessly for the current turn but do not permanently disable it.
+	customStatefulToolFollowUpUnsupported bool
+	maxInferenceSteps                     int
+	maxToolCalls                          int
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -82,13 +121,19 @@ func (a *Agent) Run(ctx context.Context) error {
 		previousResponseID = a.session.PreviousResponseID
 	}
 
-	fmt.Fprintln(a.writer(), "Chat with Meldra (use 'ctrl-c' to quit)")
+	if a.events == nil {
+		fmt.Fprintln(a.writer(), "Chat with Meldra (use 'ctrl-c' to quit)")
+	}
 
 	for {
 		if ctx.Err() != nil {
 			return a.handleInterruption(false)
 		}
-		fmt.Fprint(a.writer(), "\u001b[94mYou\u001b[0m: ")
+		if a.events == nil {
+			fmt.Fprint(a.writer(), "\u001b[94mYou\u001b[0m: ")
+		} else {
+			a.emit(UIEvent{Kind: UIEventStatus, Text: "Ready"})
+		}
 		userInput, ok := a.getUserMessage()
 		if !ok {
 			if ctx.Err() != nil {
@@ -96,6 +141,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			break
 		}
+		if ctx.Err() != nil {
+			return a.handleInterruption(false)
+		}
+		a.emit(UIEvent{Kind: UIEventUserMessage, Text: userInput})
+		a.emit(UIEvent{Kind: UIEventStatus, Text: "Thinking"})
 		modelInput := userInput
 		if a.session != nil && a.session.resumed && len(a.session.Messages) > 0 {
 			modelInput = a.session.resumeContext() + "\nNew user request:\n" + userInput
@@ -118,6 +168,18 @@ func (a *Agent) Run(ctx context.Context) error {
 		customBaseURLInput := responses.ResponseInputParam{
 			responses.ResponseInputItemParamOfMessage(modelInput, responses.EasyInputMessageRoleUser),
 		}
+		forceStatelessToolFollowUp := a.customStatefulToolFollowUpUnsupported
+		statefulToolFollowUp := false
+		useStatelessToolFollowUp := func(isRetry bool) {
+			input = responses.ResponseNewParamsInputUnion{
+				OfInputItemList: customBaseURLInput,
+			}
+			previousResponseID = ""
+			statefulToolFollowUp = false
+			if isRetry {
+				a.emit(UIEvent{Kind: UIEventStatus, Text: "Retrying without response context"})
+			}
+		}
 
 		inferenceSteps := 0
 		toolCalls := 0
@@ -134,25 +196,88 @@ func (a *Agent) Run(ctx context.Context) error {
 				break
 			}
 			inferenceSteps++
-			response, err := a.runInference(ctx, input, previousResponseID)
+			result, err := a.runInference(ctx, input, previousResponseID)
 			if err != nil {
+				if statefulToolFollowUp && result.streamedText == "" && usesCustomBaseURL() && isUnsupportedPreviousResponseError(err) {
+					// A Chat-compatible gateway can reject response IDs that it
+					// created itself. Replay this completed tool exchange once,
+					// without executing the local tool a second time.
+					inferenceSteps--
+					a.customStatefulToolFollowUpUnsupported = true
+					forceStatelessToolFollowUp = true
+					useStatelessToolFollowUp(true)
+					continue
+				}
+				if result.streamedTextShown {
+					a.finishAssistantStream()
+				}
+				partialSaved, saveErr := a.persistPartialStream(result.streamedText)
+				if saveErr != nil {
+					return saveErr
+				}
 				if ctx.Err() != nil {
-					return a.handleInterruption(true)
+					return a.handleInterruption(!partialSaved)
 				}
 				return err
 			}
+			response := result.response
+			if statefulToolFollowUp && result.streamedText == "" && usesCustomBaseURL() && responseSignalsUnsupportedPreviousResponse(response) {
+				inferenceSteps--
+				a.customStatefulToolFollowUpUnsupported = true
+				forceStatelessToolFollowUp = true
+				useStatelessToolFollowUp(true)
+				continue
+			}
 			if err := validateResponse(response); err != nil {
+				if result.streamedTextShown {
+					a.finishAssistantStream()
+				}
+				if _, saveErr := a.persistPartialStream(result.streamedText); saveErr != nil {
+					return saveErr
+				}
 				return err
+			}
+			assistantText := responseOutputText(response)
+			if assistantText == "" {
+				// A few Responses-compatible gateways omit the completed response's
+				// output array even though text was sent in the stream. Preserve that
+				// text as the final answer instead of treating the turn as finished
+				// with no assistant output.
+				assistantText = result.streamedText
+			}
+			requestedCalls := countToolCalls(response.Output)
+			if requestedCalls == 0 && assistantText == "" {
+				if statefulToolFollowUp && !result.streamedTextShown && usesCustomBaseURL() {
+					// The endpoint accepted the response ID but failed to produce a
+					// usable continuation. Retry the same completed tool exchange in
+					// stateless form once; a second empty response is reported below.
+					forceStatelessToolFollowUp = true
+					useStatelessToolFollowUp(true)
+					continue
+				}
+				if result.streamedTextShown {
+					a.finishAssistantStream()
+				}
+				if _, saveErr := a.persistPartialStream(result.streamedText); saveErr != nil {
+					return saveErr
+				}
+				return fmt.Errorf("response %s completed without assistant output or tool call", response.ID)
 			}
 			previousResponseID = response.ID
 
-			if text := response.OutputText(); text != "" {
-				fmt.Fprintf(a.writer(), "\u001b[93mMeldra\u001b[0m: %s\n", text)
+			if result.streamedTextShown {
+				a.finishAssistantStream()
+			}
+			if assistantText != "" {
+				// The final response remains the source of truth for session
+				// persistence. Its text has already been presented from SSE deltas.
+				if !result.streamedTextShown {
+					a.emitAssistantMessage(assistantText)
+				}
 				if a.session != nil {
-					a.session.appendMessage("assistant", text)
+					a.session.appendMessage("assistant", assistantText)
 				}
 			}
-			requestedCalls := countToolCalls(response.Output)
 			if requestedCalls == 0 {
 				if a.session != nil {
 					a.session.PreviousResponseID = response.ID
@@ -185,10 +310,18 @@ func (a *Agent) Run(ctx context.Context) error {
 					return err
 				}
 				customBaseURLInput = append(customBaseURLInput, followUp...)
-				input = responses.ResponseNewParamsInputUnion{
-					OfInputItemList: customBaseURLInput,
+				if !forceStatelessToolFollowUp && response.ID != "" {
+					// Prefer a native Responses continuation when the provider
+					// supports it. The complete stateless replay remains available
+					// for gateways which reject response IDs.
+					input = responses.ResponseNewParamsInputUnion{
+						OfInputItemList: toolResults,
+					}
+					previousResponseID = response.ID
+					statefulToolFollowUp = true
+				} else {
+					useStatelessToolFollowUp(false)
 				}
-				previousResponseID = ""
 				continue
 			}
 			input = responses.ResponseNewParamsInputUnion{
@@ -200,7 +333,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewParamsInputUnion, previousResponseID string) (*responses.Response, error) {
+func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewParamsInputUnion, previousResponseID string) (inferenceResult, error) {
 	tools := make([]responses.ToolUnionParam, 0, len(a.tools))
 	for _, tool := range a.tools {
 		tools = append(tools, responses.ToolUnionParam{
@@ -223,10 +356,303 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 		params.PreviousResponseID = openai.String(previousResponseID)
 	}
 
-	if a.createResponse == nil {
-		return nil, fmt.Errorf("response client is not configured")
+	if a.createStream == nil || a.streamUnsupported {
+		if a.createResponse == nil {
+			return inferenceResult{}, fmt.Errorf("response client is not configured")
+		}
+		response, err := a.createResponse(ctx, params)
+		return inferenceResult{response: response}, err
 	}
-	return a.createResponse(ctx, params)
+
+	stream := a.createStream(ctx, params)
+	if stream == nil {
+		return a.fallbackFromUnsupportedStream(ctx, params, inferenceResult{}, fmt.Errorf("response stream is not configured"))
+	}
+	streamClosed := false
+	closeStream := func() {
+		if !streamClosed {
+			_ = stream.Close()
+			streamClosed = true
+		}
+	}
+	defer closeStream()
+
+	var result inferenceResult
+	var text strings.Builder
+	var completedOutput []responses.ResponseOutputItemUnion
+	for stream.Next() {
+		result.streamHadEvent = true
+		event := stream.Current()
+		switch event.Type {
+		case "response.created", "response.in_progress":
+			a.emit(UIEvent{Kind: UIEventStatus, Text: "Thinking"})
+		case "response.output_text.delta":
+			if event.Delta != "" {
+				text.WriteString(event.Delta)
+				if delta := sanitizeTerminalText(event.Delta); delta != "" {
+					firstDelta := !result.streamedTextShown
+					result.streamedTextShown = true
+					a.emitAssistantDelta(delta, firstDelta)
+				}
+			}
+		case "response.function_call_arguments.done":
+			if event.Name != "" {
+				a.emit(UIEvent{Kind: UIEventStatus, Text: "Preparing " + event.Name})
+			}
+		case "response.output_text.done":
+			// Well-formed streams send deltas before this event. Some compatible
+			// gateways only send the final text event, so use it when no delta has
+			// been received rather than completing with an empty reply.
+			if text.Len() == 0 && event.Text != "" {
+				text.WriteString(event.Text)
+				if finalText := sanitizeTerminalText(event.Text); finalText != "" {
+					result.streamedTextShown = true
+					a.emitAssistantDelta(finalText, true)
+				}
+			}
+		case "response.output_item.done":
+			// The official terminal event includes the full output array. A few
+			// compatible gateways leave that array empty, even though they emitted
+			// complete output items earlier in the SSE stream.
+			if event.Item.Type != "" {
+				completedOutput = append(completedOutput, event.Item)
+			}
+		case "response.completed", "response.failed", "response.incomplete":
+			response := event.Response
+			response.Output = mergeCompletedStreamOutput(response.Output, completedOutput)
+			result.response = &response
+			result.streamedText = text.String()
+			return result, nil
+		case "error":
+			result.streamedText = text.String()
+			if event.Message != "" {
+				return result, fmt.Errorf("response stream: %s", event.Message)
+			}
+			return result, fmt.Errorf("response stream failed")
+		}
+	}
+	if err := stream.Err(); err != nil {
+		result.streamedText = text.String()
+		if !result.streamHadEvent && isUnsupportedStreamError(err) {
+			closeStream()
+			return a.fallbackFromUnsupportedStream(ctx, params, result, err)
+		}
+		return result, err
+	}
+	result.streamedText = text.String()
+	err := fmt.Errorf("response stream ended without a terminal response")
+	return result, err
+}
+
+// mergeCompletedStreamOutput fills in output items which some compatible
+// gateways omit from their terminal response. A matching streamed item is more
+// complete than its terminal counterpart, while terminal-only items are kept.
+func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion) []responses.ResponseOutputItemUnion {
+	if len(completed) == 0 {
+		return output
+	}
+	if len(output) == 0 {
+		return append([]responses.ResponseOutputItemUnion(nil), completed...)
+	}
+
+	merged := append([]responses.ResponseOutputItemUnion(nil), output...)
+	hasAssistantText := responseOutputText(&responses.Response{Output: merged}) != ""
+	for _, completedItem := range completed {
+		match := -1
+		for index, existing := range merged {
+			if existing.ID != "" && existing.ID == completedItem.ID {
+				match = index
+				break
+			}
+			if existing.Type == "function_call" && completedItem.Type == "function_call" && existing.CallID != "" && existing.CallID == completedItem.CallID {
+				match = index
+				break
+			}
+		}
+		if match >= 0 {
+			merged[match] = completedItem
+			continue
+		}
+		// Without stable item IDs, preserve a terminal assistant message that
+		// already contains text rather than adding a duplicate final message.
+		if completedItem.Type == "message" && hasAssistantText {
+			continue
+		}
+		merged = append(merged, completedItem)
+	}
+	return merged
+}
+
+// fallbackFromUnsupportedStream only retries compatible providers before text
+// reaches the user. Tool execution happens after runInference returns, so this
+// cannot repeat a local tool call.
+func (a *Agent) fallbackFromUnsupportedStream(ctx context.Context, params responses.ResponseNewParams, result inferenceResult, streamErr error) (inferenceResult, error) {
+	if !usesCustomBaseURL() || result.streamedTextShown || a.createResponse == nil {
+		return result, streamErr
+	}
+	response, err := a.createResponse(ctx, params)
+	if err != nil {
+		return result, err
+	}
+	a.streamUnsupported = true
+	return inferenceResult{response: response}, nil
+}
+
+func isUnsupportedStreamError(err error) bool {
+	var apiErr *openai.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
+		return false
+	}
+	message := strings.ToLower(apiErr.Message + " " + apiErr.RawJSON())
+	return strings.Contains(message, "stream") && (strings.Contains(message, "unsupported") || strings.Contains(message, "not supported") || strings.Contains(message, "not allowed") || strings.Contains(message, "not available"))
+}
+
+func isUnsupportedPreviousResponseError(err error) bool {
+	var apiErr *openai.Error
+	if errors.As(err, &apiErr) {
+		if apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
+			return false
+		}
+		return isPreviousResponseContinuationMessage(apiErr.Message + " " + apiErr.RawJSON())
+	}
+	return err != nil && isPreviousResponseContinuationMessage(err.Error())
+}
+
+func responseSignalsUnsupportedPreviousResponse(response *responses.Response) bool {
+	if response == nil {
+		return false
+	}
+	return isPreviousResponseContinuationMessage(response.Error.Message + " " + string(response.Error.Code))
+}
+
+func isPreviousResponseContinuationMessage(message string) bool {
+	message = strings.ToLower(message)
+	mentionsPreviousResponse := strings.Contains(message, "previous_response") ||
+		strings.Contains(message, "previous response") ||
+		strings.Contains(message, "previous-response")
+	if !mentionsPreviousResponse {
+		return false
+	}
+	for _, marker := range []string{
+		"unsupported",
+		"not supported",
+		"does not support",
+		"not allowed",
+		"not available",
+		"not found",
+		"does not exist",
+		"unknown",
+		"invalid",
+		"expired",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeNonSSEStreamingResponse preserves the result when a compatible
+// provider accepts stream=true but replies with a complete Responses JSON body.
+// It turns that body into one terminal SSE event instead of issuing the prompt a
+// second time through the non-streaming API.
+func normalizeNonSSEStreamingResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	response, err := next(request)
+	if err != nil || response == nil || response.Body == nil || strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+		return response, err
+	}
+
+	// Some compatible gateways stream valid SSE but omit or mislabel the
+	// Content-Type header. Do not read such a response to EOF before giving it
+	// to the SDK: the read would hold every delta until the model finishes. A
+	// small prefix is enough to distinguish a complete JSON response from SSE,
+	// and is replayed so the SDK still sees the entire stream.
+	isJSON, restoredBody, inspectErr := responseBodyStartsWithJSON(response.Body)
+	if inspectErr != nil {
+		_ = response.Body.Close()
+		return nil, inspectErr
+	}
+	response.Body = restoredBody
+	if !isJSON {
+		return response, nil
+	}
+
+	responseBody, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil {
+		return nil, readErr
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+
+	var completed responses.Response
+	if err := json.Unmarshal(responseBody, &completed); err != nil {
+		response.Body = io.NopCloser(bytes.NewReader(responseBody))
+		return response, nil
+	}
+	payload, err := json.Marshal(struct {
+		Type     string             `json:"type"`
+		Response responses.Response `json:"response"`
+	}{
+		Type:     "response.completed",
+		Response: completed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	response.Body = io.NopCloser(strings.NewReader("event: response.completed\ndata: " + string(payload) + "\n\n"))
+	response.Header.Set("Content-Type", "text/event-stream")
+	response.ContentLength = -1
+	return response, nil
+}
+
+// responseBodyStartsWithJSON returns a reader which still includes every byte
+// consumed while checking the prefix. JSON permits leading whitespace, while
+// SSE normally begins with "event:", "data:", or a comment.
+func responseBodyStartsWithJSON(body io.ReadCloser) (bool, io.ReadCloser, error) {
+	reader := bufio.NewReader(body)
+	var prefix bytes.Buffer
+	for {
+		byteValue, err := reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return false, &prefixedReadCloser{Reader: bytes.NewReader(prefix.Bytes()), Closer: body}, nil
+			}
+			return false, nil, err
+		}
+		if err := prefix.WriteByte(byteValue); err != nil {
+			return false, nil, err
+		}
+		if byteValue == ' ' || byteValue == '\n' || byteValue == '\r' || byteValue == '\t' {
+			continue
+		}
+		return byteValue == '{' || byteValue == '[', &prefixedReadCloser{
+			Reader: io.MultiReader(bytes.NewReader(prefix.Bytes()), reader),
+			Closer: body,
+		}, nil
+	}
+}
+
+type prefixedReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+func (a *Agent) persistPartialStream(text string) (bool, error) {
+	if text == "" || a.session == nil {
+		return false, nil
+	}
+	a.session.appendMessage("assistant", text+"\n\n[Streaming interrupted before this response was complete.]")
+	a.session.PreviousResponseID = ""
+	a.session.resumed = true
+	if a.store == nil {
+		return false, nil
+	}
+	if err := a.store.Save(a.session); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (a *Agent) inferenceLimit() int {
@@ -244,7 +670,7 @@ func (a *Agent) toolCallLimit() int {
 }
 
 func (a *Agent) pauseTurn(message string) error {
-	fmt.Fprintf(a.writer(), "\u001b[93mMeldra\u001b[0m: %s\n", message)
+	a.emitAssistantMessage(message)
 	if a.session == nil {
 		return nil
 	}
@@ -260,7 +686,11 @@ func (a *Agent) pauseTurn(message string) error {
 func (a *Agent) handleInterruption(activeTurn bool) error {
 	message := "Interrupted before the current turn completed. Inspect the workspace before continuing because some approved tools may already have run."
 	if a.session == nil {
-		fmt.Fprintln(a.writer(), "\nInterrupted.")
+		if a.events == nil {
+			fmt.Fprintln(a.writer(), "\nInterrupted.")
+		} else {
+			a.emit(UIEvent{Kind: UIEventNotice, Text: "Interrupted."})
+		}
 		return nil
 	}
 	if activeTurn {
@@ -273,7 +703,12 @@ func (a *Agent) handleInterruption(activeTurn bool) error {
 			return err
 		}
 	}
-	fmt.Fprintf(a.writer(), "\nInterrupted. Session %s was saved; resume with: meldra resume %s\n", a.session.ID, a.session.ID)
+	notice := fmt.Sprintf("Interrupted. Session %s was saved; resume with: meldra resume %s", a.session.ID, a.session.ID)
+	if a.events == nil {
+		fmt.Fprintln(a.writer(), "\n"+notice)
+	} else {
+		a.emit(UIEvent{Kind: UIEventNotice, Text: notice})
+	}
 	return nil
 }
 
@@ -290,6 +725,9 @@ func usesCustomBaseURL() bool {
 }
 
 func validateResponse(response *responses.Response) error {
+	if response == nil {
+		return errors.New("response stream completed without a response")
+	}
 	if response.Status == responses.ResponseStatusCompleted {
 		return nil
 	}
@@ -300,6 +738,31 @@ func validateResponse(response *responses.Response) error {
 		return fmt.Errorf("response %s: %s", response.Status, response.IncompleteDetails.Reason)
 	}
 	return fmt.Errorf("response ended with status %q", response.Status)
+}
+
+// responseOutputText uses the SDK helper first, then accepts any non-empty
+// assistant message content text. Some Responses-compatible gateways use
+// `text` instead of the SDK's strict `output_text` content type.
+func responseOutputText(response *responses.Response) string {
+	if response == nil {
+		return ""
+	}
+	if text := response.OutputText(); text != "" {
+		return text
+	}
+
+	var text strings.Builder
+	for _, item := range response.Output {
+		if item.Type != "message" || (item.Role != "" && item.Role != "assistant") {
+			continue
+		}
+		for _, content := range item.Content {
+			if content.Text != "" {
+				text.WriteString(content.Text)
+			}
+		}
+	}
+	return text.String()
 }
 
 func (a *Agent) executeToolCalls(output []responses.ResponseOutputItemUnion) responses.ResponseInputParam {
@@ -317,11 +780,18 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []responses.
 		}
 
 		call := item.AsFunctionCall()
-		fmt.Fprintf(a.writer(), "\u001b[92mtool\u001b[0m: %s\n", call.Name)
+		if a.events == nil {
+			fmt.Fprintf(a.writer(), "\u001b[92mtool\u001b[0m: %s\n", sanitizeTerminalText(call.Name))
+		} else {
+			a.emit(UIEvent{Kind: UIEventToolStarted, Name: call.Name})
+		}
 
 		result, err := a.executeTool(call.Name, json.RawMessage(call.Arguments))
 		if err != nil {
 			result = "Error: " + err.Error()
+		}
+		if a.events != nil {
+			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: summarizeToolResult(result)})
 		}
 		results = append(results, responses.ResponseInputItemParamOfFunctionCallOutput(call.CallID, result))
 	}
@@ -372,6 +842,73 @@ func (a *Agent) writer() io.Writer {
 		return io.Discard
 	}
 	return a.output
+}
+
+func (a *Agent) emit(event UIEvent) {
+	if a.events != nil {
+		a.events.Emit(event)
+	}
+}
+
+func (a *Agent) emitAssistantMessage(text string) {
+	text = sanitizeTerminalText(text)
+	if a.events != nil {
+		a.emit(UIEvent{Kind: UIEventAssistantMessage, Text: text})
+		return
+	}
+	fmt.Fprintf(a.writer(), "\u001b[93mMeldra\u001b[0m: %s\n", text)
+}
+
+func (a *Agent) emitAssistantDelta(delta string, first bool) {
+	delta = sanitizeTerminalText(delta)
+	if delta == "" {
+		return
+	}
+	if a.events != nil {
+		a.emit(UIEvent{Kind: UIEventAssistantDelta, Text: delta})
+		return
+	}
+	if first {
+		fmt.Fprintf(a.writer(), "\u001b[93mMeldra\u001b[0m: %s", delta)
+		return
+	}
+	fmt.Fprint(a.writer(), delta)
+}
+
+func (a *Agent) finishAssistantStream() {
+	if a.events != nil {
+		a.emit(UIEvent{Kind: UIEventAssistantDone})
+		return
+	}
+	fmt.Fprintln(a.writer())
+}
+
+func summarizeToolResult(result string) string {
+	trimmed := strings.TrimSpace(result)
+	if trimmed == "" {
+		return "No output"
+	}
+
+	var list []json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &list) == nil {
+		if len(list) == 1 {
+			return "1 item returned"
+		}
+		return fmt.Sprintf("%d items returned", len(list))
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(trimmed), &object) == nil {
+		if len(object) == 1 {
+			return "1 field returned"
+		}
+		return fmt.Sprintf("%d fields returned", len(object))
+	}
+
+	line := strings.SplitN(trimmed, "\n", 2)[0]
+	if len(line) > 140 {
+		return line[:137] + "..."
+	}
+	return line
 }
 
 func decodeToolInput(input json.RawMessage, target any, required ...string) error {
