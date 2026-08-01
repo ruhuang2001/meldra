@@ -30,5 +30,15 @@ archives:
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"
 
+release:
+  # Release Please owns the release notes; GoReleaser only adds artifacts.
+  mode: append
+
 changelog:
   sort: asc
+  filters:
+    exclude:
+      - "^chore"
+      - "^docs"
+      - "^test"
+      - "^refactor"

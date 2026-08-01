@@ -133,6 +133,28 @@ Development requires Go 1.25 or newer.
 make check
 ```
 
+### Releases
+
+Use [Conventional Commits](https://www.conventionalcommits.org/) for changes
+that should appear in release notes, for example:
+
+```text
+feat(agent): add a workspace tool
+fix(config): preserve a custom base URL
+feat(agent)!: change the tool protocol
+```
+
+Merging changes into `main` makes Release Please open or update a release pull
+request. Merging that pull request updates `CHANGELOG.md`, creates the next
+`v0.1.0-alpha.N` tag and GitHub prerelease, and runs GoReleaser to attach the
+macOS and Linux archives and checksums. Do not edit generated changelog entries
+by hand; add any important migration or known-issue notes while reviewing the
+release pull request.
+
+The repository setting **Actions > General > Workflow permissions > Allow
+GitHub Actions to create and approve pull requests** must be enabled. A manually
+pushed `v*` tag remains supported by the separate release workflow.
+
 ## License
 
 [MIT](LICENSE)
