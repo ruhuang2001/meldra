@@ -38,6 +38,7 @@ type Workspace struct {
 	input       *bufio.Reader
 	output      io.Writer
 	autoApprove bool
+	approve     ApprovalFunc
 	ctx         context.Context
 	last        []fileChange
 	protected   []string
@@ -48,6 +49,12 @@ func (w *Workspace) SetContext(ctx context.Context) {
 		ctx = context.Background()
 	}
 	w.ctx = ctx
+}
+
+// SetApprovalFunc replaces line-based confirmation with an interaction owned by
+// the caller. A nil approval function preserves the line-based terminal prompt.
+func (w *Workspace) SetApprovalFunc(approve ApprovalFunc) {
+	w.approve = approve
 }
 
 func (w *Workspace) contextErr() error {
@@ -839,8 +846,12 @@ func (w *Workspace) applyInputs(inputs []changeInput) (string, error) {
 
 func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	diff := w.diff(changes, false)
-	fmt.Fprint(w.output, diff)
-	if !w.confirm() {
+	if !w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalChanges,
+		Title:  "Review file changes",
+		Detail: diff,
+		Prompt: "Apply changes? [y/N] ",
+	}) {
 		return "Declined; no files changed.", nil
 	}
 	if err := w.writeChanges(changes, false); err != nil {
@@ -850,8 +861,24 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	return "Applied successfully.\n" + diff, nil
 }
 
-func (w *Workspace) confirm() bool {
-	return w.confirmPrompt("Apply changes? [y/N] ")
+func (w *Workspace) requestApproval(request ApprovalRequest) bool {
+	// Approval data can include workspace content and command arguments.
+	request.Title = sanitizeTerminalText(request.Title)
+	request.Detail = sanitizeTerminalText(request.Detail)
+	request.Prompt = sanitizeTerminalText(request.Prompt)
+	if w.contextErr() != nil {
+		return false
+	}
+	if w.autoApprove {
+		return true
+	}
+	if w.approve != nil {
+		return w.approve(w.ctx, request)
+	}
+	if request.Detail != "" {
+		fmt.Fprint(w.output, request.Detail)
+	}
+	return w.confirmPrompt(request.Prompt)
 }
 
 func (w *Workspace) confirmPrompt(prompt string) bool {
@@ -1034,8 +1061,12 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 		}
 	}
 	diff := w.diff(w.last, true)
-	fmt.Fprint(w.output, diff)
-	if !w.confirm() {
+	if !w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalChanges,
+		Title:  "Review undo changes",
+		Detail: diff,
+		Prompt: "Apply changes? [y/N] ",
+	}) {
 		return "Declined; no files changed.", nil
 	}
 	if e := w.writeChanges(w.last, true); e != nil {
@@ -1366,19 +1397,19 @@ func commandRequiresApproval(command string) bool {
 }
 
 func (w *Workspace) confirmCommand(command string, args []string) bool {
-	if w.contextErr() != nil {
-		return false
-	}
-	if w.autoApprove {
-		return true
-	}
 	var rendered strings.Builder
 	rendered.WriteString(command)
 	for _, argument := range args {
 		rendered.WriteByte(' ')
 		rendered.WriteString(strconv.Quote(argument))
 	}
-	return w.confirmPrompt(fmt.Sprintf("Run command? %s [y/N] ", rendered.String()))
+	text := rendered.String()
+	return w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalCommand,
+		Title:  "Run command",
+		Detail: text,
+		Prompt: fmt.Sprintf("Run command? %s [y/N] ", text),
+	})
 }
 
 func safeCommandEnvironment() []string {

@@ -33,6 +33,8 @@ Meldra is an command-line coding agent.
 
 Press `Ctrl-C` to exit.
 
+In a supported interactive terminal, Meldra opens a full-screen TUI and streams assistant responses. Non-interactive and unsupported terminals retain the line-based interface.
+
 ## Configuration
 
 ```text

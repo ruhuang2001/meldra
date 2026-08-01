@@ -26,13 +26,20 @@ func main() {
 		_ = os.Stdin.Close()
 	}()
 	if err := runCLIContext(ctx, os.Args[1:], os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		printCLIError(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
 func runCLI(args []string, stdin io.Reader, stdout io.Writer) error {
 	return runCLIContext(context.Background(), args, stdin, stdout)
+}
+
+func printCLIError(stderr io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintf(stderr, "Error: %s\n", sanitizeTerminalText(err.Error()))
 }
 
 func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) error {
@@ -58,14 +65,11 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			}
 			return runSessionsCommand(stdout)
 		case "resume":
-			if len(args) > 2 {
-				return fmt.Errorf("resume accepts at most one session ID")
+			options, err := parseResumeOptions(args[1:])
+			if err != nil {
+				return err
 			}
-			id := "latest"
-			if len(args) == 2 {
-				id = args[1]
-			}
-			return runChat(ctx, stdin, stdout, ChatOptions{Resume: id})
+			return runChat(ctx, stdin, stdout, options)
 		default:
 			if !strings.HasPrefix(args[0], "-") {
 				return fmt.Errorf("unknown command %q\n\n%s", args[0], usageText)
@@ -142,7 +146,7 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 			options.AutoApprove = true
 		case argument == "--workspace":
 			index++
-			if index >= len(args) || args[index] == "" {
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "-") {
 				return ChatOptions{}, fmt.Errorf("--workspace requires a path")
 			}
 			options.Workspace = args[index]
@@ -155,7 +159,7 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 			options.workspaceExplicit = true
 		case argument == "--resume":
 			index++
-			if index >= len(args) || args[index] == "" {
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "-") {
 				return ChatOptions{}, fmt.Errorf("--resume requires a session ID or latest")
 			}
 			options.Resume = args[index]
@@ -167,6 +171,45 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 		default:
 			return ChatOptions{}, fmt.Errorf("unknown command or option %q\n\n%s", argument, usageText)
 		}
+	}
+	return options, nil
+}
+
+func parseResumeOptions(args []string) (ChatOptions, error) {
+	optionArgs := make([]string, 0, len(args))
+	var sessionID string
+	for index := 0; index < len(args); index++ {
+		argument := args[index]
+		if argument == "--workspace" || argument == "--resume" {
+			optionArgs = append(optionArgs, argument)
+			if index+1 < len(args) {
+				index++
+				optionArgs = append(optionArgs, args[index])
+			}
+			continue
+		}
+		if strings.HasPrefix(argument, "-") {
+			optionArgs = append(optionArgs, argument)
+			continue
+		}
+		if sessionID != "" {
+			return ChatOptions{}, fmt.Errorf("resume accepts at most one session ID")
+		}
+		sessionID = argument
+	}
+
+	options, err := parseChatOptions(optionArgs)
+	if err != nil {
+		return ChatOptions{}, err
+	}
+	if options.Resume != "" && sessionID != "" {
+		return ChatOptions{}, fmt.Errorf("resume accepts at most one session ID")
+	}
+	if options.Resume == "" {
+		options.Resume = sessionID
+	}
+	if options.Resume == "" {
+		options.Resume = "latest"
 	}
 	return options, nil
 }
@@ -185,7 +228,7 @@ func runSessionsCommand(stdout io.Writer) error {
 		return err
 	}
 	for _, session := range sessions {
-		summary := session.Summary
+		summary := sanitizeTerminalText(session.Summary)
 		if summary == "" {
 			summary = "<no summary>"
 		}
@@ -193,7 +236,7 @@ func runSessionsCommand(stdout io.Writer) error {
 		if len(summary) > 80 {
 			summary = summary[:80] + "..."
 		}
-		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), session.Workspace, summary); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), sanitizeTerminalText(session.Workspace), summary); err != nil {
 			return err
 		}
 	}
@@ -213,6 +256,9 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	applySettings(settings)
 	if settings.APIKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is not configured; run \"meldra config init\" and add it to %s, or set OPENAI_API_KEY", paths.CredentialsFile)
+	}
+	if shouldUseTUI(stdin, stdout) {
+		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
 	}
 
 	reader := bufio.NewReader(stdin)
@@ -274,7 +320,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	agent.output = stdout
 	agent.session = session
 	agent.store = store
-	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", session.ID, workspace.root)
+	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", session.ID, sanitizeTerminalText(workspace.root))
 	if err := agent.Run(ctx); err != nil {
 		return err
 	}

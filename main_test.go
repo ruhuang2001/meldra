@@ -113,6 +113,22 @@ func TestExecuteToolCallsStopsAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestSummarizeToolResultCompactsStructuredOutput(t *testing.T) {
+	tests := []struct {
+		result string
+		want   string
+	}{
+		{result: `["a","b","c"]`, want: "3 items returned"},
+		{result: `{"path":"main.go"}`, want: "1 field returned"},
+		{result: "first line\nsecond line", want: "first line"},
+	}
+	for _, test := range tests {
+		if got := summarizeToolResult(test.result); got != test.want {
+			t.Errorf("summarizeToolResult(%q) = %q, want %q", test.result, got, test.want)
+		}
+	}
+}
+
 func TestToolFollowUpInputIncludesCallsBeforeTheirOutputs(t *testing.T) {
 	var output []responses.ResponseOutputItemUnion
 	if err := json.Unmarshal([]byte(`[
