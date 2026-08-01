@@ -33,6 +33,7 @@ checksum:
 release:
   # Release Please owns the release notes; GoReleaser only adds artifacts.
   mode: append
+  prerelease: auto
 
 changelog:
   sort: asc
