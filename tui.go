@@ -502,6 +502,12 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 			m.entries = append(m.entries, tuiEntry{kind: tuiEntryTool, name: event.Name, detail: event.Detail})
 		}
 		m.activeTool = -1
+		// The tool result is now being sent back to the model. Gateways do not
+		// always emit a new response.in_progress event for that follow-up, so
+		// update the visible state here.
+		m.status = "Thinking"
+		m.busy = true
+		m.input.Blur()
 		m.refreshViewport()
 	case UIEventNotice:
 		m.addEntry(tuiEntry{kind: tuiEntryNotice, text: event.Text})
