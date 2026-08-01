@@ -50,6 +50,9 @@ func TestTUIModelAccumulatesAndCompletesAssistantDeltas(t *testing.T) {
 	model.applyEvent(UIEvent{Kind: UIEventUserMessage, Text: "show progress"})
 	model.applyEvent(UIEvent{Kind: UIEventAssistantDelta, Text: "first "})
 	model.applyEvent(UIEvent{Kind: UIEventAssistantDelta, Text: "second"})
+	if model.status != "Streaming" || !model.busy {
+		t.Fatalf("streaming state = status %q, busy %v", model.status, model.busy)
+	}
 
 	if model.activeAssistant != 1 {
 		t.Fatalf("active assistant index = %d, want 1", model.activeAssistant)
@@ -254,16 +257,17 @@ func TestTUIControllerDropsQueuedMessageAfterStop(t *testing.T) {
 	}
 }
 
-func TestTUIControllerBatchesAssistantDeltasUntilFlush(t *testing.T) {
+func TestTUIControllerRendersFirstDeltaAndBatchesTheRest(t *testing.T) {
 	controller := newTUIController(nil)
 	controller.queueAssistantDelta("first ")
 	controller.queueAssistantDelta("second")
 	controller.deltaMu.Lock()
 	got := controller.deltas.String()
 	timer := controller.deltaTimer
+	active := controller.deltaActive
 	controller.deltaMu.Unlock()
-	if got != "first second" || timer == nil {
-		t.Fatalf("pending deltas = %q, timer = %v", got, timer)
+	if got != "second" || timer == nil || !active {
+		t.Fatalf("pending deltas = %q, timer = %v, active = %v", got, timer, active)
 	}
 
 	controller.flushAssistantDeltas()
@@ -271,9 +275,16 @@ func TestTUIControllerBatchesAssistantDeltasUntilFlush(t *testing.T) {
 	got = controller.deltas.String()
 	timer = controller.deltaTimer
 	controller.deltaMu.Unlock()
-	controller.stop()
 	if got != "" || timer != nil {
 		t.Fatalf("flush left deltas = %q, timer = %v", got, timer)
+	}
+	controller.Emit(UIEvent{Kind: UIEventAssistantDone})
+	controller.deltaMu.Lock()
+	active = controller.deltaActive
+	controller.deltaMu.Unlock()
+	controller.stop()
+	if active {
+		t.Fatal("assistant delta state was not reset after completion")
 	}
 }
 

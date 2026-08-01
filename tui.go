@@ -48,12 +48,13 @@ type tuiController struct {
 	cancel   context.CancelFunc
 	program  *tea.Program
 
-	readyOnce  sync.Once
-	closeOnce  sync.Once
-	dispatchMu sync.Mutex
-	deltaMu    sync.Mutex
-	deltas     strings.Builder
-	deltaTimer *time.Timer
+	readyOnce   sync.Once
+	closeOnce   sync.Once
+	dispatchMu  sync.Mutex
+	deltaMu     sync.Mutex
+	deltas      strings.Builder
+	deltaTimer  *time.Timer
+	deltaActive bool
 }
 
 type tuiEventMsg struct {
@@ -97,6 +98,7 @@ func (t *tuiController) stop() {
 			t.deltaTimer = nil
 		}
 		t.deltas.Reset()
+		t.deltaActive = false
 		t.deltaMu.Unlock()
 		if t.cancel != nil {
 			t.cancel()
@@ -110,6 +112,9 @@ func (t *tuiController) Emit(event UIEvent) {
 		return
 	}
 	t.send(tuiEventMsg{event: event})
+	if event.Kind == UIEventAssistantDone {
+		t.resetAssistantDeltaState()
+	}
 }
 
 func (t *tuiController) send(message tea.Msg) {
@@ -139,17 +144,34 @@ func (t *tuiController) queueAssistantDelta(delta string) {
 		return
 	default:
 	}
+	t.dispatchMu.Lock()
+	defer t.dispatchMu.Unlock()
 	t.deltaMu.Lock()
-	defer t.deltaMu.Unlock()
 	select {
 	case <-t.done:
+		t.deltaMu.Unlock()
 		return
 	default:
+	}
+	if !t.deltaActive {
+		t.deltaActive = true
+		t.deltaMu.Unlock()
+		// Render the first token immediately. This makes short replies visibly
+		// stream even when all later deltas arrive within one frame.
+		t.sendRaw(tuiEventMsg{event: UIEvent{Kind: UIEventAssistantDelta, Text: delta}})
+		return
 	}
 	t.deltas.WriteString(delta)
 	if t.deltaTimer == nil {
 		t.deltaTimer = time.AfterFunc(tuiStreamFrameDelay, t.flushAssistantDeltas)
 	}
+	t.deltaMu.Unlock()
+}
+
+func (t *tuiController) resetAssistantDeltaState() {
+	t.deltaMu.Lock()
+	t.deltaActive = false
+	t.deltaMu.Unlock()
 }
 
 func (t *tuiController) flushAssistantDeltas() {
@@ -469,6 +491,9 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		m.addEntry(tuiEntry{kind: tuiEntryUser, text: event.Text})
 	case UIEventAssistantDelta:
 		m.submissionPending = false
+		m.status = "Streaming"
+		m.busy = true
+		m.input.Blur()
 		if m.activeAssistant < 0 {
 			m.entries = append(m.entries, tuiEntry{kind: tuiEntryAssistant, active: true})
 			m.activeAssistant = len(m.entries) - 1

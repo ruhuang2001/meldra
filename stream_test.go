@@ -199,6 +199,7 @@ func TestAgentStreamsDeltasToUIEvents(t *testing.T) {
 	}
 	var deltas strings.Builder
 	done := 0
+	notices := 0
 	for _, event := range events {
 		if event.Kind == UIEventAssistantDelta {
 			deltas.WriteString(event.Text)
@@ -206,12 +207,18 @@ func TestAgentStreamsDeltasToUIEvents(t *testing.T) {
 		if event.Kind == UIEventAssistantDone {
 			done++
 		}
+		if event.Kind == UIEventNotice {
+			notices++
+		}
 	}
 	if got := deltas.String(); got != "streamed reply" {
 		t.Fatalf("streamed deltas = %q", got)
 	}
 	if done != 1 {
 		t.Fatalf("assistant completion events = %d, want 1", done)
+	}
+	if notices != 0 {
+		t.Fatalf("streamed reply produced %d non-streaming notices", notices)
 	}
 	if got := output.String(); got != "" {
 		t.Fatalf("TUI stream unexpectedly wrote to terminal: %q", got)
@@ -240,6 +247,7 @@ func TestAgentUsesOutputTextDoneWhenGatewayOmitsDeltasAndOutput(t *testing.T) {
 	}
 	var text strings.Builder
 	done := 0
+	notices := 0
 	for _, event := range events {
 		if event.Kind == UIEventAssistantDelta {
 			text.WriteString(event.Text)
@@ -247,12 +255,18 @@ func TestAgentUsesOutputTextDoneWhenGatewayOmitsDeltasAndOutput(t *testing.T) {
 		if event.Kind == UIEventAssistantDone {
 			done++
 		}
+		if event.Kind == UIEventNotice {
+			notices++
+		}
 	}
 	if got := text.String(); got != "final reply" {
 		t.Fatalf("streamed output_text.done = %q", got)
 	}
 	if done != 1 {
 		t.Fatalf("assistant completion events = %d, want 1", done)
+	}
+	if notices != 1 {
+		t.Fatalf("non-delta stream notices = %d, want 1", notices)
 	}
 }
 
