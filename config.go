@@ -27,7 +27,7 @@ const (
 
 const defaultConfigTemplate = `# Meldra configuration.
 #
-# model = "gpt-5.6"
+# model = "gpt-5.6-luna"
 # base_url = "https://api.openai.com/v1"
 `
 

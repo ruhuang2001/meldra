@@ -272,6 +272,28 @@ func TestWorkspaceAppliesUnifiedMultiFilePatchAndUndoesIt(t *testing.T) {
 	}
 }
 
+func BenchmarkParseUnifiedPatch(b *testing.B) {
+	filePatch := "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n first\n-old\n+new\n last\n"
+	for _, benchmark := range []struct {
+		name  string
+		patch string
+		files int
+	}{
+		{name: "single-file", patch: filePatch, files: 1},
+		{name: "25-files", patch: strings.Repeat(filePatch, 25), files: 25},
+	} {
+		b.Run(benchmark.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				files, err := parseUnifiedPatch(benchmark.patch)
+				if err != nil || len(files) != benchmark.files {
+					b.Fatalf("parseUnifiedPatch() = %d files, %v", len(files), err)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkspaceAppliesFullDeletionAndUndoesIt(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "delete.txt")

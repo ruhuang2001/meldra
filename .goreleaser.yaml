@@ -2,8 +2,7 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
-    - go test ./...
+    - make check
 
 builds:
   - id: meldra
@@ -32,7 +31,8 @@ checksum:
 
 release:
   # Release Please owns the release notes; GoReleaser only adds artifacts.
-  mode: append
+  mode: keep-existing
+  replace_existing_artifacts: true
   prerelease: auto
 
 changelog:
