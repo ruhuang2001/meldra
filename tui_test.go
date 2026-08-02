@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -214,13 +215,48 @@ func TestTUIPendingApprovalInstructionsAndFooterMatch(t *testing.T) {
 	model.resize()
 
 	content := model.View().Content
-	for _, text := range []string{"[y] approve", "[n] reject", "[enter/esc] reject", "y approve  n/Enter/Esc reject"} {
+	for _, text := range []string{"[y] approve", "[n] reject", "[enter/esc] reject", "PgUp/PgDn scroll", "y approve  n/Enter/Esc reject"} {
 		if !strings.Contains(content, text) {
 			t.Fatalf("pending approval view is missing %q: %q", text, content)
 		}
 	}
 	if strings.Contains(content, "Enter send") {
 		t.Fatalf("pending approval footer still advertises send: %q", content)
+	}
+}
+
+func TestTUIPendingApprovalAllowsViewportScrolling(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 10
+	model.resize()
+	answer := make(chan bool, 1)
+	model.Update(tuiApprovalMsg{request: ApprovalRequest{
+		Title:  "Review file changes",
+		Detail: strings.Repeat("changed line\n", 30),
+	}, answer: answer})
+	if model.viewport.YOffset() == 0 {
+		t.Fatal("long approval was not positioned at the bottom")
+	}
+	before := model.viewport.YOffset()
+	model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	if model.viewport.YOffset() >= before {
+		t.Fatalf("page-up did not scroll approval: before %d, after %d", before, model.viewport.YOffset())
+	}
+	model.resolveApproval(false)
+}
+
+func TestTUIAutoApprovedOperationStaysVisible(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 24
+	model.resize()
+	model.Update(tuiApprovalPreviewMsg{request: ApprovalRequest{
+		Title:  "Review file changes",
+		Detail: "--- a/main.go\n+++ b/main.go\n+safe change\n",
+	}})
+	if timeline := model.renderTimeline(); !strings.Contains(timeline, "Auto-approved: Review file changes") || !strings.Contains(timeline, "+safe change") {
+		t.Fatalf("auto-approved operation was not visible: %q", timeline)
 	}
 }
 
@@ -244,6 +280,55 @@ func TestTerminalIsDumb(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	if terminalIsDumb() {
 		t.Fatal("non-dumb terminal disabled the TUI")
+	}
+}
+
+func TestShouldUseTUIRejectsCharacterDevicesThatAreNotTerminals(t *testing.T) {
+	t.Setenv("TERM", "xterm-256color")
+	input, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+
+	if shouldUseTUI(input, output) {
+		t.Fatal("non-terminal character devices enabled the TUI")
+	}
+}
+
+func TestTUIRoutesMouseWheelToTimelineWhileIdle(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 10
+	model.entries = []tuiEntry{{kind: tuiEntryAssistant, text: strings.Repeat("history\n", 30)}}
+	model.resize()
+	model.viewport.GotoBottom()
+	before := model.viewport.YOffset()
+	if before == 0 {
+		t.Fatal("timeline did not overflow")
+	}
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if model.viewport.YOffset() >= before {
+		t.Fatalf("mouse wheel did not scroll timeline: before %d, after %d", before, model.viewport.YOffset())
+	}
+}
+
+func TestTUIPasteResizesViewport(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 24
+	model.resize()
+	model.input.Focus()
+	model.Update(tea.PasteMsg{Content: "one\ntwo\nthree\nfour"})
+
+	want := model.height - tuiHeaderHeight - tuiFooterHeight - tuiLayoutSeparators - model.input.Height() - tuiInputStyle.GetVerticalFrameSize()
+	if got := model.viewport.Height(); got != want {
+		t.Fatalf("viewport height after paste = %d, want %d", got, want)
 	}
 }
 

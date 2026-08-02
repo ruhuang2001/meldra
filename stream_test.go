@@ -265,8 +265,8 @@ func TestAgentUsesOutputTextDoneWhenGatewayOmitsDeltasAndOutput(t *testing.T) {
 	if done != 1 {
 		t.Fatalf("assistant completion events = %d, want 1", done)
 	}
-	if notices != 1 {
-		t.Fatalf("non-delta stream notices = %d, want 1", notices)
+	if notices != 0 {
+		t.Fatalf("output_text.done stream notices = %d, want 0", notices)
 	}
 }
 
@@ -683,6 +683,48 @@ func TestAgentUsesOneRequestWhenCustomEndpointReturnsJSONForStream(t *testing.T)
 	}
 	if got := output.String(); !strings.Contains(got, "Meldra\u001b[0m: complete reply\n") {
 		t.Fatalf("JSON response output = %q", got)
+	}
+}
+
+func TestAgentFallsBackWhenCustomEndpointRejectsStreamingJSON(t *testing.T) {
+	var requests []bool
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		if incoming.Method != http.MethodPost || incoming.URL.Path != "/responses" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		defer incoming.Body.Close()
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(incoming.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		requests = append(requests, request.Stream)
+		writer.Header().Set("Content-Type", "application/json")
+		if request.Stream {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(writer, `{"error":{"message":"streaming is not supported"}}`)
+			return
+		}
+		_, _ = fmt.Fprint(writer, `{"id":"resp_fallback","status":"completed","output":[{"type":"message","id":"msg_fallback","status":"completed","role":"assistant","content":[{"type":"output_text","text":"fallback reply","annotations":[]}]}]}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_BASE_URL", server.URL)
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	var output bytes.Buffer
+	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.output = &output
+
+	if err := agent.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests; len(got) != 2 || !got[0] || got[1] {
+		t.Fatalf("stream flags = %#v, want [true false]", got)
+	}
+	if !strings.Contains(output.String(), "fallback reply") {
+		t.Fatalf("fallback output = %q", output.String())
 	}
 }
 

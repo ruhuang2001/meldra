@@ -513,6 +513,9 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 			// gateways only send the final text event, so use it when no delta has
 			// been received rather than completing with an empty reply.
 			if text.Len() == 0 && event.Text != "" {
+				// This is still a streamed text event even though the gateway did
+				// not emit individual deltas.
+				result.receivedTextDelta = true
 				text.WriteString(event.Text)
 				if finalText := sanitizeTerminalText(event.Text); finalText != "" {
 					result.streamedTextShown = true
@@ -624,7 +627,7 @@ func isUnsupportedStreamError(err error) bool {
 // second time through the non-streaming API.
 func normalizeNonSSEStreamingResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	response, err := next(request)
-	if err != nil || response == nil || response.Body == nil || strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
+	if err != nil || response == nil || response.Body == nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		return response, err
 	}
 

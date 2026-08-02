@@ -2,7 +2,7 @@
 
 Meldra is an command-line coding agent.
 
-	Inspired by Amp's article, [How to Build an Agent](https://ampcode.com/notes/how-to-build-an-agent).
+Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-to-build-an-agent).
 
 > **Early stage:** Meldra is experimental. Review every change it makes and avoid running it in directories with sensitive or irreplaceable files.
 

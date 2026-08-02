@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/term"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -64,6 +65,10 @@ type tuiEventMsg struct {
 type tuiApprovalMsg struct {
 	request ApprovalRequest
 	answer  chan bool
+}
+
+type tuiApprovalPreviewMsg struct {
+	request ApprovalRequest
 }
 
 type tuiAgentStoppedMsg struct {
@@ -226,6 +231,10 @@ func (t *tuiController) approve(ctx context.Context, request ApprovalRequest) bo
 	}
 }
 
+func (t *tuiController) presentApproval(request ApprovalRequest) {
+	t.send(tuiApprovalPreviewMsg{request: request})
+}
+
 func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writer, initial tuiInitialState, startAgent func()) error {
 	model := newTUIModel(t, initial)
 	t.program = tea.NewProgram(
@@ -366,6 +375,13 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		m.viewport.GotoBottom()
 		return m, nil
+	case tuiApprovalPreviewMsg:
+		m.addEntry(tuiEntry{
+			kind: tuiEntryNotice,
+			text: "Auto-approved: " + msg.request.Title + "\n" + msg.request.Detail,
+		})
+		m.viewport.GotoBottom()
+		return m, nil
 	case tuiAgentStoppedMsg:
 		m.stopped = true
 		m.busy = true
@@ -388,11 +404,18 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		return m, m.handleKey(msg)
+	case tea.MouseWheelMsg:
+		var command tea.Cmd
+		m.viewport, command = m.viewport.Update(msg)
+		return m, command
 	}
 
 	if !m.busy && m.pending == nil && !m.stopped {
 		var command tea.Cmd
 		m.input, command = m.input.Update(message)
+		if _, pasted := message.(tea.PasteMsg); pasted {
+			m.resize()
+		}
 		return m, command
 	}
 	var command tea.Cmd
@@ -406,6 +429,11 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		m.controller.stop()
 		return tea.Quit
 	}
+	if key.String() == "pgup" || key.String() == "pgdown" {
+		var command tea.Cmd
+		m.viewport, command = m.viewport.Update(key)
+		return command
+	}
 
 	if m.pending != nil {
 		switch key.String() {
@@ -415,12 +443,6 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 			m.resolveApproval(false)
 		}
 		return nil
-	}
-
-	if key.String() == "pgup" || key.String() == "pgdown" {
-		var command tea.Cmd
-		m.viewport, command = m.viewport.Update(key)
-		return command
 	}
 	if m.busy || m.stopped {
 		return nil
@@ -641,7 +663,7 @@ func (m *tuiModel) View() tea.View {
 
 	footerText := sanitizeTerminalText(m.status) + "  |  "
 	if m.pending != nil {
-		footerText += "y approve  n/Enter/Esc reject  Ctrl-C exit"
+		footerText += "PgUp/PgDn scroll  y approve  n/Enter/Esc reject  Ctrl-C exit"
 	} else {
 		footerText += "Enter send  Alt+Enter newline  PgUp/PgDn scroll  Ctrl-C exit"
 	}
@@ -662,9 +684,13 @@ func shouldUseTUI(stdin io.Reader, stdout io.Writer) bool {
 	if !inputOK || !outputOK {
 		return false
 	}
-	inputInfo, inputErr := input.Stat()
-	outputInfo, outputErr := output.Stat()
-	return inputErr == nil && outputErr == nil && inputInfo.Mode()&os.ModeCharDevice != 0 && outputInfo.Mode()&os.ModeCharDevice != 0
+	if _, err := input.Stat(); err != nil {
+		return false
+	}
+	if _, err := output.Stat(); err != nil {
+		return false
+	}
+	return term.IsTerminal(input.Fd()) && term.IsTerminal(output.Fd())
 }
 
 func terminalIsDumb() bool {
@@ -720,6 +746,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 
 	controller := newTUIController(cancel)
 	workspace.SetApprovalFunc(controller.approve)
+	workspace.SetApprovalPresenter(controller.presentApproval)
 	client := openai.NewClient(option.WithAPIKey(settings.APIKey), option.WithBaseURL(settings.BaseURL))
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
