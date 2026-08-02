@@ -12,6 +12,17 @@ permissions:
   contents: read
 
 jobs:
+  commit-messages:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify commit messages
+        run: scripts/check-commit-messages.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+
   check:
     name: Check (Go ${{ matrix.go }})
     runs-on: ubuntu-latest

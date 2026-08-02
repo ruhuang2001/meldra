@@ -3,7 +3,7 @@ DIST_DIR := dist
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-integration test-all build check release-check clean
+.PHONY: fmt vet test test-race test-integration test-all build check release-check install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -35,6 +35,10 @@ check:
 
 release-check: check
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
+
+install-hooks:
+	git config core.hooksPath .githooks
+	@printf 'Git hooks enabled from .githooks\n'
 
 clean:
 	rm -rf $(DIST_DIR)
