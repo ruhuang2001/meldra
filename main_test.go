@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/openai/openai-go/v3/responses"
 )
@@ -126,6 +127,18 @@ func TestSummarizeToolResultCompactsStructuredOutput(t *testing.T) {
 		if got := summarizeToolResult(test.result); got != test.want {
 			t.Errorf("summarizeToolResult(%q) = %q, want %q", test.result, got, test.want)
 		}
+	}
+}
+
+func TestSummarizeToolResultTruncatesUTF8OnRuneBoundary(t *testing.T) {
+	result := strings.Repeat("\u754c", 141)
+	got := summarizeToolResult(result)
+	want := strings.Repeat("\u754c", 137) + "..."
+	if got != want {
+		t.Fatalf("summary = %q, want %q", got, want)
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("summary contains invalid UTF-8: %q", got)
 	}
 }
 

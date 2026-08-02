@@ -238,8 +238,8 @@ func runSessionsCommand(stdout io.Writer) error {
 			summary = "<no summary>"
 		}
 		summary = strings.ReplaceAll(summary, "\n", " ")
-		if len(summary) > 80 {
-			summary = summary[:80] + "..."
+		if runes := []rune(summary); len(runes) > 80 {
+			summary = string(runes[:80]) + "..."
 		}
 		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), sanitizeTerminalText(session.Workspace), summary); err != nil {
 			return err

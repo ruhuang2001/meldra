@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
@@ -67,5 +68,28 @@ func TestPrintCLIErrorSanitizesTerminalSequences(t *testing.T) {
 	}
 	if got := output.String(); !strings.Contains(got, "Error: request failed: unsafe") {
 		t.Fatalf("sanitized error = %q", got)
+	}
+}
+
+func TestRunSessionsCommandTruncatesUTF8OnRuneBoundary(t *testing.T) {
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	store := NewSessionStore(paths)
+	session, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Summary = strings.Repeat("\u754c", 81)
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := runSessionsCommand(&output); err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Repeat("\u754c", 80) + "..."
+	if got := output.String(); !utf8.ValidString(got) || !strings.Contains(got, want) {
+		t.Fatalf("session list = %q, want valid UTF-8 containing %q", got, want)
 	}
 }
