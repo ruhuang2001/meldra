@@ -974,8 +974,8 @@ func summarizeToolResult(result string) string {
 	}
 
 	line := strings.SplitN(trimmed, "\n", 2)[0]
-	if len(line) > 140 {
-		return line[:137] + "..."
+	if runes := []rune(line); len(runes) > 140 {
+		return string(runes[:137]) + "..."
 	}
 	return line
 }

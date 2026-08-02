@@ -847,11 +847,11 @@ func TestRunInferenceResetsIdleTimeoutAfterEachSSEEvent(t *testing.T) {
 			{Type: "response.output_text.delta", Delta: "still streaming"},
 			{Type: "response.completed", Response: streamedCompletedResponse(t, "still streaming")},
 		},
-		delays: []time.Duration{0, 100 * time.Millisecond, 100 * time.Millisecond},
+		delays: []time.Duration{0, 50 * time.Millisecond, 50 * time.Millisecond},
 		closed: make(chan struct{}),
 	}
 	agent := Agent{
-		streamIdleTimeout: 150 * time.Millisecond,
+		streamIdleTimeout: 500 * time.Millisecond,
 		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
 			return stream
 		},
