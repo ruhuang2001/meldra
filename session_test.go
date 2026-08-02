@@ -166,6 +166,25 @@ func TestSessionResumeContextIncludesBoundedHistoryPlanAndSummary(t *testing.T) 
 	}
 }
 
+func BenchmarkSessionResumeContext(b *testing.B) {
+	session := &Session{
+		Summary: strings.Repeat("completed work ", 100),
+		Plan:    []string{"inspect", "edit", "verify"},
+	}
+	for index := range 100 {
+		session.Messages = append(session.Messages, SessionMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("message %d: %s", index, strings.Repeat("context ", 20)),
+		})
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if context := session.resumeContext(); context == "" {
+			b.Fatal("resumeContext returned an empty context")
+		}
+	}
+}
+
 func TestSessionStoreRejectsInsecureAndInvalidFiles(t *testing.T) {
 	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
 	if err != nil {

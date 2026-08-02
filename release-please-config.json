@@ -1,7 +1,6 @@
 {
   "release-type": "go",
   "package-name": "meldra",
-  "initial-version": "0.1.0-alpha.1",
   "versioning": "prerelease",
   "prerelease-type": "alpha",
   "prerelease": true,

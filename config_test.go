@@ -2,6 +2,11 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,6 +232,63 @@ func TestEnvironmentOverridesFilesAndConfigShowRedactsKey(t *testing.T) {
 		if strings.Contains(got, secret) {
 			t.Errorf("config show leaked %q:\n%s", secret, got)
 		}
+	}
+}
+
+func TestFileSettingsReachChatRequest(t *testing.T) {
+	const configuredModel = "file-configured-model"
+	var request struct {
+		Model  string `json:"model"`
+		Stream bool   `json:"stream"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		if incoming.Method != http.MethodPost || incoming.URL.Path != "/responses" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		defer incoming.Body.Close()
+		if err := json.NewDecoder(incoming.Body).Decode(&request); err != nil {
+			http.Error(writer, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"configured reply\"}\n\n")
+		_, _ = fmt.Fprint(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_config\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_config\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"configured reply\",\"annotations\":[]}]}]}}\n\n")
+	}))
+	defer server.Close()
+
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_MODEL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	if err := SaveConfig(paths, Config{Model: configuredModel, BaseURL: server.URL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveAPIKey(paths, "file-api-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace := t.TempDir()
+	var output bytes.Buffer
+	if err := runChat(context.Background(), strings.NewReader("hello\n"), &output, ChatOptions{Workspace: workspace, workspaceExplicit: true}); err != nil {
+		t.Fatal(err)
+	}
+	if request.Model != configuredModel || !request.Stream {
+		t.Fatalf("request settings = model %q, stream %t", request.Model, request.Stream)
+	}
+	if !strings.Contains(output.String(), "configured reply") {
+		t.Fatalf("chat output = %q", output.String())
+	}
+	sessions, err := NewSessionStore(paths).List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || len(sessions[0].Messages) != 2 {
+		t.Fatalf("saved sessions = %#v", sessions)
 	}
 }
 

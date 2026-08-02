@@ -1,6 +1,6 @@
 # Meldra
 
-Meldra is an command-line coding agent.
+Meldra is a command-line coding agent.
 
 Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-to-build-an-agent).
 
@@ -60,7 +60,7 @@ meldra version
 
 - File tools are constrained to the workspace root (resolves `..`, symlinks, absolute paths) and block access to `.git` and Meldra's own config/session directory.
 - Every edit prints a diff and waits for confirmation before writing.
-- Command execution is allowlisted (Go test/build/vet, `gofmt -d`, selected Make targets, read-only Git) and requires explicit approval. Use `--yes` to skip confirmations in automation.
+- Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Use `--yes` to skip confirmations in automation.
 - Each agent turn is bounded to 20 model steps and 50 function calls.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 
@@ -79,8 +79,16 @@ meldra resume SESSION_ID      # resume a specific session
 Requires Go 1.25+.
 
 ```bash
-make check
+make check       # formatting, vet, modules, race tests, coverage, and build
+make benchmark   # local performance baseline; not a noisy CI gate
 ```
+
+The test suite must maintain at least 75% statement coverage.
+
+Meldra follows Semantic Versioning. While the project is below 1.0, fixes
+increment the patch version and new user-facing features increment the minor
+version. Prereleases are reserved for changes that need explicit early testing;
+normal releases do not use an `alpha` suffix.
 
 ## License
 

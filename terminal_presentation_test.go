@@ -1,11 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+var benchmarkSanitizedText string
 
 func TestSanitizeTerminalTextRemovesControlsAndPreservesNewlines(t *testing.T) {
 	input := "first\n\x1b[31mred\x1b[0m\n\x1b]0;untrusted-title\aafter\n" +
@@ -24,6 +27,19 @@ func TestSanitizeTerminalTextKeepsNewlinesAfterIncompleteEscape(t *testing.T) {
 
 	if got := sanitizeTerminalText(input); got != want {
 		t.Fatalf("sanitized text = %q, want %q", got, want)
+	}
+}
+
+func BenchmarkSanitizeTerminalText(b *testing.B) {
+	for _, size := range []int{1 << 10, 64 << 10} {
+		b.Run(fmt.Sprintf("%dKiB", size>>10), func(b *testing.B) {
+			input := strings.Repeat("plain世界\x1b[31mred\x1b[0m\n", size/24+1)[:size]
+			b.SetBytes(int64(len(input)))
+			b.ReportAllocs()
+			for b.Loop() {
+				benchmarkSanitizedText = sanitizeTerminalText(input)
+			}
+		})
 	}
 }
 
