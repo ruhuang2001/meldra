@@ -21,10 +21,15 @@ var version = "dev"
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	go func() {
-		<-ctx.Done()
-		_ = os.Stdin.Close()
-	}()
+	// Bubble Tea restores raw terminal state during shutdown. Closing its input
+	// descriptor on a signal can make that restoration fail, so only interrupt
+	// the blocking line-based reader.
+	if !shouldUseTUI(os.Stdin, os.Stdout) {
+		go func() {
+			<-ctx.Done()
+			_ = os.Stdin.Close()
+		}()
+	}
 	if err := runCLIContext(ctx, os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		printCLIError(os.Stderr, err)
 		os.Exit(1)

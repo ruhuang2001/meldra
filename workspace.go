@@ -39,6 +39,7 @@ type Workspace struct {
 	output      io.Writer
 	autoApprove bool
 	approve     ApprovalFunc
+	present     ApprovalPresenter
 	ctx         context.Context
 	last        []fileChange
 	protected   []string
@@ -55,6 +56,12 @@ func (w *Workspace) SetContext(ctx context.Context) {
 // the caller. A nil approval function preserves the line-based terminal prompt.
 func (w *Workspace) SetApprovalFunc(approve ApprovalFunc) {
 	w.approve = approve
+}
+
+// SetApprovalPresenter shows automatically approved operations without
+// changing their approval decision.
+func (w *Workspace) SetApprovalPresenter(present ApprovalPresenter) {
+	w.present = present
 }
 
 func (w *Workspace) contextErr() error {
@@ -870,15 +877,24 @@ func (w *Workspace) requestApproval(request ApprovalRequest) bool {
 		return false
 	}
 	if w.autoApprove {
+		w.presentApproval(request)
 		return true
 	}
 	if w.approve != nil {
 		return w.approve(w.ctx, request)
 	}
-	if request.Detail != "" {
-		fmt.Fprint(w.output, request.Detail)
-	}
+	w.presentApproval(request)
 	return w.confirmPrompt(request.Prompt)
+}
+
+func (w *Workspace) presentApproval(request ApprovalRequest) {
+	if w.present != nil {
+		w.present(request)
+		return
+	}
+	if request.Kind == ApprovalChanges && request.Detail != "" {
+		_, _ = fmt.Fprint(w.output, request.Detail)
+	}
 }
 
 func (w *Workspace) confirmPrompt(prompt string) bool {

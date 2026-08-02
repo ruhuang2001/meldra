@@ -145,6 +145,25 @@ func TestWorkspaceConfirmationHandlesTerminalPasteAndInvalidAnswers(t *testing.T
 	}
 }
 
+func TestWorkspaceAutoApprovalStillPrintsChanges(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "target.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace, output := testWorkspace(t, root, "", true)
+	result, err := callTool(t, workspace, "edit_file", map[string]any{
+		"path": "target.txt", "old_str": "before", "new_str": "after",
+	})
+	if err != nil || !strings.Contains(result, "Applied successfully") {
+		t.Fatalf("edit result = %q, %v", result, err)
+	}
+	if got := output.String(); !strings.Contains(got, "--- a/target.txt") || !strings.Contains(got, "+after") {
+		t.Fatalf("auto-approved edit did not print its diff: %q", got)
+	}
+}
+
 func TestWorkspaceReadAndSearchValidation(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "visible.go"), []byte("package visible\n// needle\n"), 0o644); err != nil {
@@ -419,7 +438,7 @@ func TestWorkspaceExecutableCommandRequiresConfirmation(t *testing.T) {
 	if err != nil || result != "Declined; command not run." {
 		t.Fatalf("declined command = %q, %v", result, err)
 	}
-	if !strings.Contains(declinedOutput.String(), `Run command? go "test" "./..." [y/N]`) {
+	if got := declinedOutput.String(); got != `Run command? go "test" "./..." [y/N] ` {
 		t.Fatalf("confirmation output = %q", declinedOutput.String())
 	}
 
