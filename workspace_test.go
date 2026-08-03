@@ -516,9 +516,15 @@ func TestWorkspaceCommandAllowlistBoundaries(t *testing.T) {
 		{"python3", []string{"./hello.txt"}, false},
 		{"python3", []string{"-m", "pytest"}, true},
 		{"python3", []string{"-m", "pytest", "-v", "tests/test_foo.py"}, true},
+		{"python3", []string{"-m", "pytest", "tests/test_foo.py::TestThing::test_case[param]"}, true},
 		{"python3", []string{"-m", "pytest", "-k=foo and bar"}, true},
+		{"python3", []string{"-m", "pytest", "--override-ini=cache_dir=.pytest-cache"}, true},
+		{"python3", []string{"-m", "pytest", "--override-ini=console_output_style=classic"}, true},
 		{"python3", []string{"-m", "pytest", "-c", "custom.cfg"}, false},
 		{"python3", []string{"-m", "pytest", "../outside.py"}, false},
+		{"python3", []string{"-m", "pytest", "--override-ini=cache_dir=/tmp/pytest-cache"}, false},
+		{"python3", []string{"-m", "pytest", "--override-ini=cache_dir"}, false},
+		{"python3", []string{"-m", "pytest", "--override-ini=addopts=-q"}, false},
 		{"python3", []string{"-m", "pytest", "--tb=short", "-x", "test/"}, true},
 		{"python3", []string{"-m", "pytest", "--co=pytest_collect", "tests/"}, false},
 		{"go", []string{"test", "-race", "-run=TestOne", "./..."}, true},
@@ -548,6 +554,75 @@ func TestWorkspaceCommandAllowlistBoundaries(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if got := allowed(test.command, test.args); got != test.allowed {
 				t.Fatalf("allowed() = %t, want %t", got, test.allowed)
+			}
+		})
+	}
+}
+
+func TestWorkspaceValidatesPytestPaths(t *testing.T) {
+	root := t.TempDir()
+	for _, directory := range []string{"tests", "src", "reports", "logs"} {
+		if err := os.MkdirAll(filepath.Join(root, directory), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "tests", "test_sample.py"), []byte("def test_sample(): pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pytest.ini"), []byte("[pytest]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", true)
+
+	for _, args := range [][]string{
+		{"tests/test_sample.py::TestSample::test_case[param]"},
+		{"--ignore=tests/test_sample.py"},
+		{"--rootdir=."},
+		{"--config-file=pytest.ini"},
+		{"--pythonpath=src"},
+		{"--junitxml=reports/results.xml"},
+		{"--log-file=logs/pytest.log"},
+		{"--override-ini=cache_dir=.pytest-cache"},
+		{"--override-ini=pythonpath=src"},
+		{"--override-ini=testpaths=tests"},
+		{"--override-ini=log_file=logs/pytest.log"},
+	} {
+		if err := w.validatePytestArgs(args); err != nil {
+			t.Fatalf("validatePytestArgs(%q) = %v", args, err)
+		}
+	}
+
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "test_outside.py"), []byte("def test_outside(): pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "pytest.ini"), []byte("[pytest]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, args := range [][]string{
+		{"escape/test_outside.py::test_outside"},
+		{"--ignore=escape/test_outside.py"},
+		{"--rootdir=escape"},
+		{"--config-file=escape/pytest.ini"},
+		{"--pythonpath=escape"},
+		{"--junitxml=escape/results.xml"},
+		{"--log-file=escape/pytest.log"},
+		{"--override-ini=cache_dir=escape/.pytest-cache"},
+		{"--override-ini=pythonpath=escape"},
+		{"--override-ini=testpaths=escape"},
+		{"--override-ini=log_file=escape/pytest.log"},
+		{"--override-ini=cache_dir=/tmp/pytest-cache"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			if _, err := w.execute("python3", append([]string{"-m", "pytest"}, args...), 30); err == nil {
+				t.Fatalf("pytest path escape was accepted: %q", args)
 			}
 		})
 	}

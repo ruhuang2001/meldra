@@ -127,6 +127,28 @@ func TestTUIKeepsNonEmptyInputVerbatim(t *testing.T) {
 	}
 }
 
+func TestTUIUserMessageSourceDeliversInitialPromptBeforeInteractiveInput(t *testing.T) {
+	interactiveMessages := []string{"follow-up"}
+	getInteractiveMessage := func() (string, bool) {
+		if len(interactiveMessages) == 0 {
+			return "", false
+		}
+		message := interactiveMessages[0]
+		interactiveMessages = interactiveMessages[1:]
+		return message, true
+	}
+	getMessage := tuiUserMessageSource("fix the bug", getInteractiveMessage)
+
+	message, ok := getMessage()
+	if !ok || message != "fix the bug" {
+		t.Fatalf("initial message = %q, %v", message, ok)
+	}
+	message, ok = getMessage()
+	if !ok || message != "follow-up" {
+		t.Fatalf("interactive message = %q, %v", message, ok)
+	}
+}
+
 func TestTUIIgnoresStaleReadyAfterSubmit(t *testing.T) {
 	controller := newTUIController(nil)
 	model := newTUIModel(controller, tuiInitialState{})
