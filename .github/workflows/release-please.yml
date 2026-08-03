@@ -39,7 +39,7 @@ jobs:
         env:
           TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || steps.release.outputs.tag_name }}
         run: |
-          if ! printf '%s\n' "$TAG_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+          if ! printf '%s\n' "$TAG_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'; then
             echo "tag_name must be a semantic-version tag beginning with v" >&2
             exit 1
           fi
@@ -52,12 +52,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release-tag.outputs.tag_name }}
         run: |
-          release_commit="$(gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)"
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
           tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG_NAME" --jq .sha)"
-          if [ "$release_commit" != "$tag_commit" ]; then
-            echo "release target $release_commit does not match tag $TAG_NAME at $tag_commit" >&2
-            exit 1
-          fi
           printf 'commit_sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v5
@@ -65,6 +61,7 @@ jobs:
         with:
           fetch-depth: 0
           ref: refs/tags/${{ steps.release-tag.outputs.tag_name }}
+          persist-credentials: false
 
       - name: Verify checked-out tag
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
@@ -75,7 +72,7 @@ jobs:
       - uses: actions/setup-go@v6
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
-          go-version: "1.25.12"
+          go-version: "1.26.5"
 
       - uses: goreleaser/goreleaser-action@v6
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}

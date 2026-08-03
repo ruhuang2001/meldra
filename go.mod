@@ -1,6 +1,6 @@
 module meldra
 
-go 1.25.5
+go 1.26.0
 
 require (
 	charm.land/bubbles/v2 v2.1.1

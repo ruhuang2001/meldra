@@ -76,7 +76,7 @@ meldra resume SESSION_ID      # resume a specific session
 
 ## Development
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```bash
 make check       # formatting, vet, modules, race tests, coverage, and build
