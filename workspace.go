@@ -1162,7 +1162,7 @@ func allowed(command string, args []string) bool {
 	}
 	switch command {
 	case "python3":
-		return len(args) == 1 && strings.HasSuffix(strings.ToLower(args[0]), ".py")
+		return allowedPython3(args)
 	case "go":
 		return allowedGo(args)
 	case "gofmt":
@@ -1179,6 +1179,57 @@ func allowed(command string, args []string) bool {
 		return len(args) > 0 && allIn(args, []string{"check", "test"})
 	case "git":
 		return allowedGit(args)
+	}
+	return false
+}
+
+func allowedPython3(args []string) bool {
+	if len(args) == 1 && strings.HasSuffix(strings.ToLower(args[0]), ".py") {
+		return true
+	}
+	// Support running pytest: python3 -m pytest [options...] [paths...]
+	if len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
+		return allowedPytestArgs(args[2:])
+	}
+	return false
+}
+
+func allowedPytestArgs(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if !allowedPytestFlag(arg) {
+				return false
+			}
+			continue
+		}
+		// Positional argument must be a safe workspace-relative path/expression.
+		if !allSafeArgs([]string{arg}) {
+			return false
+		}
+	}
+	return true
+}
+
+func allowedPytestFlag(arg string) bool {
+	allowedFlags := []string{
+		"-v", "-vv", "-q", "-s", "-x", "-rf", "-rE", "-rP", "-rN",
+		"--no-header", "--disable-warnings", "--capture=no", "--tb=short", "--tb=line", "--tb=no",
+	}
+	for _, f := range allowedFlags {
+		if arg == f {
+			return true
+		}
+	}
+	allowedPrefixes := []string{
+		"--tb=", "--maxfail=", "-k=", "-m=", "-p=", "-W=", "--ignore=",
+		"--durations=", "--rootdir=", "--config-file=", "--override-ini=",
+		"--pythonpath=", "--junitxml=", "--log-file=", "--log-format=",
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(arg, prefix) {
+			value := strings.TrimPrefix(arg, prefix)
+			return allSafeArgs([]string{value})
+		}
 	}
 	return false
 }
@@ -1326,16 +1377,28 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 		}
 	}
 	if command == "python3" {
-		path, err := w.resolve(args[0], false)
-		if err != nil {
-			return "", err
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			return "", err
-		}
-		if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
-			return "", fmt.Errorf("python3 target must be a workspace Python file")
+		if len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
+			// Validate any positional test paths remain inside the workspace.
+			for _, arg := range args[2:] {
+				if strings.HasPrefix(arg, "-") {
+					continue
+				}
+				if _, err := w.resolve(arg, false); err != nil {
+					return "", err
+				}
+			}
+		} else {
+			path, err := w.resolve(args[0], false)
+			if err != nil {
+				return "", err
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				return "", err
+			}
+			if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
+				return "", fmt.Errorf("python3 target must be a workspace Python file")
+			}
 		}
 	}
 	if seconds == 0 {
