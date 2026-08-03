@@ -5,6 +5,24 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.1.0-alpha.3](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-08-03)
+
+
+### Features
+
+* **benchmarks:** add sanityharness and swe-bench lite evaluation harnesses ([c8bdafd](https://github.com/ruhuang2001/meldra/commit/c8bdafdbb3f0ef080ed24f486bb96ec81327370c))
+* **cli:** add --prompt option for non-interactive agent invocation ([16876e6](https://github.com/ruhuang2001/meldra/commit/16876e6abb86c39882a8ed1418f2792a135e5735))
+* **workspace:** allow python3 -m pytest for benchmark self-verification ([30a2c11](https://github.com/ruhuang2001/meldra/commit/30a2c11f5165c111d38ad14baefb85e481077acc))
+
+
+### Bug Fixes
+
+* **agent:** harden benchmark execution ([95e0946](https://github.com/ruhuang2001/meldra/commit/95e0946941d0d61f209eaf4a67721723212e204e))
+* **ci:** upgrade release checks to go 1.26 ([9d79795](https://github.com/ruhuang2001/meldra/commit/9d7979561be33c0267a71990bb70eb52cd52584b))
+* **ci:** use goreleaser v2.13.3 for go 1.25.12 compatibility ([f22237f](https://github.com/ruhuang2001/meldra/commit/f22237fc952ab6a9afdd6b2b459ccefa53934e90))
+* **release:** harden artifact recovery ([6098681](https://github.com/ruhuang2001/meldra/commit/60986816675e680e71107a76a0ecd8cc750cd87e))
+* **release:** make validation and artifact publishing repeatable ([7cd4bf7](https://github.com/ruhuang2001/meldra/commit/7cd4bf7b7a6c4a80771e21c4563e1f2def6821a9))
+
 ## [0.1.0-alpha.2](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.1...v0.1.0-alpha.2) (2026-08-02)
 
 
