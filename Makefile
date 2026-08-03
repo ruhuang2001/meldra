@@ -41,7 +41,7 @@ check:
 release-check: check
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
 
-release-snapshot: release-check
+release-snapshot:
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 release --snapshot --clean
 
 install-hooks:

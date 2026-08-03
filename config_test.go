@@ -246,6 +246,10 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 			writer.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if incoming.Header.Get("Authorization") != "Bearer file-api-key" {
+			http.Error(writer, "unexpected authorization", http.StatusUnauthorized)
+			return
+		}
 		defer incoming.Body.Close()
 		if err := json.NewDecoder(incoming.Body).Decode(&request); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)

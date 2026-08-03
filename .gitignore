@@ -1,5 +1,6 @@
 /dist/
 /coverage.out
+.DS_Store
 /.env
 /.references/
 meldra
