@@ -1,0 +1,10 @@
+# SWE-bench harness artifacts.
+predictions.jsonl
+predictions.json
+reports/
+workspaces/
+logs/
+meldra.*.json
+__pycache__/
+*.pyc
+.venv/

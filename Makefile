@@ -5,7 +5,7 @@ COVERAGE_MIN := 75.0
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage benchmark build check release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage benchmark benchmark-sanity benchmark-swe-bench build check release-check release-snapshot install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -26,6 +26,24 @@ test-coverage:
 
 benchmark:
 	go test -run='^$$' -bench=. -benchmem ./...
+
+benchmark-sanity: build
+	@if ! command -v sanity >/dev/null 2>&1; then \
+		echo "sanity CLI not found. Install it from https://github.com/lemon07r/SanityHarness"; \
+		echo "  git clone https://github.com/lemon07r/sanityharness.git"; \
+		echo "  cd sanityharness && make build && cp sanity ~/.local/bin/"; \
+		exit 1; \
+	fi
+	@mkdir -p benchmarks/sanityharness/bin
+	@cp $(DIST_DIR)/$(APP) benchmarks/sanityharness/bin/$(APP)
+	PATH="$(CURDIR)/benchmarks/sanityharness/bin:$${PATH}" sanity --config benchmarks/sanityharness/sanity.toml eval --agent meldra --tier core
+
+benchmark-swe-bench: build
+	@if [ ! -d benchmarks/swe-bench/.venv ]; then \
+		python3 -m venv benchmarks/swe-bench/.venv; \
+		benchmarks/swe-bench/.venv/bin/pip install -r benchmarks/swe-bench/requirements.txt; \
+	fi
+	benchmarks/swe-bench/.venv/bin/python benchmarks/swe-bench/run.py
 
 build:
 	mkdir -p $(DIST_DIR)
