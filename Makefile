@@ -57,10 +57,10 @@ check:
 	go build -trimpath -o /dev/null .
 
 release-check: check
-	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
+	go run github.com/goreleaser/goreleaser/v2@v2.13.3 check
 
 release-snapshot:
-	go run github.com/goreleaser/goreleaser/v2@v2.14.0 release --snapshot --clean
+	go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --snapshot --clean
 
 install-hooks:
 	git config core.hooksPath .githooks
