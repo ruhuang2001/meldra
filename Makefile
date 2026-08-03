@@ -43,7 +43,7 @@ benchmark-swe-bench: build
 		python3 -m venv benchmarks/swe-bench/.venv; \
 		benchmarks/swe-bench/.venv/bin/pip install -r benchmarks/swe-bench/requirements.txt; \
 	fi
-	benchmarks/swe-bench/.venv/bin/python benchmarks/swe-bench/run.py
+	PATH="$(CURDIR)/$(DIST_DIR):$${PATH}" benchmarks/swe-bench/.venv/bin/python benchmarks/swe-bench/run.py
 
 build:
 	mkdir -p $(DIST_DIR)
@@ -57,10 +57,10 @@ check:
 	go build -trimpath -o /dev/null .
 
 release-check: check
-	go run github.com/goreleaser/goreleaser/v2@v2.13.3 check
+	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
 
 release-snapshot:
-	go run github.com/goreleaser/goreleaser/v2@v2.13.3 release --snapshot --clean
+	go run github.com/goreleaser/goreleaser/v2@v2.14.0 release --snapshot --clean
 
 install-hooks:
 	git config core.hooksPath .githooks

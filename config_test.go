@@ -250,7 +250,7 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 			http.Error(writer, "unexpected authorization", http.StatusUnauthorized)
 			return
 		}
-		defer incoming.Body.Close()
+		defer func() { _ = incoming.Body.Close() }()
 		if err := json.NewDecoder(incoming.Body).Decode(&request); err != nil {
 			http.Error(writer, err.Error(), http.StatusBadRequest)
 			return
