@@ -1,0 +1,7 @@
+# SanityHarness artifacts; generated during evaluation.
+sessions/
+eval-results/
+.sanity-cache/
+.bin/
+bin/
+sanity
