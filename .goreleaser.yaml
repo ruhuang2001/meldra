@@ -8,6 +8,7 @@ builds:
   - id: meldra
     main: .
     binary: meldra
+    mod_timestamp: "{{ .CommitTimestamp }}"
     env:
       - CGO_ENABLED=0
     flags:
@@ -25,6 +26,30 @@ archives:
   - id: default
     name_template: "{{ .ProjectName }}_{{ title .Os }}_{{ .Arch }}"
     formats: [tar.gz]
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info:
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
+      - src: CHANGELOG.md
+        info:
+          owner: root
+          group: root
+          mode: 0644
+          mtime: "{{ .CommitDate }}"
 
 checksum:
   name_template: "{{ .ProjectName }}_checksums.txt"

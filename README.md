@@ -85,10 +85,10 @@ make benchmark   # local performance baseline; not a noisy CI gate
 
 The test suite must maintain at least 75% statement coverage.
 
-Meldra follows Semantic Versioning. While the project is below 1.0, fixes
-increment the patch version and new user-facing features increment the minor
-version. Prereleases are reserved for changes that need explicit early testing;
-normal releases do not use an `alpha` suffix.
+Meldra follows Semantic Versioning. While the project is below 1.0, the
+automated release flow publishes `alpha` prereleases (`v0.1.0-alpha.N`).
+Publishing a stable release requires an explicit update to
+`release-please-config.json`.
 
 ## License
 
