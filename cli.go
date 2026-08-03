@@ -138,6 +138,7 @@ func runConfigCommand(args []string, stdout io.Writer) error {
 type ChatOptions struct {
 	Workspace         string
 	Resume            string
+	Prompt            string
 	AutoApprove       bool
 	workspaceExplicit bool
 }
@@ -172,6 +173,17 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 			options.Resume = strings.TrimPrefix(argument, "--resume=")
 			if options.Resume == "" {
 				return ChatOptions{}, fmt.Errorf("--resume requires a session ID or latest")
+			}
+		case argument == "--prompt":
+			index++
+			if index >= len(args) || args[index] == "" || strings.HasPrefix(args[index], "-") {
+				return ChatOptions{}, fmt.Errorf("--prompt requires a non-empty message")
+			}
+			options.Prompt = args[index]
+		case strings.HasPrefix(argument, "--prompt="):
+			options.Prompt = strings.TrimPrefix(argument, "--prompt=")
+			if options.Prompt == "" {
+				return ChatOptions{}, fmt.Errorf("--prompt requires a non-empty message")
 			}
 		default:
 			return ChatOptions{}, fmt.Errorf("unknown command or option %q\n\n%s", argument, usageText)
@@ -307,7 +319,13 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		option.WithBaseURL(settings.BaseURL),
 	)
 	var readErr error
+	initialPrompt := options.Prompt
 	getUserMessage := func() (string, bool) {
+		if initialPrompt != "" {
+			prompt := initialPrompt
+			initialPrompt = ""
+			return prompt, true
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil && err != io.EOF {
 			readErr = err
@@ -379,6 +397,7 @@ const usageText = `Usage:
 Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
+  --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
   --yes                          Approve file writes and executable commands without confirmation.
 
 Configuration:

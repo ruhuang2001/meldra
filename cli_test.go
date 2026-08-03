@@ -53,10 +53,22 @@ func TestParseChatOptionsRejectsAnotherFlagAsAnOptionValue(t *testing.T) {
 	for _, args := range [][]string{
 		{"--workspace", "--yes"},
 		{"--resume", "--yes"},
+		{"--prompt", "--yes"},
 	} {
 		if _, err := parseChatOptions(args); err == nil {
 			t.Fatalf("parseChatOptions(%#v) accepted a flag as a value", args)
 		}
+	}
+}
+
+func TestParseChatOptionsAcceptsPrompt(t *testing.T) {
+	got, err := parseChatOptions([]string{"--workspace", "./project", "--yes", "--prompt", "fix the bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ChatOptions{Workspace: "./project", Prompt: "fix the bug", AutoApprove: true, workspaceExplicit: true}
+	if got != want {
+		t.Fatalf("options = %#v, want %#v", got, want)
 	}
 }
 
