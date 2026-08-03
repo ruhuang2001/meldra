@@ -81,6 +81,20 @@ type tuiInitialState struct {
 	model     string
 }
 
+// tuiUserMessageSource supplies --prompt before waiting for interactive TUI
+// input. Agent.Run calls its message source serially, so the closure does not
+// need additional synchronization.
+func tuiUserMessageSource(initialPrompt string, next func() (string, bool)) func() (string, bool) {
+	return func() (string, bool) {
+		if initialPrompt != "" {
+			prompt := initialPrompt
+			initialPrompt = ""
+			return prompt, true
+		}
+		return next()
+	}
+}
+
 func newTUIController(cancel context.CancelFunc) *tuiController {
 	return &tuiController{
 		messages: make(chan string, 1),
@@ -750,7 +764,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	client := openai.NewClient(option.WithAPIKey(settings.APIKey), option.WithBaseURL(settings.BaseURL))
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
-	agent := NewAgent(&client, controller.nextMessage, tools)
+	agent := NewAgent(&client, tuiUserMessageSource(options.Prompt, controller.nextMessage), tools)
 	agent.output = stdout
 	agent.session = session
 	agent.store = store

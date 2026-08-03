@@ -16,11 +16,15 @@ auto_pull = true
 [agents.meldra]
 command = "meldra"
 args = ["--yes", "--prompt", "{prompt}"]
+# Each task gets ephemeral configuration and session storage. Authentication is
+# supplied through the inherited OPENAI_API_KEY instead of mounting ~/.meldra.
+env = { MELDRA_HOME = "/tmp/meldra" }
 
 [sandbox]
-# Meldra reads its configuration and credentials from ~/.meldra and writes
-# sessions there. Mount the host .meldra directory read/write so the agent can
-# authenticate and persist state inside the bubblewrap sandbox.
-shared_readwrite_dirs = [".meldra"]
+# Keep host configuration and cache directories out of the benchmark sandbox.
+# The Meldra executable is made available by the Makefile and its task-local
+# configuration is stored under the sandbox's tmpfs /tmp directory.
+shared_readwrite_dirs = []
+shared_readonly_dirs = []
 # Prevent the agent from reading other benchmark tasks or previous results.
 readable_denylist = ["benchmarks/sanityharness/sessions", "benchmarks/swe-bench"]

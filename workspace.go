@@ -1202,12 +1202,18 @@ func allowedPytestArgs(args []string) bool {
 			}
 			continue
 		}
-		// Positional argument must be a safe workspace-relative path/expression.
-		if !allSafeArgs([]string{arg}) {
+		// A pytest node ID is a workspace path followed by one or more :: selectors.
+		// Only the path portion is resolved at execution time.
+		if !allowedPytestNodeID(arg) {
 			return false
 		}
 	}
 	return true
+}
+
+func allowedPytestNodeID(nodeID string) bool {
+	path, _, _ := strings.Cut(nodeID, "::")
+	return path != "" && allSafeArgs([]string{nodeID, path})
 }
 
 func allowedPytestFlag(arg string) bool {
@@ -1228,10 +1234,119 @@ func allowedPytestFlag(arg string) bool {
 	for _, prefix := range allowedPrefixes {
 		if strings.HasPrefix(arg, prefix) {
 			value := strings.TrimPrefix(arg, prefix)
+			if prefix == "--override-ini=" {
+				return allowedPytestOverrideINI(value)
+			}
 			return allSafeArgs([]string{value})
 		}
 	}
 	return false
+}
+
+// allowedPytestOverrideINI accepts a single pytest name=value override. The
+// addopts setting is deliberately excluded because it is parsed as another
+// command line and could bypass the command allowlist.
+func allowedPytestOverrideINI(override string) bool {
+	key, value, ok := strings.Cut(override, "=")
+	if !ok || !safePytestINIKey(key) || value == "" || key == "addopts" {
+		return false
+	}
+	return allSafeArgs([]string{value})
+}
+
+func safePytestINIKey(key string) bool {
+	for _, char := range key {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '_' && char != '-' && char != '.' {
+			return false
+		}
+	}
+	return key != ""
+}
+
+func (w *Workspace) validatePytestArgs(args []string) error {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if err := w.validatePytestFlag(arg); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.validatePytestNodeID(arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestNodeID(nodeID string) error {
+	if !allowedPytestNodeID(nodeID) {
+		return fmt.Errorf("pytest node ID is not allowlisted")
+	}
+	path, _, _ := strings.Cut(nodeID, "::")
+	if _, err := w.resolve(path, false); err != nil {
+		return fmt.Errorf("pytest node ID %q: %w", nodeID, err)
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestFlag(arg string) error {
+	if !allowedPytestFlag(arg) {
+		return fmt.Errorf("pytest option is not allowlisted")
+	}
+	for _, flag := range []struct {
+		prefix string
+		write  bool
+	}{
+		{"--ignore=", false},
+		{"--rootdir=", false},
+		{"--config-file=", false},
+		{"--pythonpath=", false},
+		{"--junitxml=", true},
+		{"--log-file=", true},
+	} {
+		if strings.HasPrefix(arg, flag.prefix) {
+			return w.validatePytestPath(strings.TrimPrefix(arg, flag.prefix), flag.write)
+		}
+	}
+	if strings.HasPrefix(arg, "--override-ini=") {
+		return w.validatePytestOverrideINI(strings.TrimPrefix(arg, "--override-ini="))
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestOverrideINI(override string) error {
+	key, value, _ := strings.Cut(override, "=")
+	switch key {
+	case "cache_dir", "log_file":
+		return w.validatePytestPath(value, true)
+	case "pythonpath", "testpaths":
+		return w.validatePytestPathList(value)
+	default:
+		return nil
+	}
+}
+
+func (w *Workspace) validatePytestPathList(value string) error {
+	paths := strings.Fields(value)
+	if len(paths) == 0 {
+		return fmt.Errorf("pytest path list must not be empty")
+	}
+	for _, path := range paths {
+		if err := w.validatePytestPath(path, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestPath(path string, write bool) error {
+	if path == "" {
+		return fmt.Errorf("pytest path must not be empty")
+	}
+	if _, err := w.resolve(path, write); err != nil {
+		return fmt.Errorf("pytest path %q: %w", path, err)
+	}
+	return nil
 }
 
 func allowedGo(args []string) bool {
@@ -1327,6 +1442,11 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 	if !allowed(command, args) {
 		return "", fmt.Errorf("command is not allowlisted")
 	}
+	if command == "python3" && len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
+		if err := w.validatePytestArgs(args[2:]); err != nil {
+			return "", err
+		}
+	}
 	executable, err := w.trustedExecutable(command)
 	if err != nil {
 		return "", err
@@ -1376,29 +1496,17 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 			return "", fmt.Errorf("go run target must be a workspace directory or Go file")
 		}
 	}
-	if command == "python3" {
-		if len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
-			// Validate any positional test paths remain inside the workspace.
-			for _, arg := range args[2:] {
-				if strings.HasPrefix(arg, "-") {
-					continue
-				}
-				if _, err := w.resolve(arg, false); err != nil {
-					return "", err
-				}
-			}
-		} else {
-			path, err := w.resolve(args[0], false)
-			if err != nil {
-				return "", err
-			}
-			info, err := os.Stat(path)
-			if err != nil {
-				return "", err
-			}
-			if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
-				return "", fmt.Errorf("python3 target must be a workspace Python file")
-			}
+	if command == "python3" && !(len(args) >= 2 && args[0] == "-m" && args[1] == "pytest") {
+		path, err := w.resolve(args[0], false)
+		if err != nil {
+			return "", err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
+			return "", fmt.Errorf("python3 target must be a workspace Python file")
 		}
 	}
 	if seconds == 0 {

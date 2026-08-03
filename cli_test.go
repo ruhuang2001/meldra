@@ -34,6 +34,16 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 			args: []string{"--workspace", "./project", "session-123"},
 			want: ChatOptions{Workspace: "./project", Resume: "session-123", workspaceExplicit: true},
 		},
+		{
+			name: "prompt without an explicit session ID",
+			args: []string{"--prompt", "fix the bug"},
+			want: ChatOptions{Resume: "latest", Prompt: "fix the bug"},
+		},
+		{
+			name: "prompt before session ID",
+			args: []string{"--prompt", "fix the bug", "session-123"},
+			want: ChatOptions{Resume: "session-123", Prompt: "fix the bug"},
+		},
 	}
 
 	for _, test := range tests {

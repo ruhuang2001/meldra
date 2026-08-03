@@ -197,7 +197,7 @@ func parseResumeOptions(args []string) (ChatOptions, error) {
 	var sessionID string
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
-		if argument == "--workspace" || argument == "--resume" {
+		if argument == "--workspace" || argument == "--resume" || argument == "--prompt" {
 			optionArgs = append(optionArgs, argument)
 			if index+1 < len(args) {
 				index++

@@ -4,10 +4,10 @@ This directory configures [SanityHarness](https://github.com/lemon07r/SanityHarn
 
 ## Requirements
 
-- Go 1.25+
+- Go 1.26+
 - Docker running locally
-- `OPENAI_API_KEY` exported in your environment (or the agent will fail to authenticate)
-- Meldra built at the repository root (`go build -o meldra .`)
+- `OPENAI_API_KEY` exported in your environment
+- `sanity` CLI installed from [SanityHarness](https://github.com/lemon07r/SanityHarness)
 
 ## Run
 
@@ -37,8 +37,14 @@ cat benchmarks/sanityharness/eval-results/*/summary.json
 ## Customization
 
 Edit `sanity.toml` to change the model or timeout. The agent is configured to
-run with `--workspace /workspace --yes --prompt "{prompt}"`, so it auto-approves
-tool operations inside the harness container.
+run from SanityHarness's isolated task workspace with `--yes --prompt "{prompt}"`.
+It deliberately does not pass `--workspace /workspace`: `/workspace` is the
+Docker validation path, while the agent runs in a separate temporary workspace.
+
+The configuration sets `MELDRA_HOME=/tmp/meldra`, so each task gets ephemeral
+Meldra sessions and no host `~/.meldra` directory is mounted into the sandbox.
+Export `OPENAI_API_KEY` before running the benchmark; a key stored only in
+`~/.meldra/credentials.env` is intentionally not used.
 
 To run all tasks (including extended tier):
 
