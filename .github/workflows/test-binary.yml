@@ -1,5 +1,16 @@
 name: Build PR test artifacts
 
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' &&
+  format('Package PR #{0}', inputs.pr_number) ||
+  github.event.issue.pull_request != null &&
+  github.event.comment.body == '/meldra package' &&
+  (github.event.comment.author_association == 'OWNER' ||
+  github.event.comment.author_association == 'MEMBER' ||
+  github.event.comment.author_association == 'COLLABORATOR') &&
+  format('Package PR #{0}', github.event.issue.number) ||
+  'Ignore comment' }}
+
 on:
   issue_comment:
     types: [created]
@@ -23,17 +34,14 @@ jobs:
       github.event.comment.author_association == 'COLLABORATOR'))
     runs-on: ubuntu-latest
     permissions:
-      issues: write
       pull-requests: read
     outputs:
       pr_number: ${{ steps.request.outputs.pr_number }}
-      is_comment: ${{ steps.request.outputs.is_comment }}
     steps:
       - name: Validate request
         id: request
         env:
           PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || inputs.pr_number }}
-          IS_COMMENT: ${{ github.event_name == 'issue_comment' }}
         run: |
           set -euo pipefail
           case "$PR_NUMBER" in
@@ -41,7 +49,6 @@ jobs:
           esac
           test "$PR_NUMBER" -gt 0
           printf 'pr_number=%s\n' "$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          printf 'is_comment=%s\n' "$IS_COMMENT" >> "$GITHUB_OUTPUT"
       - name: Verify open pull request
         uses: actions/github-script@v8
         env:
@@ -56,19 +63,6 @@ jobs:
             if (pull.state !== 'open') {
               throw new Error(`pull request #${pull.number} is ${pull.state}`);
             }
-      - name: Acknowledge package request
-        if: github.event_name == 'issue_comment'
-        continue-on-error: true
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: `Packaging this PR's merge result now. I will reply when the test archives are ready.\n\n[View workflow run](${runURL})`,
-            });
 
   build:
     name: Build test archives
@@ -110,30 +104,3 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
-
-  report:
-    name: Report package result
-    if: always() && needs.prepare.outputs.is_comment == 'true'
-    continue-on-error: true
-    needs: [prepare, build]
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Reply with result
-        uses: actions/github-script@v8
-        env:
-          BUILD_RESULT: ${{ needs.build.result }}
-          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
-        with:
-          script: |
-            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = process.env.BUILD_RESULT === 'success'
-              ? `Test archives are ready as **${process.env.ARTIFACT_NAME}**. Download them from [this workflow run](${runURL}). They expire after seven days.`
-              : `Test archive packaging did not complete. See [this workflow run](${runURL}) for details.`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });

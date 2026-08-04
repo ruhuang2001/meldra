@@ -1,0 +1,46 @@
+name: Report PR package status
+
+on:
+  workflow_run:
+    workflows: ["Build PR test artifacts"]
+    types: [requested, completed]
+
+jobs:
+  comment:
+    if: >-
+      github.event.workflow_run.event == 'issue_comment' &&
+      startsWith(github.event.workflow_run.display_title, 'Package PR #')
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Report package status
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { action, workflow_run: run } = context.payload;
+            const match = /^Package PR #(\d+)$/.exec(run.display_title);
+            if (!match) {
+              core.setFailed(`unexpected workflow title: ${run.display_title}`);
+              return;
+            }
+
+            const issueNumber = Number(match[1]);
+            let body;
+            if (action === 'requested') {
+              body = `Packaging this PR's merge result now. I will reply when the test archives are ready.\n\n[View workflow run](${run.html_url})`;
+            } else if (action === 'completed' && run.conclusion === 'success') {
+              body = `Test archives are ready. Download them from [this workflow run](${run.html_url}); they expire after seven days.`;
+            } else if (action === 'completed') {
+              body = `Test archive packaging did not complete. See [this workflow run](${run.html_url}) for details.`;
+            } else {
+              core.notice(`ignoring workflow_run action: ${action}`);
+              return;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });
