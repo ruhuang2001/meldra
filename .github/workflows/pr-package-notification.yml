@@ -3,12 +3,13 @@ name: Report PR package status
 on:
   workflow_run:
     workflows: ["Build PR test artifacts"]
-    types: [requested, completed]
+    types: [completed]
 
 jobs:
   comment:
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       issues: write
     steps:
       - name: Report package status
@@ -17,24 +18,32 @@ jobs:
           script: |
             const { action, workflow_run: run } = context.payload;
             core.info(`source event=${run.event}, title=${run.display_title}, action=${action}`);
-            const match = /^Package PR #(\d+)$/.exec(run.display_title);
-            if (run.event !== 'issue_comment' || !match) {
-              core.notice('source run is not an authorized package request');
+            if (action !== 'completed') {
+              core.notice(`ignoring workflow_run action: ${action}`);
+              return;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run.id,
+            });
+            const marker = data.artifacts.find(({ name }) => name.startsWith('pr-package-request-'));
+            if (!marker) {
+              core.notice('source run has no PR package request marker');
+              return;
+            }
+            const match = /^pr-package-request-(\d+)-/.exec(marker.name);
+            if (!match) {
+              core.setFailed(`unexpected marker name: ${marker.name}`);
               return;
             }
 
             const issueNumber = Number(match[1]);
-            let body;
-            if (action === 'requested') {
-              body = `Packaging this PR's merge result now. I will reply when the test archives are ready.\n\n[View workflow run](${run.html_url})`;
-            } else if (action === 'completed' && run.conclusion === 'success') {
-              body = `Test archives are ready. Download them from [this workflow run](${run.html_url}); they expire after seven days.`;
-            } else if (action === 'completed') {
-              body = `Test archive packaging did not complete. See [this workflow run](${run.html_url}) for details.`;
-            } else {
-              core.notice(`ignoring workflow_run action: ${action}`);
-              return;
-            }
+            const archive = data.artifacts.find(({ name }) => name.startsWith(`meldra-pr-${issueNumber}-`));
+            const body = run.conclusion === 'success' && archive
+              ? `Test archives are ready as **${archive.name}**. Download them from [this workflow run](${run.html_url}); they expire after seven days.`
+              : `Test archive packaging did not complete. See [this workflow run](${run.html_url}) for details.`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,

@@ -1,16 +1,5 @@
 name: Build PR test artifacts
 
-run-name: >-
-  ${{ github.event_name == 'workflow_dispatch' &&
-  format('Package PR #{0}', inputs.pr_number) ||
-  github.event.issue.pull_request != null &&
-  github.event.comment.body == '/meldra package' &&
-  (github.event.comment.author_association == 'OWNER' ||
-  github.event.comment.author_association == 'MEMBER' ||
-  github.event.comment.author_association == 'COLLABORATOR') &&
-  format('Package PR #{0}', github.event.issue.number) ||
-  'Ignore comment' }}
-
 on:
   issue_comment:
     types: [created]
@@ -63,6 +52,18 @@ jobs:
             if (pull.state !== 'open') {
               throw new Error(`pull request #${pull.number} is ${pull.state}`);
             }
+      - name: Record package request
+        if: github.event_name == 'issue_comment'
+        env:
+          PR_NUMBER: ${{ steps.request.outputs.pr_number }}
+        run: printf 'pr_number=%s\n' "$PR_NUMBER" > package-request.txt
+      - name: Upload package request marker
+        if: github.event_name == 'issue_comment'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-package-request-${{ steps.request.outputs.pr_number }}-${{ github.run_id }}
+          path: package-request.txt
+          retention-days: 1
 
   build:
     name: Build test archives
