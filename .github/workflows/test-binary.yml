@@ -23,7 +23,8 @@ jobs:
       github.event.comment.author_association == 'COLLABORATOR'))
     runs-on: ubuntu-latest
     permissions:
-      pull-requests: read
+      issues: write
+      pull-requests: write
     outputs:
       pr_number: ${{ steps.request.outputs.pr_number }}
     steps:
@@ -52,6 +53,18 @@ jobs:
             if (pull.state !== 'open') {
               throw new Error(`pull request #${pull.number} is ${pull.state}`);
             }
+      - name: Mark package request as received
+        if: github.event_name == 'issue_comment'
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'heart',
+            });
       - name: Record package request
         if: github.event_name == 'issue_comment'
         env:
