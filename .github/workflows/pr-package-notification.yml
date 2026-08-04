@@ -11,6 +11,7 @@ jobs:
     permissions:
       actions: read
       issues: write
+      pull-requests: write
     steps:
       - name: Report package status
         uses: actions/github-script@v8
