@@ -1,0 +1,137 @@
+name: Build PR test artifacts
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to build (uses its merge result)
+        required: true
+        type: string
+
+jobs:
+  prepare:
+    name: Prepare request
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request != null &&
+      github.event.comment.body == '/meldra package' &&
+      (github.event.comment.author_association == 'OWNER' ||
+      github.event.comment.author_association == 'MEMBER' ||
+      github.event.comment.author_association == 'COLLABORATOR'))
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.request.outputs.pr_number }}
+      is_comment: ${{ steps.request.outputs.is_comment }}
+    steps:
+      - name: Validate request
+        id: request
+        env:
+          PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || inputs.pr_number }}
+          IS_COMMENT: ${{ github.event_name == 'issue_comment' }}
+        run: |
+          set -euo pipefail
+          case "$PR_NUMBER" in
+            '' | *[!0-9]*) echo "pr_number must be a positive integer" >&2; exit 1 ;;
+          esac
+          test "$PR_NUMBER" -gt 0
+          printf 'pr_number=%s\n' "$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          printf 'is_comment=%s\n' "$IS_COMMENT" >> "$GITHUB_OUTPUT"
+      - name: Verify open pull request
+        uses: actions/github-script@v8
+        env:
+          PR_NUMBER: ${{ steps.request.outputs.pr_number }}
+        with:
+          script: |
+            const { data: pull } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: Number(process.env.PR_NUMBER),
+            });
+            if (pull.state !== 'open') {
+              throw new Error(`pull request #${pull.number} is ${pull.state}`);
+            }
+      - name: Acknowledge package request
+        if: github.event_name == 'issue_comment'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `Packaging this PR's merge result now. I will reply when the test archives are ready.\n\n[View workflow run](${runURL})`,
+            });
+
+  build:
+    name: Build test archives
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: pr-test-artifacts-${{ needs.prepare.outputs.pr_number }}
+      cancel-in-progress: true
+    outputs:
+      artifact_name: ${{ steps.source.outputs.artifact_name }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ needs.prepare.outputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Record tested source
+        id: source
+        env:
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          sha=$(git rev-parse --short=12 HEAD)
+          printf 'artifact_name=meldra-pr-%s-%s\n' "$PR_NUMBER" "$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Build snapshot archives
+        run: make release-snapshot
+      - name: Upload test archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.source.outputs.artifact_name }}
+          path: |
+            dist/*.tar.gz
+            dist/*checksums.txt
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  report:
+    name: Report package result
+    if: always() && needs.prepare.outputs.is_comment == 'true'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Reply with result
+        uses: actions/github-script@v8
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        with:
+          script: |
+            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = process.env.BUILD_RESULT === 'success'
+              ? `Test archives are ready as **${process.env.ARTIFACT_NAME}**. Download them from [this workflow run](${runURL}). They expire after seven days.`
+              : `Test archive packaging did not complete. See [this workflow run](${runURL}) for details.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

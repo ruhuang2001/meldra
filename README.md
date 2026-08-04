@@ -85,6 +85,19 @@ make benchmark   # local performance baseline; not a noisy CI gate
 
 The test suite must maintain at least 75% statement coverage.
 
+## PR test binaries
+
+PR checks do not build downloadable artifacts by default. To request one from a
+PR, an owner or collaborator comments exactly `/meldra package`. GitHub Actions
+acknowledges the request, builds the PR's merge result, then replies with a link
+to a seven-day artifact containing the same Darwin/Linux `amd64` and `arm64`
+archives and checksums used for releases. It never creates a GitHub Release.
+
+The **Build PR test artifacts** workflow remains available under **Actions** as
+a manual fallback: select **Run workflow** and enter the PR number.
+The workflow must first be present on the default `main` branch before either
+trigger is available.
+
 Meldra follows Semantic Versioning. While the project is below 1.0, the
 automated release flow publishes `alpha` prereleases (`v0.1.0-alpha.N`).
 Publishing a stable release requires an explicit update to
