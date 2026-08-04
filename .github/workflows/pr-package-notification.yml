@@ -7,9 +7,6 @@ on:
 
 jobs:
   comment:
-    if: >-
-      github.event.workflow_run.event == 'issue_comment' &&
-      startsWith(github.event.workflow_run.display_title, 'Package PR #')
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -19,9 +16,10 @@ jobs:
         with:
           script: |
             const { action, workflow_run: run } = context.payload;
+            core.info(`source event=${run.event}, title=${run.display_title}, action=${action}`);
             const match = /^Package PR #(\d+)$/.exec(run.display_title);
-            if (!match) {
-              core.setFailed(`unexpected workflow title: ${run.display_title}`);
+            if (run.event !== 'issue_comment' || !match) {
+              core.notice('source run is not an authorized package request');
               return;
             }
 
