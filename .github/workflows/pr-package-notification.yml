@@ -23,6 +23,10 @@ jobs:
               core.notice(`ignoring workflow_run action: ${action}`);
               return;
             }
+            if (run.conclusion === 'cancelled') {
+              core.notice('source package run was cancelled');
+              return;
+            }
 
             const { data } = await github.rest.actions.listWorkflowRunArtifacts({
               owner: context.repo.owner,
@@ -42,9 +46,10 @@ jobs:
 
             const issueNumber = Number(match[1]);
             const archive = data.artifacts.find(({ name }) => name.startsWith(`meldra-pr-${issueNumber}-`));
+            const downloadURL = archive && `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${run.id}/artifacts/${archive.id}`;
             const body = run.conclusion === 'success' && archive
-              ? `Test archives are ready as **${archive.name}**. Download them from [this workflow run](${run.html_url}); they expire after seven days.`
-              : `Test archive packaging did not complete. See [this workflow run](${run.html_url}) for details.`;
+              ? `✅ Test archives ready: **${archive.name}**\n\n[Download test archive](${downloadURL}) · Expires in 7 days.`
+              : `❌ Test archive packaging failed. [View workflow logs](${run.html_url})`;
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,
