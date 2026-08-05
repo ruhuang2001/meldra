@@ -131,12 +131,102 @@ func TestSessionListSkipsCorruptFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	valid.appendMessage("user", "list sessions")
+	if err := store.Save(valid); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(store.path("corrupt"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err := store.List()
 	if err != nil || len(sessions) != 1 || sessions[0].ID != valid.ID {
 		t.Fatalf("sessions = %#v, error = %v", sessions, err)
+	}
+}
+
+func TestSessionListSkipsEmptySessions(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	empty, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMessages, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withMessages.appendMessage("user", "hello")
+	if err := store.Save(withMessages); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := store.List()
+	if err != nil || len(sessions) != 1 || sessions[0].ID != withMessages.ID {
+		t.Fatalf("sessions = %#v, error = %v", sessions, err)
+	}
+	if _, err := os.Stat(store.path(empty.ID)); !os.IsNotExist(err) {
+		t.Fatalf("empty session file still exists, stat error = %v", err)
+	}
+}
+
+func TestSessionListSkipsMissingWorkspaces(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	missingWorkspace := filepath.Join(t.TempDir(), "removed-workspace")
+	session, err := store.Create(missingWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "work in the removed workspace")
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := store.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("sessions = %#v, want no sessions", sessions)
+	}
+	if _, err := os.Stat(store.path(session.ID)); !os.IsNotExist(err) {
+		t.Fatalf("stale session file still exists, stat error = %v", err)
+	}
+}
+
+func TestSessionListWorkspaceFiltersByCurrentRoot(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	currentWorkspace := t.TempDir()
+	otherWorkspace := t.TempDir()
+	current, err := store.Create(currentWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.appendMessage("user", "current project")
+	if err := store.Save(current); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.Create(otherWorkspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.appendMessage("user", "other project")
+	if err := store.Save(other); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := store.ListWorkspace(currentWorkspace)
+	if err != nil || len(sessions) != 1 || sessions[0].ID != current.ID {
+		t.Fatalf("workspace sessions = %#v, error = %v", sessions, err)
 	}
 }
 

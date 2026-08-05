@@ -7,10 +7,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -74,7 +77,50 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			if err != nil {
 				return err
 			}
-			return runChat(ctx, stdin, stdout, options)
+			chatInput := stdin
+			resumeWorkspace, err := resumeWorkspacePath(options)
+			if err != nil {
+				return err
+			}
+			if options.selectResume {
+				if shouldUseTUI(stdin, stdout) {
+					selected, err := runSessionPicker(stdin.(*os.File), stdout.(*os.File), resumeWorkspace)
+					if err != nil {
+						return err
+					}
+					if selected == "" {
+						return nil
+					}
+					options.Resume = selected
+				} else {
+					// Keep a single buffered reader for the line-based picker and
+					// chat so a piped follow-up prompt cannot be consumed by the picker.
+					chatInput = bufferedInput(stdin)
+					paths, err := ResolveConfigPaths()
+					if err != nil {
+						return err
+					}
+					options.Resume, err = selectResumeSession(chatInput, stdout, NewSessionStore(paths), resumeWorkspace)
+					if err != nil {
+						return err
+					}
+				}
+			}
+			if options.Resume == "latest" {
+				paths, err := ResolveConfigPaths()
+				if err != nil {
+					return err
+				}
+				sessions, err := NewSessionStore(paths).ListWorkspace(resumeWorkspace)
+				if err != nil {
+					return err
+				}
+				if len(sessions) == 0 {
+					return fmt.Errorf("no saved sessions for workspace %s", resumeWorkspace)
+				}
+				options.Resume = sessions[0].ID
+			}
+			return runChat(ctx, chatInput, stdout, options)
 		default:
 			if !strings.HasPrefix(args[0], "-") {
 				return fmt.Errorf("unknown command %q\n\n%s", args[0], usageText)
@@ -124,12 +170,6 @@ func runConfigCommand(args []string, stdout io.Writer) error {
 		}
 		_, err := fmt.Fprintf(stdout, "Initialized Meldra configuration in %s\nEdit %s to add your OPENAI_API_KEY.\n", paths.Home, paths.CredentialsFile)
 		return err
-	case "path":
-		if len(args) != 1 {
-			return fmt.Errorf("config path does not accept arguments")
-		}
-		_, err := fmt.Fprintf(stdout, "Home: %s\nConfig: %s\nCredentials: %s\n", paths.Home, paths.ConfigFile, paths.CredentialsFile)
-		return err
 	default:
 		return fmt.Errorf("unknown config command %q\n\n%s", args[0], configUsageText)
 	}
@@ -141,6 +181,7 @@ type ChatOptions struct {
 	Prompt            string
 	AutoApprove       bool
 	workspaceExplicit bool
+	selectResume      bool
 }
 
 func parseChatOptions(args []string) (ChatOptions, error) {
@@ -222,13 +263,81 @@ func parseResumeOptions(args []string) (ChatOptions, error) {
 	if options.Resume != "" && sessionID != "" {
 		return ChatOptions{}, fmt.Errorf("resume accepts at most one session ID")
 	}
-	if options.Resume == "" {
+	if options.Resume == "" && sessionID == "" {
+		options.selectResume = true
+	} else if options.Resume == "" {
 		options.Resume = sessionID
 	}
-	if options.Resume == "" {
-		options.Resume = "latest"
-	}
 	return options, nil
+}
+
+func resumeWorkspacePath(options ChatOptions) (string, error) {
+	workspace := options.Workspace
+	if workspace == "" {
+		var err error
+		workspace, err = os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve current workspace: %w", err)
+		}
+	}
+	return canonicalWorkspacePath(workspace)
+}
+
+func bufferedInput(input io.Reader) *bufio.Reader {
+	if reader, ok := input.(*bufio.Reader); ok {
+		return reader
+	}
+	return bufio.NewReader(input)
+}
+
+func selectResumeSession(input io.Reader, output io.Writer, store *SessionStore, workspace string) (string, error) {
+	sessions, err := store.ListWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) == 0 {
+		return "", fmt.Errorf("no saved sessions")
+	}
+
+	if _, err := fmt.Fprintln(output, "Saved sessions:"); err != nil {
+		return "", err
+	}
+	for index, session := range sessions {
+		id := strings.ReplaceAll(sanitizeTerminalText(session.ID), "\n", " ")
+		workspace := strings.ReplaceAll(sanitizeTerminalText(session.Workspace), "\n", " ")
+		summary := sessionListPreview(session)
+		if _, err := fmt.Fprintf(output, "%d. %s  %s  %s\n   %s\n", index+1, id, session.UpdatedAt.Format(time.RFC3339), workspace, summary); err != nil {
+			return "", err
+		}
+	}
+
+	reader := bufferedInput(input)
+	for {
+		if _, err := fmt.Fprintf(output, "Select a session [1-%d] (or q to cancel): ", len(sessions)); err != nil {
+			return "", err
+		}
+		line, readErr := reader.ReadString('\n')
+		choice := strings.TrimSpace(line)
+		if choice == "" && readErr == io.EOF {
+			return "", fmt.Errorf("session selection cancelled")
+		}
+		if strings.EqualFold(choice, "q") {
+			return "", fmt.Errorf("session selection cancelled")
+		}
+		selection, err := strconv.Atoi(choice)
+		if err == nil && selection >= 1 && selection <= len(sessions) {
+			return sessions[selection-1].ID, nil
+		}
+		if _, err := fmt.Fprintf(output, "Invalid session selection. Enter a number from 1 to %d, or q to cancel.\n", len(sessions)); err != nil {
+			return "", err
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				return "", fmt.Errorf("session selection cancelled")
+			}
+			return "", fmt.Errorf("read session selection: %w", readErr)
+		}
+	}
 }
 
 func runSessionsCommand(stdout io.Writer) error {
@@ -245,19 +354,143 @@ func runSessionsCommand(stdout io.Writer) error {
 		return err
 	}
 	for _, session := range sessions {
-		summary := sanitizeTerminalText(session.Summary)
-		if summary == "" {
-			summary = "<no summary>"
-		}
-		summary = strings.ReplaceAll(summary, "\n", " ")
-		if runes := []rune(summary); len(runes) > 80 {
-			summary = string(runes[:80]) + "..."
-		}
+		summary := sessionListPreview(session)
 		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), sanitizeTerminalText(session.Workspace), summary); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sessionListPreview(session Session) string {
+	preview := session.Summary
+	if preview == "" {
+		for index := len(session.Messages) - 1; index >= 0; index-- {
+			if session.Messages[index].Role == "user" {
+				preview = session.Messages[index].Content
+				break
+			}
+		}
+	}
+	preview = strings.ReplaceAll(sanitizeTerminalText(preview), "\n", " ")
+	if preview == "" {
+		preview = "(untitled session)"
+	}
+	if runes := []rune(preview); len(runes) > 80 {
+		preview = string(runes[:80]) + "..."
+	}
+	return preview
+}
+
+type sessionPickerModel struct {
+	sessions []Session
+	cursor   int
+	offset   int
+	width    int
+	height   int
+	selected string
+}
+
+func runSessionPicker(input, output *os.File, workspace string) (string, error) {
+	paths, err := ResolveConfigPaths()
+	if err != nil {
+		return "", err
+	}
+	sessions, err := NewSessionStore(paths).ListWorkspace(workspace)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) == 0 {
+		_, err := fmt.Fprintln(output, "No saved sessions.")
+		return "", err
+	}
+
+	model := &sessionPickerModel{sessions: sessions}
+	program := tea.NewProgram(model, tea.WithInput(input), tea.WithOutput(output), tea.WithoutSignalHandler())
+	final, err := program.Run()
+	if err != nil {
+		return "", err
+	}
+	return final.(*sessionPickerModel).selected, nil
+}
+
+func (m *sessionPickerModel) Init() tea.Cmd { return nil }
+
+func (m *sessionPickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := message.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		m.keepCursorVisible()
+	case tea.KeyPressMsg:
+		switch msg.String() {
+		case "up", "k":
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case "down", "j":
+			if m.cursor+1 < len(m.sessions) {
+				m.cursor++
+			}
+		case "pgup":
+			m.cursor -= m.visibleRows()
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+		case "pgdown":
+			m.cursor += m.visibleRows()
+			if m.cursor >= len(m.sessions) {
+				m.cursor = len(m.sessions) - 1
+			}
+		case "enter":
+			m.selected = m.sessions[m.cursor].ID
+			return m, tea.Quit
+		case "esc", "q", "ctrl+c":
+			return m, tea.Quit
+		}
+		m.keepCursorVisible()
+	}
+	return m, nil
+}
+
+func (m *sessionPickerModel) visibleRows() int {
+	return max(1, m.height-6)
+}
+
+func (m *sessionPickerModel) keepCursorVisible() {
+	rows := m.visibleRows()
+	if m.cursor < m.offset {
+		m.offset = m.cursor
+	}
+	if m.cursor >= m.offset+rows {
+		m.offset = m.cursor - rows + 1
+	}
+}
+
+func (m *sessionPickerModel) View() tea.View {
+	var content strings.Builder
+	content.WriteString(lipgloss.NewStyle().Bold(true).Render("Select a session to resume"))
+	content.WriteString("\n")
+	content.WriteString(tuiDimStyle.Render("↑/↓ Move  PgUp/PgDn Page  Enter Select  Esc Cancel"))
+	content.WriteString("\n\n")
+	rows := m.visibleRows()
+	end := min(len(m.sessions), m.offset+rows)
+	for index := m.offset; index < end; index++ {
+		prefix := "  "
+		if index == m.cursor {
+			prefix = "> "
+		}
+		session := m.sessions[index]
+		line := fmt.Sprintf("%s%s  %s  %s", prefix, session.ID, session.UpdatedAt.Format("2006-01-02 15:04"), sessionListPreview(session))
+		if index == m.cursor {
+			line = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true).Render(line)
+		}
+		content.WriteString(line)
+		content.WriteString("\n")
+	}
+	content.WriteString(tuiDimStyle.Render(fmt.Sprintf("%d/%d", m.cursor+1, len(m.sessions))))
+	view := tea.NewView(content.String())
+	view.AltScreen = true
+	return view
 }
 
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
@@ -278,7 +511,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
 	}
 
-	reader := bufio.NewReader(stdin)
+	reader := bufferedInput(stdin)
 	store := NewSessionStore(paths)
 	var session *Session
 	if options.Resume != "" {
@@ -313,6 +546,12 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 			return err
 		}
 	}
+	isNewSession := session != nil && !session.resumed
+	defer func() {
+		if isNewSession && len(session.Messages) == 0 {
+			_ = store.Delete(session.ID)
+		}
+	}()
 
 	client := openai.NewClient(
 		option.WithAPIKey(settings.APIKey),
@@ -387,11 +626,10 @@ func setEnvironmentIfUnset(name, value string) {
 
 const usageText = `Usage:
   meldra [options]               Start a chat in a bounded workspace.
-  meldra resume [session-id]     Resume the latest or selected session.
+  meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.
   meldra config init             Create ~/.meldra configuration files.
   meldra config [show]           Show effective configuration without secrets.
-  meldra config path             Print configuration file paths.
   meldra version                 Print the installed version.
 
 Options:
@@ -409,5 +647,4 @@ Configuration:
 const configUsageText = `Usage:
   meldra config init
   meldra config [show]
-  meldra config path
 `

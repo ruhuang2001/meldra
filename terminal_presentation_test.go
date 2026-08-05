@@ -119,6 +119,7 @@ func TestSessionListSanitizesSavedSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	session.appendMessage("user", "show summary")
 	session.Summary = "safe\x1b]0;untrusted-title\asummary\x1b[31m"
 	if err := store.Save(session); err != nil {
 		t.Fatal(err)

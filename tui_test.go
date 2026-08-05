@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -124,6 +125,25 @@ func TestTUIKeepsNonEmptyInputVerbatim(t *testing.T) {
 		}
 	default:
 		t.Fatal("non-empty input was not sent")
+	}
+}
+
+func TestTUIModelRestoresSessionMessages(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{
+		messages: []SessionMessage{
+			{Role: "user", Content: "inspect the project"},
+			{Role: "assistant", Content: "I will inspect it."},
+		},
+	})
+
+	if len(model.entries) != 2 {
+		t.Fatalf("restored entries = %d, want 2", len(model.entries))
+	}
+	if model.entries[0].kind != tuiEntryUser || model.entries[1].kind != tuiEntryAssistant {
+		t.Fatalf("restored entry kinds = %#v", model.entries)
+	}
+	if timeline := model.renderTimeline(); !strings.Contains(timeline, "inspect the project") || !strings.Contains(timeline, "I will inspect it.") {
+		t.Fatalf("restored timeline = %q", timeline)
 	}
 }
 
@@ -290,6 +310,49 @@ func TestTUIViewEnablesMouseWheelEvents(t *testing.T) {
 
 	if got := model.View().MouseMode; got != tea.MouseModeCellMotion {
 		t.Fatalf("mouse mode = %v, want %v", got, tea.MouseModeCellMotion)
+	}
+}
+
+func TestTUIInputStylesKeepTerminalBackground(t *testing.T) {
+	for _, darkBackground := range []bool{false, true} {
+		styles := tuiInputStyles(&darkBackground)
+		if background := styles.Focused.CursorLine.GetBackground(); !isNoColor(background) {
+			t.Fatalf("dark background %v gave the focused input an opaque background: %v", darkBackground, background)
+		}
+		if foreground := styles.Focused.Text.GetForeground(); isNoColor(foreground) {
+			t.Fatalf("dark background %v did not set a readable input text color", darkBackground)
+		}
+	}
+
+	fallback := tuiInputStyles(nil)
+	if background := fallback.Focused.CursorLine.GetBackground(); !isNoColor(background) {
+		t.Fatalf("fallback input style has an opaque background: %v", background)
+	}
+	if foreground := fallback.Focused.Text.GetForeground(); !isNoColor(foreground) {
+		t.Fatalf("fallback input text color = %v, want terminal default", foreground)
+	}
+}
+
+func isNoColor(value any) bool {
+	_, ok := value.(lipgloss.NoColor)
+	return ok
+}
+
+func TestTUIViewHeaderIncludesCurrentVersion(t *testing.T) {
+	originalVersion := version
+	version = "v1.2.3"
+	t.Cleanup(func() { version = originalVersion })
+
+	model := newTUIModel(newTUIController(nil), tuiInitialState{
+		workspace: "/tmp/project",
+		model:     "gpt-test",
+	})
+	model.width = 80
+	model.height = 24
+	model.resize()
+
+	if content := sanitizeTerminalText(model.View().Content); !strings.Contains(content, "MELDRA  v1.2.3  project  gpt-test") {
+		t.Fatalf("header does not include the current version: %q", content)
 	}
 }
 

@@ -144,6 +144,16 @@ func (s *SessionStore) Load(id string) (*Session, error) {
 	return &session, nil
 }
 
+func (s *SessionStore) Delete(id string) error {
+	if !validSessionID(id) {
+		return fmt.Errorf("invalid session ID %q", id)
+	}
+	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("delete session %q: %w", id, err)
+	}
+	return nil
+}
+
 func (s *SessionStore) List() ([]Session, error) {
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -165,10 +175,53 @@ func (s *SessionStore) List() ([]Session, error) {
 		if err != nil {
 			continue
 		}
+		if len(session.Messages) == 0 {
+			_ = s.Delete(id)
+			continue
+		}
+		workspaceInfo, err := os.Stat(session.Workspace)
+		if errors.Is(err, fs.ErrNotExist) || (err == nil && !workspaceInfo.IsDir()) {
+			_ = s.Delete(id)
+			continue
+		}
+		if err != nil {
+			continue
+		}
 		sessions = append(sessions, *session)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt) })
 	return sessions, nil
+}
+
+func (s *SessionStore) ListWorkspace(workspace string) ([]Session, error) {
+	root, err := canonicalWorkspacePath(workspace)
+	if err != nil {
+		return nil, err
+	}
+	sessions, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]Session, 0, len(sessions))
+	for _, session := range sessions {
+		sessionRoot, err := canonicalWorkspacePath(session.Workspace)
+		if err == nil && sessionRoot == root {
+			filtered = append(filtered, session)
+		}
+	}
+	return filtered, nil
+}
+
+func canonicalWorkspacePath(workspace string) (string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", err
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace %q: %w", workspace, err)
+	}
+	return filepath.Clean(canonical), nil
 }
 
 func (s *SessionStore) ensureDir() error {
