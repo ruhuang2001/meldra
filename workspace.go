@@ -1212,6 +1212,12 @@ func allowedPytestArgs(args []string) bool {
 }
 
 func allowedPytestNodeID(nodeID string) bool {
+	// Pytest expands a positional argument beginning with @ as an argument
+	// file after Meldra has validated the command line. That would allow the
+	// file contents to bypass this allowlist.
+	if strings.HasPrefix(nodeID, "@") {
+		return false
+	}
 	path, _, _ := strings.Cut(nodeID, "::")
 	return path != "" && allSafeArgs([]string{nodeID, path})
 }
@@ -1343,10 +1349,21 @@ func (w *Workspace) validatePytestPath(path string, write bool) error {
 	if path == "" {
 		return fmt.Errorf("pytest path must not be empty")
 	}
+	if pytestPathUsesExpansion(path) {
+		return fmt.Errorf("pytest paths must not use home or environment expansion")
+	}
 	if _, err := w.resolve(path, write); err != nil {
 		return fmt.Errorf("pytest path %q: %w", path, err)
 	}
 	return nil
+}
+
+// pytest expands ~ and environment-variable syntax in some path options after
+// command validation. Reject them so the path passed to pytest is the same path
+// that resolve verifies remains inside the workspace. Percent syntax matters on
+// Windows, where os.path.expandvars supports %NAME%.
+func pytestPathUsesExpansion(path string) bool {
+	return strings.HasPrefix(path, "~") || strings.ContainsAny(path, "$%")
 }
 
 func allowedGo(args []string) bool {

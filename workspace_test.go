@@ -517,6 +517,7 @@ func TestWorkspaceCommandAllowlistBoundaries(t *testing.T) {
 		{"python3", []string{"-m", "pytest"}, true},
 		{"python3", []string{"-m", "pytest", "-v", "tests/test_foo.py"}, true},
 		{"python3", []string{"-m", "pytest", "tests/test_foo.py::TestThing::test_case[param]"}, true},
+		{"python3", []string{"-m", "pytest", "@args.txt"}, false},
 		{"python3", []string{"-m", "pytest", "-k=foo and bar"}, true},
 		{"python3", []string{"-m", "pytest", "--override-ini=cache_dir=.pytest-cache"}, true},
 		{"python3", []string{"-m", "pytest", "--override-ini=console_output_style=classic"}, true},
@@ -590,6 +591,23 @@ func TestWorkspaceValidatesPytestPaths(t *testing.T) {
 		if err := w.validatePytestArgs(args); err != nil {
 			t.Fatalf("validatePytestArgs(%q) = %v", args, err)
 		}
+	}
+
+	for _, args := range [][]string{
+		{"--junitxml=~/.meldra/credentials.env"},
+		{"--junitxml=$HOME/.meldra/credentials.env"},
+		{"--junitxml=%USERPROFILE%/.meldra/credentials.env"},
+		{"--log-file=~/.meldra/pytest.log"},
+		{"--override-ini=cache_dir=$HOME/.meldra/pytest-cache"},
+		{"--override-ini=log_file=%USERPROFILE%/.meldra/pytest.log"},
+		{"--override-ini=pythonpath=~/src"},
+		{"--override-ini=testpaths=$HOME/tests"},
+	} {
+		t.Run("reject expansion "+strings.Join(args, " "), func(t *testing.T) {
+			if _, err := w.execute("python3", append([]string{"-m", "pytest"}, args...), 30); err == nil {
+				t.Fatalf("pytest path expansion was accepted: %q", args)
+			}
+		})
 	}
 
 	outside := t.TempDir()
