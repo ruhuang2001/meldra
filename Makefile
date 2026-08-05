@@ -2,6 +2,10 @@ APP := meldra
 DIST_DIR := dist
 COVERAGE_FILE := coverage.out
 COVERAGE_MIN := 75.0
+# Local builds should identify the source they were built from just like
+# release artifacts do. VERSION may be overridden for reproducible builds.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
@@ -47,14 +51,14 @@ benchmark-swe-bench: build
 
 build:
 	mkdir -p $(DIST_DIR)
-	go build -trimpath -o $(DIST_DIR)/$(APP) .
+	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o $(DIST_DIR)/$(APP) .
 
 check:
 	test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))"
 	go vet ./...
 	go mod tidy -diff
 	$(MAKE) test-coverage
-	go build -trimpath -o /dev/null .
+	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
 
 release-check: check
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
