@@ -353,7 +353,7 @@ func TestCLIHelpVersionAndErrors(t *testing.T) {
 		if err := runCLI([]string{"config", "--help"}, strings.NewReader(""), &output); err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(output.String(), "meldra config path") {
+		if !strings.Contains(output.String(), "meldra config [show]") || strings.Contains(output.String(), "meldra config path") {
 			t.Fatalf("unexpected config help output: %s", output.String())
 		}
 	})
@@ -386,7 +386,7 @@ func TestCLIHelpVersionAndErrors(t *testing.T) {
 	})
 }
 
-func TestCLIConfigInitPathAndArgumentValidation(t *testing.T) {
+func TestCLIConfigInitAndArgumentValidation(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "meldra-home")
 	t.Setenv(MeldraHomeEnv, home)
 	var output bytes.Buffer
@@ -397,13 +397,16 @@ func TestCLIConfigInitPathAndArgumentValidation(t *testing.T) {
 		t.Fatalf("config init output = %q", output.String())
 	}
 	output.Reset()
-	if err := runCLI([]string{"config", "path"}, strings.NewReader(""), &output); err != nil {
+	if err := runCLI([]string{"config"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{home, filepath.Join(home, "config.toml"), filepath.Join(home, "credentials.env")} {
 		if !strings.Contains(output.String(), want) {
-			t.Errorf("config path output missing %q: %s", want, output.String())
+			t.Errorf("config output missing %q: %s", want, output.String())
 		}
+	}
+	if err := runCLI([]string{"config", "path"}, strings.NewReader(""), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), `unknown config command "path"`) {
+		t.Errorf("config path error = %v, want unknown-command error", err)
 	}
 
 	invalid := [][]string{
@@ -412,7 +415,6 @@ func TestCLIConfigInitPathAndArgumentValidation(t *testing.T) {
 		{"resume", "one", "two"},
 		{"config", "show", "extra"},
 		{"config", "init", "extra"},
-		{"config", "path", "extra"},
 		{"config", "unknown"},
 		{"--workspace="},
 		{"--resume"},
@@ -456,6 +458,10 @@ func TestCLIWorkspaceSessionsAndResume(t *testing.T) {
 	store := NewSessionStore(paths)
 	session, err := store.Create(canonicalWorkspace)
 	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "continue")
+	if err := store.Save(session); err != nil {
 		t.Fatal(err)
 	}
 	sessions, err = store.List()

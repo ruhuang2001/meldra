@@ -39,6 +39,45 @@ var (
 	tuiInputStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
 )
 
+// tuiInputStyles keeps the composer background transparent so text always
+// remains legible against the user's terminal theme. Once Bubble Tea reports
+// the terminal background, use its contrast-aware palette; until then, leave
+// text at the terminal's default foreground.
+func tuiInputStyles(darkBackground *bool) textarea.Styles {
+	text := lipgloss.NewStyle()
+	placeholder := tuiDimStyle
+	prompt := tuiBrandStyle
+	cursorColor := lipgloss.Color("39")
+	if darkBackground != nil {
+		if *darkBackground {
+			text = lipgloss.NewStyle().Foreground(lipgloss.Color("#f8fafc"))
+			placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#94a3b8"))
+			prompt = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#60a5fa"))
+			cursorColor = lipgloss.Color("#60a5fa")
+		} else {
+			text = lipgloss.NewStyle().Foreground(lipgloss.Color("#1f2937"))
+			placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color("#64748b"))
+			prompt = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#1d4ed8"))
+			cursorColor = lipgloss.Color("#1d4ed8")
+		}
+	}
+
+	state := textarea.StyleState{
+		Text:        text,
+		Placeholder: placeholder,
+		Prompt:      prompt,
+	}
+	return textarea.Styles{
+		Focused: state,
+		Blurred: state,
+		Cursor: textarea.CursorStyle{
+			Color: cursorColor,
+			Shape: tea.CursorBlock,
+			Blink: true,
+		},
+	}
+}
+
 // tuiController is the concurrency boundary between the synchronous agent and
 // Bubble Tea's event loop. Agent and workspace goroutines never mutate the UI
 // model directly.
@@ -79,6 +118,7 @@ type tuiInitialState struct {
 	workspace string
 	sessionID string
 	model     string
+	messages  []SessionMessage
 }
 
 // tuiUserMessageSource supplies --prompt before waiting for interactive TUI
@@ -336,6 +376,7 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	input := textarea.New()
 	input.Prompt = "> "
 	input.Placeholder = "Describe the change you want"
+	input.SetStyles(tuiInputStyles(nil))
 	input.ShowLineNumbers = false
 	input.DynamicHeight = true
 	input.MaxHeight = 4
@@ -345,6 +386,18 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	activity.SoftWrap = true
 	activity.MouseWheelEnabled = true
 
+	entries := make([]tuiEntry, 0, len(initial.messages))
+	for _, message := range initial.messages {
+		kind := tuiEntryNotice
+		switch message.Role {
+		case "user":
+			kind = tuiEntryUser
+		case "assistant":
+			kind = tuiEntryAssistant
+		}
+		entries = append(entries, tuiEntry{kind: kind, text: message.Content})
+	}
+
 	return &tuiModel{
 		controller:      controller,
 		workspace:       initial.workspace,
@@ -352,6 +405,7 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 		modelName:       initial.model,
 		viewport:        activity,
 		input:           input,
+		entries:         entries,
 		activeAssistant: -1,
 		activeTool:      -1,
 		status:          "Starting",
@@ -361,6 +415,7 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 func (m *tuiModel) Init() tea.Cmd {
 	return tea.Batch(
 		m.input.Focus(),
+		tea.RequestBackgroundColor,
 		func() tea.Msg {
 			m.controller.markReady()
 			return nil
@@ -374,6 +429,10 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		return m, nil
+	case tea.BackgroundColorMsg:
+		darkBackground := msg.IsDark()
+		m.input.SetStyles(tuiInputStyles(&darkBackground))
 		return m, nil
 	case tuiEventMsg:
 		return m, m.applyEvent(msg.event)
@@ -658,7 +717,7 @@ func (m *tuiModel) View() tea.View {
 	}
 
 	workspace := sanitizeTerminalText(filepath.Base(m.workspace))
-	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+workspace+"  "+sanitizeTerminalText(m.modelName))
+	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+sanitizeTerminalText(version)+"  "+workspace+"  "+sanitizeTerminalText(m.modelName))
 	if m.sessionID != "" {
 		header += tuiDimStyle.Render("  session " + sanitizeTerminalText(m.sessionID))
 	}
@@ -757,6 +816,12 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 			return err
 		}
 	}
+	isNewSession := session != nil && !session.resumed
+	defer func() {
+		if isNewSession && len(session.Messages) == 0 {
+			_ = store.Delete(session.ID)
+		}
+	}()
 
 	controller := newTUIController(cancel)
 	workspace.SetApprovalFunc(controller.approve)
@@ -776,6 +841,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		workspace: workspace.root,
 		sessionID: session.ID,
 		model:     settings.Model,
+		messages:  append([]SessionMessage(nil), session.Messages...),
 	}, func() {
 		started = true
 		go func() {

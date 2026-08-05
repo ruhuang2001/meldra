@@ -51,8 +51,7 @@ Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 
 ```bash
 meldra config init   # create starter config files
-meldra config show   # show effective values (hides API key)
-meldra config path   # print config paths
+meldra config        # show effective values and config paths (hides API key)
 meldra version
 ```
 
@@ -68,8 +67,9 @@ meldra version
 
 ```bash
 meldra sessions
-meldra resume                 # resume latest session
+meldra resume                 # choose a saved session
 meldra resume SESSION_ID      # resume a specific session
+meldra resume latest          # resume the most recently saved session
 ```
 
 `Ctrl-C` / `SIGTERM` cancel in-flight work, save session state, and print the resume command.
