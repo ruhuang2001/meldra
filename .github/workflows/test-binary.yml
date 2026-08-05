@@ -24,14 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       issues: write
-      pull-requests: write
+      pull-requests: read
     outputs:
       pr_number: ${{ steps.request.outputs.pr_number }}
+      is_comment: ${{ steps.request.outputs.is_comment }}
     steps:
       - name: Validate request
         id: request
         env:
           PR_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || inputs.pr_number }}
+          IS_COMMENT: ${{ github.event_name == 'issue_comment' }}
         run: |
           set -euo pipefail
           case "$PR_NUMBER" in
@@ -39,6 +41,7 @@ jobs:
           esac
           test "$PR_NUMBER" -gt 0
           printf 'pr_number=%s\n' "$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          printf 'is_comment=%s\n' "$IS_COMMENT" >> "$GITHUB_OUTPUT"
       - name: Verify open pull request
         uses: actions/github-script@v8
         env:
@@ -118,3 +121,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  report:
+    name: Report package result
+    if: always() && needs.prepare.outputs.is_comment == 'true'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Reply with result
+        uses: actions/github-script@v8
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
+        with:
+          script: |
+            const runURL = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = process.env.BUILD_RESULT === 'success'
+              ? `Test archives are ready as **${process.env.ARTIFACT_NAME}**. Download them from [this workflow run](${runURL}). They expire after seven days.`
+              : `Test archive packaging did not complete. See [this workflow run](${runURL}) for details.`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
