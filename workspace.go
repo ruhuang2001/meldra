@@ -19,18 +19,51 @@ import (
 )
 
 const (
-	maxReadLines   = 1000
-	maxSearchHits  = 500
-	maxToolOutput  = 256 << 10
-	maxLineBytes   = 1 << 20
-	maxSearchBytes = 8 << 20
-	maxSearchFiles = 5000
-	maxListEntries = 10000
-	maxWalkEntries = 20000
-	defaultTimeout = 60
+	maxReadLines            = 1000
+	maxSearchHits           = 500
+	maxToolOutput           = 256 << 10
+	maxLineBytes            = 1 << 20
+	maxSearchBytes          = 8 << 20
+	maxSearchFiles          = 5000
+	maxListEntries          = 10000
+	maxWalkEntries          = 20000
+	maxPatchBytes           = 1 << 20
+	maxChangeFiles          = 32
+	maxEditableFileBytes    = 4 << 20
+	maxChangeContentBytes   = 8 << 20
+	maxApprovalPreviewBytes = 1 << 20
+	defaultTimeout          = 60
 )
 
 var errWalkBounded = errors.New("workspace walk bounded")
+
+// changeBudget bounds the complete before/after state retained for one
+// operation. The full state is needed for the approval preview and rollback.
+type changeBudget struct {
+	total int64
+}
+
+func (b *changeBudget) add(before, after int) error {
+	if before < 0 || after < 0 || before > maxEditableFileBytes || after > maxEditableFileBytes {
+		return fmt.Errorf("a changed file exceeds the %d byte editable-file limit", maxEditableFileBytes)
+	}
+	added := int64(before) + int64(after)
+	if b.total+added > maxChangeContentBytes {
+		return fmt.Errorf("changes exceed the %d byte combined before/after limit", maxChangeContentBytes)
+	}
+	b.total += added
+	return nil
+}
+
+func validateChangeCount(count int) error {
+	if count == 0 {
+		return fmt.Errorf("at least one file change is required")
+	}
+	if count > maxChangeFiles {
+		return fmt.Errorf("changes affect %d files, exceeding the %d file limit", count, maxChangeFiles)
+	}
+	return nil
+}
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
@@ -43,6 +76,7 @@ type Workspace struct {
 	ctx         context.Context
 	last        []fileChange
 	protected   []string
+	syncDir     func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -71,6 +105,13 @@ func (w *Workspace) contextErr() error {
 	return w.ctx.Err()
 }
 
+func (w *Workspace) syncDirectory(path string) error {
+	if w.syncDir != nil {
+		return w.syncDir(path)
+	}
+	return syncDirectory(path)
+}
+
 func (w *Workspace) ProtectPath(path string) error {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -95,6 +136,46 @@ type fileChange struct {
 	before, after        []byte
 	existed, afterExists bool
 	mode                 fs.FileMode
+}
+
+func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return nil, false, 0o644, nil
+	}
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, 0, fmt.Errorf("target is not a regular file")
+	}
+	if info.Size() > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	defer file.Close()
+	contents, err := io.ReadAll(io.LimitReader(file, int64(maxEditableFileBytes)+1))
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if len(contents) > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
+	return contents, true, info.Mode().Perm(), nil
+}
+
+func validateChangeInput(in changeInput) error {
+	if len(in.OldStr) > maxEditableFileBytes {
+		return fmt.Errorf("old_str for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+	}
+	if len(in.NewStr) > maxEditableFileBytes {
+		return fmt.Errorf("new_str for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+	}
+	return nil
 }
 
 func NewWorkspace(root string, input *bufio.Reader, output io.Writer, autoApprove bool) (*Workspace, error) {
@@ -218,6 +299,9 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	if err := decodeToolInput(raw, &in, "path"); err != nil {
 		return "", err
 	}
+	if err := w.contextErr(); err != nil {
+		return "", fmt.Errorf("read file cancelled: %w", err)
+	}
 	p, err := w.resolve(in.Path, false)
 	if err != nil {
 		return "", err
@@ -264,6 +348,9 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	lineNumber, shown, scannedBytes := 0, 0, 0
 	more := false
 	for scanner.Scan() {
+		if err := w.contextErr(); err != nil {
+			return "", fmt.Errorf("read file cancelled: %w", err)
+		}
 		lineNumber++
 		scannedBytes += len(scanner.Bytes()) + 1
 		if scannedBytes > maxSearchBytes {
@@ -296,6 +383,9 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 }
 
 func (w *Workspace) walk(start string, fn fs.WalkDirFunc) error {
+	if err := w.contextErr(); err != nil {
+		return err
+	}
 	entry, err := os.Lstat(start)
 	if err != nil {
 		return err
@@ -310,14 +400,23 @@ func (w *Workspace) walk(start string, fn fs.WalkDirFunc) error {
 	visited := 0
 	var visit func(string) error
 	visit = func(directory string) error {
+		if err := w.contextErr(); err != nil {
+			return err
+		}
 		handle, err := os.Open(directory)
 		if err != nil {
 			return err
 		}
 		defer handle.Close()
 		for {
+			if err := w.contextErr(); err != nil {
+				return err
+			}
 			entries, readErr := handle.ReadDir(128)
 			for _, entry := range entries {
+				if err := w.contextErr(); err != nil {
+					return err
+				}
 				visited++
 				if visited > maxWalkEntries {
 					return errWalkBounded
@@ -429,6 +528,9 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 	bounded := false
 	errStop := errors.New("bounded")
 	err = w.walk(p, func(path string, d fs.DirEntry, _ error) error {
+		if err := w.contextErr(); err != nil {
+			return err
+		}
 		if d.IsDir() || d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
@@ -480,6 +582,10 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 		stop := false
 		binary := false
 		for scanner.Scan() {
+			if err := w.contextErr(); err != nil {
+				_ = file.Close()
+				return err
+			}
 			lineNumber++
 			line := scanner.Text()
 			bytesScanned += int64(len(scanner.Bytes()) + 1)
@@ -555,6 +661,9 @@ func (w *Workspace) applyPatch(raw json.RawMessage) (string, error) {
 	if err := decodeToolInput(raw, &in); err != nil {
 		return "", err
 	}
+	if len(in.Patch) > maxPatchBytes {
+		return "", fmt.Errorf("patch exceeds the %d byte limit", maxPatchBytes)
+	}
 	if (strings.TrimSpace(in.Patch) == "") == (len(in.Changes) == 0) {
 		return "", fmt.Errorf("set exactly one of patch or changes")
 	}
@@ -564,6 +673,9 @@ func (w *Workspace) applyPatch(raw json.RawMessage) (string, error) {
 			return "", err
 		}
 		return w.applyChanges(changes)
+	}
+	if err := validateChangeCount(len(in.Changes)); err != nil {
+		return "", err
 	}
 	return w.applyInputs(in.Changes)
 }
@@ -669,12 +781,19 @@ func patchCount(value string) int {
 }
 
 func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
+	if len(patch) > maxPatchBytes {
+		return nil, fmt.Errorf("patch exceeds the %d byte limit", maxPatchBytes)
+	}
 	files, err := parseUnifiedPatch(patch)
 	if err != nil {
 		return nil, err
 	}
+	if err := validateChangeCount(len(files)); err != nil {
+		return nil, err
+	}
 	seen := make(map[string]bool)
 	changes := make([]fileChange, 0, len(files))
+	var budget changeBudget
 	for _, file := range files {
 		path := file.newPath
 		if path == "/dev/null" {
@@ -688,9 +807,8 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 			return nil, fmt.Errorf("duplicate patch target %q", path)
 		}
 		seen[resolved] = true
-		before, readErr := os.ReadFile(resolved)
-		existed := readErr == nil
-		if readErr != nil && !os.IsNotExist(readErr) {
+		before, existed, mode, readErr := readEditableFile(resolved)
+		if readErr != nil {
 			return nil, readErr
 		}
 		if file.oldPath == "/dev/null" && existed {
@@ -698,17 +816,6 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 		}
 		if file.oldPath != "/dev/null" && !existed {
 			return nil, fmt.Errorf("cannot patch missing file %q", path)
-		}
-		mode := fs.FileMode(0o644)
-		if existed {
-			info, err := os.Stat(resolved)
-			if err != nil {
-				return nil, err
-			}
-			if !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("target is not a regular file")
-			}
-			mode = info.Mode().Perm()
 		}
 		after, err := applyHunks(before, file.hunks)
 		if err != nil {
@@ -719,6 +826,9 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 		}
 		if file.newPath == "/dev/null" && len(after) != 0 {
 			return nil, fmt.Errorf("deletion patch for %s does not remove the entire file", path)
+		}
+		if err := budget.add(len(before), len(after)); err != nil {
+			return nil, err
 		}
 		changes = append(changes, fileChange{
 			path:        resolved,
@@ -785,9 +895,16 @@ func splitPatchLines(contents []byte) []string {
 }
 
 func (w *Workspace) prepare(inputs []changeInput) ([]fileChange, error) {
+	if err := validateChangeCount(len(inputs)); err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	changes := make([]fileChange, 0, len(inputs))
+	var budget changeBudget
 	for _, in := range inputs {
+		if err := validateChangeInput(in); err != nil {
+			return nil, err
+		}
 		p, e := w.resolve(in.Path, true)
 		if e != nil {
 			return nil, e
@@ -796,19 +913,8 @@ func (w *Workspace) prepare(inputs []changeInput) ([]fileChange, error) {
 			return nil, fmt.Errorf("duplicate target path %q", in.Path)
 		}
 		seen[p] = true
-		b, e := os.ReadFile(p)
-		exists := e == nil
-		mode := fs.FileMode(0644)
-		if exists {
-			info, se := os.Stat(p)
-			if se != nil {
-				return nil, se
-			}
-			if !info.Mode().IsRegular() {
-				return nil, fmt.Errorf("target is not a regular file")
-			}
-			mode = info.Mode().Perm()
-		} else if !os.IsNotExist(e) {
+		b, exists, mode, e := readEditableFile(p)
+		if e != nil {
 			return nil, e
 		}
 		if in.OldStr == in.NewStr {
@@ -822,20 +928,37 @@ func (w *Workspace) prepare(inputs []changeInput) ([]fileChange, error) {
 			if in.OldStr == "" {
 				return nil, fmt.Errorf("empty old_str is only for creation")
 			}
-			n := strings.Count(string(b), in.OldStr)
+			contents := string(b)
+			n := strings.Count(contents, in.OldStr)
 			if n != 1 {
 				return nil, fmt.Errorf("old_str must occur exactly once (found %d)", n)
 			}
+			if len(b)-len(in.OldStr)+len(in.NewStr) > maxEditableFileBytes {
+				return nil, fmt.Errorf("replacement for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+			}
+			after := []byte(strings.Replace(contents, in.OldStr, in.NewStr, 1))
+			if err := budget.add(len(b), len(after)); err != nil {
+				return nil, err
+			}
+			changes = append(changes, fileChange{
+				path:        p,
+				before:      b,
+				after:       after,
+				existed:     true,
+				afterExists: true,
+				mode:        mode,
+			})
+			continue
 		}
 		after := []byte(in.NewStr)
-		if exists {
-			after = []byte(strings.Replace(string(b), in.OldStr, in.NewStr, 1))
+		if err := budget.add(0, len(after)); err != nil {
+			return nil, err
 		}
 		changes = append(changes, fileChange{
 			path:        p,
-			before:      b,
+			before:      nil,
 			after:       after,
-			existed:     exists,
+			existed:     false,
 			afterExists: true,
 			mode:        mode,
 		})
@@ -851,8 +974,27 @@ func (w *Workspace) applyInputs(inputs []changeInput) (string, error) {
 	return w.applyChanges(changes)
 }
 
+func validatePreparedChanges(changes []fileChange) error {
+	if err := validateChangeCount(len(changes)); err != nil {
+		return err
+	}
+	var budget changeBudget
+	for _, change := range changes {
+		if err := budget.add(len(change.before), len(change.after)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
-	diff := w.diff(changes, false)
+	if err := validatePreparedChanges(changes); err != nil {
+		return "", err
+	}
+	diff, err := w.diff(changes, false)
+	if err != nil {
+		return "", err
+	}
 	if !w.requestApproval(ApprovalRequest{
 		Kind:   ApprovalChanges,
 		Title:  "Review file changes",
@@ -949,16 +1091,21 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
 		}
 		if exists {
-			if e := os.MkdirAll(filepath.Dir(c.path), 0755); e != nil {
+			if e := makeDirectoryTreeDurable(filepath.Dir(c.path), 0o755, w.syncDirectory); e != nil {
 				return combineRollbackError(e, w.rollback(done, reverse))
 			}
 			if e := atomicWriteFile(c.path, data, mode); e != nil {
 				return combineRollbackError(e, w.rollback(done, reverse))
 			}
-		} else if e := os.Remove(c.path); e != nil && !os.IsNotExist(e) {
-			return combineRollbackError(e, w.rollback(done, reverse))
+		} else {
+			if e := os.Remove(c.path); e != nil && !os.IsNotExist(e) {
+				return combineRollbackError(e, w.rollback(done, reverse))
+			}
 		}
 		done = append(done, c)
+		if e := w.syncDirectory(filepath.Dir(c.path)); e != nil {
+			return combineRollbackError(e, w.rollback(done, reverse))
+		}
 	}
 	return nil
 }
@@ -976,17 +1123,19 @@ func (w *Workspace) validateChangePreimages(changes []fileChange, reverse bool) 
 		if reverse {
 			expected, exists = change.after, change.afterExists
 		}
-		contents, err := os.ReadFile(change.path)
-		if exists && (err != nil || !bytes.Equal(contents, expected)) {
+		contents, currentExists, mode, readErr := readEditableFile(change.path)
+		if exists && (readErr != nil || !currentExists || !bytes.Equal(contents, expected)) {
 			return fmt.Errorf("refusing to overwrite %s: file changed since diff was prepared", filepath.Base(change.path))
 		}
 		if exists {
-			info, statErr := os.Stat(change.path)
-			if statErr != nil || !info.Mode().IsRegular() || info.Mode().Perm() != change.mode {
+			if mode != change.mode {
 				return fmt.Errorf("refusing to overwrite %s: file metadata changed since diff was prepared", filepath.Base(change.path))
 			}
 		}
-		if !exists && !os.IsNotExist(err) {
+		if !exists && readErr != nil {
+			return fmt.Errorf("refusing to overwrite %s: %w", filepath.Base(change.path), readErr)
+		}
+		if !exists && currentExists {
 			return fmt.Errorf("refusing to overwrite %s: path now exists", filepath.Base(change.path))
 		}
 	}
@@ -1015,7 +1164,10 @@ func atomicWriteFile(path string, contents []byte, mode fs.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tempPath, path)
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (w *Workspace) rollback(done []fileChange, reverse bool) error {
@@ -1029,9 +1181,17 @@ func (w *Workspace) rollback(done []fileChange, reverse bool) error {
 		if exists {
 			if err := atomicWriteFile(c.path, data, c.mode); err != nil {
 				rollbackErrors = append(rollbackErrors, err.Error())
+				continue
+			}
+			if err := w.syncDirectory(filepath.Dir(c.path)); err != nil {
+				rollbackErrors = append(rollbackErrors, err.Error())
 			}
 		} else {
 			if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
+				rollbackErrors = append(rollbackErrors, err.Error())
+				continue
+			}
+			if err := w.syncDirectory(filepath.Dir(c.path)); err != nil {
 				rollbackErrors = append(rollbackErrors, err.Error())
 			}
 		}
@@ -1067,16 +1227,22 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("no successful change to undo")
 	}
 	for _, c := range w.last {
-		b, err := os.ReadFile(c.path)
-		matches := c.afterExists && err == nil && bytes.Equal(b, c.after)
+		b, exists, _, err := readEditableFile(c.path)
+		matches := c.afterExists && err == nil && exists && bytes.Equal(b, c.after)
 		if !c.afterExists {
-			matches = os.IsNotExist(err)
+			matches = err == nil && !exists
 		}
 		if !matches {
 			return "", fmt.Errorf("cannot undo: %s changed since it was written", filepath.Base(c.path))
 		}
 	}
-	diff := w.diff(w.last, true)
+	if err := validatePreparedChanges(w.last); err != nil {
+		return "", err
+	}
+	diff, err := w.diff(w.last, true)
+	if err != nil {
+		return "", err
+	}
 	if !w.requestApproval(ApprovalRequest{
 		Kind:   ApprovalChanges,
 		Title:  "Review undo changes",
@@ -1092,10 +1258,62 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	return "Undo successful.\n" + diff, nil
 }
 
-func (w *Workspace) diff(changes []fileChange, reverse bool) string {
-	var out strings.Builder
+const noFinalNewlineMarker = "\\ No newline at end of file\n"
+
+func diffLineSize(contents []byte) int64 {
+	if len(contents) == 0 {
+		return 0
+	}
+	size := int64(len(contents)) + int64(lineCount(contents))
+	if contents[len(contents)-1] != '\n' {
+		size += 1 + int64(len(noFinalNewlineMarker))
+	}
+	return size
+}
+
+func (w *Workspace) diffSize(changes []fileChange, reverse bool) (int64, error) {
+	var size int64
 	for _, c := range changes {
-		rel, _ := filepath.Rel(w.root, c.path)
+		rel, err := filepath.Rel(w.root, c.path)
+		if err != nil {
+			return 0, err
+		}
+		a, b := c.before, c.after
+		aExists, bExists := c.existed, c.afterExists
+		if reverse {
+			a, b = b, a
+			aExists, bExists = bExists, aExists
+		}
+		oldPath, newPath := "a/"+filepath.ToSlash(rel), "b/"+filepath.ToSlash(rel)
+		if !aExists {
+			oldPath = "/dev/null"
+		}
+		if !bExists {
+			newPath = "/dev/null"
+		}
+		size += int64(len("--- ") + len(oldPath) + 1)
+		size += int64(len("+++ ") + len(newPath) + 1)
+		size += int64(len("@@ -1,") + len(strconv.Itoa(lineCount(a))) + len(" +1,") + len(strconv.Itoa(lineCount(b))) + len(" @@\n"))
+		size += diffLineSize(a) + diffLineSize(b)
+	}
+	return size, nil
+}
+
+func (w *Workspace) diff(changes []fileChange, reverse bool) (string, error) {
+	size, err := w.diffSize(changes, reverse)
+	if err != nil {
+		return "", err
+	}
+	if size > maxApprovalPreviewBytes {
+		return "", fmt.Errorf("approval preview is %d bytes, exceeding the %d byte limit; refusing to apply changes because the full diff cannot be shown", size, maxApprovalPreviewBytes)
+	}
+	var out strings.Builder
+	out.Grow(int(size))
+	for _, c := range changes {
+		rel, err := filepath.Rel(w.root, c.path)
+		if err != nil {
+			return "", err
+		}
 		a, b := c.before, c.after
 		aExists, bExists := c.existed, c.afterExists
 		if reverse {
@@ -1114,7 +1332,7 @@ func (w *Workspace) diff(changes []fileChange, reverse bool) string {
 		writeDiffLines(&out, '-', a)
 		writeDiffLines(&out, '+', b)
 	}
-	return out.String()
+	return out.String(), nil
 }
 
 func writeDiffLines(out *strings.Builder, prefix byte, contents []byte) {
@@ -1130,7 +1348,7 @@ func writeDiffLines(out *strings.Builder, prefix byte, contents []byte) {
 		fmt.Fprintf(out, "%c%s\n", prefix, line)
 	}
 	if !hasFinalNewline {
-		out.WriteString("\\ No newline at end of file\n")
+		out.WriteString(noFinalNewlineMarker)
 	}
 }
 
@@ -1544,9 +1762,14 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(seconds)*time.Second)
 	defer cancel()
+	environment, cleanupEnvironment, err := newCommandEnvironment()
+	if err != nil {
+		return "", err
+	}
+	defer cleanupEnvironment()
 	cmd := exec.CommandContext(ctx, executable, args...)
 	cmd.Dir = w.root
-	cmd.Env = safeCommandEnvironment()
+	cmd.Env = environment
 	var b limitedBuffer
 	b.limit = maxToolOutput
 	cmd.Stdout = &b
@@ -1610,28 +1833,50 @@ func (w *Workspace) confirmCommand(command string, args []string) bool {
 	text := rendered.String()
 	return w.requestApproval(ApprovalRequest{
 		Kind:   ApprovalCommand,
-		Title:  "Run command",
-		Detail: text,
-		Prompt: fmt.Sprintf("Run command? %s [y/N] ", text),
+		Title:  "Run command with OS user privileges",
+		Detail: text + "\n\nThis command runs repository code with your OS user privileges and may access the filesystem and network.",
+		Prompt: fmt.Sprintf("Run command with OS-user privileges? %s [y/N] ", text),
 	})
 }
 
-func safeCommandEnvironment() []string {
-	blocked := []string{"OPENAI_API_KEY=", "MELDRA_", "GOFLAGS=", "GIT_DIR=", "GIT_WORK_TREE=", "GIT_EXTERNAL_DIFF=", "GIT_EXEC_PATH=", "GIT_CONFIG=", "GIT_CONFIG_", "GIT_PAGER=", "PAGER=", "PYTHONHOME=", "PYTHONPATH=", "PYTHONSTARTUP=", "PYTHONINSPECT="}
-	var environment []string
-	for _, variable := range os.Environ() {
-		allowed := true
-		for _, prefix := range blocked {
-			if strings.HasPrefix(variable, prefix) {
-				allowed = false
-				break
-			}
-		}
-		if allowed {
-			environment = append(environment, variable)
+func newCommandEnvironment() ([]string, func(), error) {
+	directory, err := os.MkdirTemp("", "meldra-command-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create command environment: %w", err)
+	}
+	home := filepath.Join(directory, "home")
+	temporary := filepath.Join(directory, "tmp")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		_ = os.RemoveAll(directory)
+		return nil, nil, fmt.Errorf("create command home: %w", err)
+	}
+	if err := os.Mkdir(temporary, 0o700); err != nil {
+		_ = os.RemoveAll(directory)
+		return nil, nil, fmt.Errorf("create command temporary directory: %w", err)
+	}
+	return safeCommandEnvironment(home, temporary), func() { _ = os.RemoveAll(directory) }, nil
+}
+
+// safeCommandEnvironment deliberately starts from an empty environment. A
+// temporary HOME keeps repository commands from loading user shell or tool
+// configuration, while the narrow allowlist retains normal command runtime.
+func safeCommandEnvironment(home, temporary string) []string {
+	environment := []string{
+		"HOME=" + home,
+		"TMPDIR=" + temporary,
+		"TMP=" + temporary,
+		"TEMP=" + temporary,
+		"GOFLAGS=",
+		"GIT_PAGER=cat",
+		"PAGER=cat",
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
+	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ"} {
+		if value, ok := os.LookupEnv(name); ok {
+			environment = append(environment, name+"="+value)
 		}
 	}
-	return append(environment, "GOFLAGS=", "GIT_PAGER=cat", "PAGER=cat")
+	return environment
 }
 
 type limitedBuffer struct {
@@ -1656,11 +1901,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return n, nil
 }
 func (b *limitedBuffer) String() string {
-	s := b.Buffer.String()
-	if b.truncated {
-		s += "\n[output truncated]"
-	}
-	return s
+	return truncateUTF8Text(b.Buffer.String(), b.limit, b.truncated)
 }
 
 func (w *Workspace) verify(raw json.RawMessage) (string, error) {
@@ -1735,9 +1976,14 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 }
 
 func gitTopLevel(workspace, gitExecutable string) (string, error) {
+	environment, cleanupEnvironment, err := newCommandEnvironment()
+	if err != nil {
+		return "", err
+	}
+	defer cleanupEnvironment()
 	check := exec.Command(gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
 	check.Dir = workspace
-	check.Env = safeCommandEnvironment()
+	check.Env = environment
 	output, err := check.Output()
 	if err != nil {
 		return "", fmt.Errorf("workspace is not a git repository")
@@ -1749,8 +1995,27 @@ func gitTopLevel(workspace, gitExecutable string) (string, error) {
 	return filepath.Clean(topLevel), nil
 }
 func capText(s string) string {
-	if len(s) <= maxToolOutput {
-		return s
+	return truncateUTF8Text(s, maxToolOutput, false)
+}
+
+const outputTruncationSuffix = "\n[output truncated]"
+
+// truncateUTF8Text keeps terminal and JSON-facing output valid UTF-8. When a
+// suffix is required, it is included in the stated byte budget.
+func truncateUTF8Text(text string, limit int, forceSuffix bool) string {
+	if limit <= 0 {
+		return ""
 	}
-	return s[:maxToolOutput] + "\n[output truncated]"
+	if !forceSuffix && len(text) <= limit {
+		return truncateUTF8(text, limit, outputTruncationSuffix)
+	}
+	suffix := outputTruncationSuffix
+	if len(suffix) > limit {
+		if limit >= 3 {
+			suffix = "..."
+		} else {
+			suffix = strings.Repeat(".", limit)
+		}
+	}
+	return truncateUTF8WithSuffix(text, limit, suffix)
 }

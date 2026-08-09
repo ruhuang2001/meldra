@@ -434,7 +434,7 @@ func TestWorkspaceCommandPolicyAndNonzeroOutput(t *testing.T) {
 	if err != nil || !strings.Contains(got, "status: 1") || !strings.Contains(got, "does not contain main module") {
 		t.Fatalf("nonzero command = %q, %v", got, err)
 	}
-	for _, variable := range safeCommandEnvironment() {
+	for _, variable := range safeCommandEnvironment(t.TempDir(), t.TempDir()) {
 		if strings.HasPrefix(variable, "OPENAI_API_KEY=") {
 			t.Fatal("child environment contains OPENAI_API_KEY")
 		}
@@ -460,7 +460,7 @@ func TestWorkspaceExecutableCommandRequiresConfirmation(t *testing.T) {
 	if err != nil || result != "Declined; command not run." {
 		t.Fatalf("declined command = %q, %v", result, err)
 	}
-	if got := declinedOutput.String(); got != `Run command? go "test" "./..." [y/N] ` {
+	if got := declinedOutput.String(); got != `Run command with OS-user privileges? go "test" "./..." [y/N] ` {
 		t.Fatalf("confirmation output = %q", declinedOutput.String())
 	}
 
@@ -812,7 +812,7 @@ func TestLimitedBufferPreservesWriteContractAndMarksTruncation(t *testing.T) {
 	if n, err := buffer.Write([]byte("abcdef")); err != nil || n != 6 {
 		t.Fatalf("Write = %d, %v", n, err)
 	}
-	if got := buffer.String(); got != "abcd\n[output truncated]" {
+	if got := buffer.String(); got != "a..." {
 		t.Fatalf("String = %q", got)
 	}
 	if n, err := buffer.Write([]byte("more")); err != nil || n != 4 {
