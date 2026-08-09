@@ -9,7 +9,7 @@ VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage benchmark benchmark-sanity benchmark-swe-bench build check release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage benchmark benchmark-sanity benchmark-sanity-baseline benchmark-swe-bench build check release-check release-snapshot install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -41,6 +41,19 @@ benchmark-sanity: build
 	@mkdir -p benchmarks/sanityharness/bin
 	@cp $(DIST_DIR)/$(APP) benchmarks/sanityharness/bin/$(APP)
 	PATH="$(CURDIR)/benchmarks/sanityharness/bin:$${PATH}" sanity --config benchmarks/sanityharness/sanity.toml eval --agent meldra --tier core
+
+# Record one explicit evaluation as a reviewable release baseline. The report
+# rejects duplicate task attempts so stale sessions cannot become a score.
+SANITY_RESULTS ?= benchmarks/sanityharness/sessions/*/result.json
+SANITY_MODEL ?=
+SANITY_PROVIDER ?= unknown
+SANITY_TIER ?= core
+SANITY_COST ?= unknown
+SANITY_BASELINE ?=
+benchmark-sanity-baseline:
+	@test -n "$(SANITY_MODEL)" || (echo "SANITY_MODEL is required"; exit 1)
+	@test -n "$(SANITY_BASELINE)" || (echo "SANITY_BASELINE is required"; exit 1)
+	go run ./benchmarks/sanityharness/report --model "$(SANITY_MODEL)" --provider "$(SANITY_PROVIDER)" --tier "$(SANITY_TIER)" --estimated-cost '$(value SANITY_COST)' --meldra-version "$(VERSION)" --output "$(SANITY_BASELINE)" $(SANITY_RESULTS)
 
 benchmark-swe-bench: build
 	@if [ ! -d benchmarks/swe-bench/.venv ]; then \

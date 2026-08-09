@@ -34,6 +34,29 @@ cat benchmarks/sanityharness/eval-results/*/summary.json
 
 `summary.json` contains the weighted score, per-task results, and pass counts.
 
+## Release Baselines
+
+For an important release, record one fresh evaluation as a small, reviewable
+JSON baseline. It captures the Meldra version, model, provider, date, task
+outcomes, elapsed time, and a caller-supplied estimated cost without copying
+prompts, raw model output, or task source code.
+
+```bash
+make benchmark-sanity-baseline \
+  SANITY_MODEL=gpt-5.6-luna \
+  SANITY_PROVIDER=openai \
+  SANITY_COST='$1.23' \
+  SANITY_BASELINE=benchmarks/sanityharness/baselines/v0.1.0-alpha.4.json
+```
+
+The recorder accepts one `result.json` per language/task pair. It deliberately
+rejects duplicate attempts, which prevents old sessions from being mixed into a
+new score. Start from a fresh SanityHarness session directory or set
+`SANITY_RESULTS` to the explicit result files from one run. Review and commit
+the generated baseline only when its version, model, provider, task set, and
+cost are known. Existing ignored local session artifacts are not a formal
+baseline.
+
 ## Customization
 
 Edit `sanity.toml` to change the model or timeout. The agent is configured to
