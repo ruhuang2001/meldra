@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,7 +16,11 @@ import (
 	"time"
 )
 
-const sessionsDirName = "sessions"
+const (
+	sessionsDirName                = "sessions"
+	maxSessionMessageBytes         = 16 << 10
+	sessionMessageTruncationSuffix = "\n[truncated]"
+)
 
 type SessionMessage struct {
 	Role    string `json:"role"`
@@ -22,20 +28,28 @@ type SessionMessage struct {
 }
 
 type Session struct {
-	ID                 string           `json:"id"`
-	Workspace          string           `json:"workspace"`
-	CreatedAt          time.Time        `json:"created_at"`
-	UpdatedAt          time.Time        `json:"updated_at"`
-	PreviousResponseID string           `json:"previous_response_id,omitempty"`
-	Messages           []SessionMessage `json:"messages,omitempty"`
-	Plan               []string         `json:"plan,omitempty"`
-	Summary            string           `json:"summary,omitempty"`
-	resumed            bool
+	ID                   string           `json:"id"`
+	Workspace            string           `json:"workspace"`
+	CreatedAt            time.Time        `json:"created_at"`
+	UpdatedAt            time.Time        `json:"updated_at"`
+	PreviousResponseID   string           `json:"previous_response_id,omitempty"`
+	Messages             []SessionMessage `json:"messages,omitempty"`
+	Plan                 []string         `json:"plan,omitempty"`
+	Summary              string           `json:"summary,omitempty"`
+	WorkspaceUnavailable bool             `json:"-"`
+	resumed              bool
 }
 
 type SessionStore struct {
 	paths ConfigPaths
 	dir   string
+}
+
+// SessionListDiagnostics describes files skipped while listing sessions.
+// It intentionally omits file names and errors because session files can
+// contain user prompts, summaries, and provider response IDs.
+type SessionListDiagnostics struct {
+	SkippedFiles int
 }
 
 func NewSessionStore(paths ConfigPaths) *SessionStore {
@@ -101,13 +115,20 @@ func (s *SessionStore) Save(session *Session) error {
 		_ = temp.Close()
 		return err
 	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return fmt.Errorf("sync session file: %w", err)
+	}
 	if err := temp.Close(); err != nil {
 		return err
 	}
 	if err := os.Rename(tempPath, target); err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}
-	return os.Chmod(target, privateFilePerm)
+	if err := syncDirectory(s.dir); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *SessionStore) Load(id string) (*Session, error) {
@@ -132,10 +153,16 @@ func (s *SessionStore) Load(id string) (*Session, error) {
 		return nil, err
 	}
 	var session Session
-	decoder := json.NewDecoder(strings.NewReader(string(contents)))
+	decoder := json.NewDecoder(bytes.NewReader(contents))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&session); err != nil {
 		return nil, fmt.Errorf("parse session %q: %w", id, err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("parse session %q: trailing data", id)
+		}
+		return nil, fmt.Errorf("parse session %q: trailing data: %w", id, err)
 	}
 	if session.ID != id || session.Workspace == "" {
 		return nil, fmt.Errorf("session %q is invalid", id)
@@ -148,19 +175,34 @@ func (s *SessionStore) Delete(id string) error {
 	if !validSessionID(id) {
 		return fmt.Errorf("invalid session ID %q", id)
 	}
-	if err := os.Remove(s.path(id)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("delete session %q: %w", id, err)
+	if err := os.Remove(s.path(id)); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("delete session %q: %w", id, err)
+		}
+		return nil
+	}
+	if err := syncDirectory(s.dir); err != nil {
+		return fmt.Errorf("sync sessions directory: %w", err)
 	}
 	return nil
 }
 
 func (s *SessionStore) List() ([]Session, error) {
+	sessions, _, err := s.ListWithDiagnostics()
+	return sessions, err
+}
+
+// ListWithDiagnostics returns saved sessions along with a safe aggregate
+// diagnostic for unreadable or invalid session files. Like List, it never
+// modifies session files.
+func (s *SessionStore) ListWithDiagnostics() ([]Session, SessionListDiagnostics, error) {
+	var diagnostics SessionListDiagnostics
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, diagnostics, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("list sessions: %w", err)
+		return nil, diagnostics, fmt.Errorf("list sessions: %w", err)
 	}
 	var sessions []Session
 	for _, entry := range entries {
@@ -173,34 +215,35 @@ func (s *SessionStore) List() ([]Session, error) {
 		}
 		session, err := s.Load(id)
 		if err != nil {
+			diagnostics.SkippedFiles++
 			continue
 		}
 		if len(session.Messages) == 0 {
-			_ = s.Delete(id)
 			continue
 		}
 		workspaceInfo, err := os.Stat(session.Workspace)
-		if errors.Is(err, fs.ErrNotExist) || (err == nil && !workspaceInfo.IsDir()) {
-			_ = s.Delete(id)
-			continue
-		}
-		if err != nil {
-			continue
-		}
+		session.WorkspaceUnavailable = err != nil || !workspaceInfo.IsDir()
 		sessions = append(sessions, *session)
 	}
 	sort.Slice(sessions, func(i, j int) bool { return sessions[i].UpdatedAt.After(sessions[j].UpdatedAt) })
-	return sessions, nil
+	return sessions, diagnostics, nil
 }
 
 func (s *SessionStore) ListWorkspace(workspace string) ([]Session, error) {
+	sessions, _, err := s.ListWorkspaceWithDiagnostics(workspace)
+	return sessions, err
+}
+
+// ListWorkspaceWithDiagnostics returns the sessions that belong to workspace
+// along with aggregate diagnostics for any skipped session files.
+func (s *SessionStore) ListWorkspaceWithDiagnostics(workspace string) ([]Session, SessionListDiagnostics, error) {
 	root, err := canonicalWorkspacePath(workspace)
 	if err != nil {
-		return nil, err
+		return nil, SessionListDiagnostics{}, err
 	}
-	sessions, err := s.List()
+	sessions, diagnostics, err := s.ListWithDiagnostics()
 	if err != nil {
-		return nil, err
+		return nil, diagnostics, err
 	}
 	filtered := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
@@ -209,7 +252,7 @@ func (s *SessionStore) ListWorkspace(workspace string) ([]Session, error) {
 			filtered = append(filtered, session)
 		}
 	}
-	return filtered, nil
+	return filtered, diagnostics, nil
 }
 
 func canonicalWorkspacePath(workspace string) (string, error) {
@@ -228,7 +271,7 @@ func (s *SessionStore) ensureDir() error {
 	if err := ensureConfigHome(s.paths); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(s.dir, privateDirPerm); err != nil {
+	if err := makeDirectoryTreeDurable(s.dir, privateDirPerm, syncDirectory); err != nil {
 		return fmt.Errorf("create sessions directory: %w", err)
 	}
 	info, err := os.Lstat(s.dir)
@@ -275,10 +318,12 @@ func (s *Session) appendMessage(role, content string) {
 	if content == "" {
 		return
 	}
-	if len(content) > 16<<10 {
-		content = content[:16<<10] + "\n[truncated]"
-	}
+	content = truncateSessionMessage(content)
 	s.Messages = append(s.Messages, SessionMessage{Role: role, Content: content})
+}
+
+func truncateSessionMessage(content string) string {
+	return truncateUTF8(content, maxSessionMessageBytes, sessionMessageTruncationSuffix)
 }
 
 func (s *Session) resumeContext() string {

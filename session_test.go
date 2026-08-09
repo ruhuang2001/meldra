@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestSessionStoreSaveLoadLatestAndPermissions(t *testing.T) {
@@ -135,16 +137,28 @@ func TestSessionListSkipsCorruptFiles(t *testing.T) {
 	if err := store.Save(valid); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.path("corrupt"), []byte("{"), 0o600); err != nil {
+	corruptPath := store.path("corrupt")
+	corruptContents := []byte(`{"id":"corrupt","workspace":"contains-a-secret","unexpected":true}`)
+	if err := os.WriteFile(corruptPath, corruptContents, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := store.List()
+	sessions, diagnostics, err := store.ListWithDiagnostics()
 	if err != nil || len(sessions) != 1 || sessions[0].ID != valid.ID {
 		t.Fatalf("sessions = %#v, error = %v", sessions, err)
 	}
+	if diagnostics.SkippedFiles != 1 {
+		t.Fatalf("skipped files = %d, want 1", diagnostics.SkippedFiles)
+	}
+	after, err := os.ReadFile(corruptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, corruptContents) {
+		t.Fatalf("ListWithDiagnostics modified corrupt session file:\nbefore: %q\nafter: %q", corruptContents, after)
+	}
 }
 
-func TestSessionListSkipsEmptySessions(t *testing.T) {
+func TestSessionListSkipsEmptySessionsWithoutDeleting(t *testing.T) {
 	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
 	if err != nil {
 		t.Fatal(err)
@@ -166,12 +180,12 @@ func TestSessionListSkipsEmptySessions(t *testing.T) {
 	if err != nil || len(sessions) != 1 || sessions[0].ID != withMessages.ID {
 		t.Fatalf("sessions = %#v, error = %v", sessions, err)
 	}
-	if _, err := os.Stat(store.path(empty.ID)); !os.IsNotExist(err) {
-		t.Fatalf("empty session file still exists, stat error = %v", err)
+	if _, err := os.Stat(store.path(empty.ID)); err != nil {
+		t.Fatalf("empty session file was deleted, stat error = %v", err)
 	}
 }
 
-func TestSessionListSkipsMissingWorkspaces(t *testing.T) {
+func TestSessionListMarksMissingWorkspacesUnavailableWithoutDeleting(t *testing.T) {
 	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
 	if err != nil {
 		t.Fatal(err)
@@ -187,15 +201,23 @@ func TestSessionListSkipsMissingWorkspaces(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	before, err := os.ReadFile(store.path(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
 	sessions, err := store.List()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 0 {
-		t.Fatalf("sessions = %#v, want no sessions", sessions)
+	if len(sessions) != 1 || sessions[0].ID != session.ID || !sessions[0].WorkspaceUnavailable {
+		t.Fatalf("sessions = %#v, want unavailable session %q", sessions, session.ID)
 	}
-	if _, err := os.Stat(store.path(session.ID)); !os.IsNotExist(err) {
-		t.Fatalf("stale session file still exists, stat error = %v", err)
+	after, err := os.ReadFile(store.path(session.ID))
+	if err != nil {
+		t.Fatalf("session file was deleted, read error = %v", err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatalf("List modified session file:\nbefore: %s\nafter: %s", before, after)
 	}
 }
 
@@ -248,11 +270,91 @@ func TestSessionResumeContextIncludesBoundedHistoryPlanAndSummary(t *testing.T) 
 		t.Fatalf("resume context included more than 12 recent messages:\n%s", context)
 	}
 
-	long := strings.Repeat("x", (16<<10)+100)
+	long := strings.Repeat("x", maxSessionMessageBytes+100)
 	session.appendMessage("assistant", long)
 	last := session.Messages[len(session.Messages)-1].Content
-	if len(last) >= len(long) || !strings.HasSuffix(last, "\n[truncated]") {
+	if len(last) > maxSessionMessageBytes || !strings.HasSuffix(last, sessionMessageTruncationSuffix) {
 		t.Fatalf("long message was not bounded: length=%d", len(last))
+	}
+}
+
+func TestSessionMessageTruncationPreservesUTF8AndByteLimit(t *testing.T) {
+	for _, character := range []string{"\u00e9", "\u754c", "\U0001F642"} {
+		t.Run(fmt.Sprintf("%d-byte rune", len(character)), func(t *testing.T) {
+			prefix := strings.Repeat("x", maxSessionMessageBytes-len(sessionMessageTruncationSuffix)-1)
+			content := prefix + character + strings.Repeat("y", len(sessionMessageTruncationSuffix)+1)
+			session := &Session{}
+			session.appendMessage("assistant", content)
+			got := session.Messages[0].Content
+			if !utf8.ValidString(got) {
+				t.Fatalf("truncated message is invalid UTF-8: %q", got)
+			}
+			if len(got) > maxSessionMessageBytes {
+				t.Fatalf("truncated message length = %d, want at most %d", len(got), maxSessionMessageBytes)
+			}
+			want := prefix + sessionMessageTruncationSuffix
+			if got != want {
+				t.Fatalf("truncated message = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestSessionMessageTruncationNormalizesInvalidUTF8(t *testing.T) {
+	session := &Session{}
+	session.appendMessage("assistant", "before"+string([]byte{0xff})+"after")
+	got := session.Messages[0].Content
+	if !utf8.ValidString(got) {
+		t.Fatalf("message contains invalid UTF-8: %q", got)
+	}
+	if !strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("message did not replace invalid UTF-8: %q", got)
+	}
+}
+
+func TestSessionStoreRejectsTrailingJSON(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	session, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents = append(contents, []byte("\n{}")...)
+	if err := os.WriteFile(store.path(session.ID), contents, privateFilePerm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(session.ID); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("Load error = %v, want trailing data error", err)
+	}
+}
+
+func TestRunSessionsCommandMarksUnavailableWorkspace(t *testing.T) {
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	store := NewSessionStore(paths)
+	workspace := filepath.Join(t.TempDir(), "unavailable-workspace")
+	session, err := store.Create(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "resume this later")
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := runSessionsCommand(&output); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), workspace+" [unavailable]") {
+		t.Fatalf("session list = %q, want unavailable workspace", output.String())
 	}
 }
 
