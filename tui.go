@@ -16,6 +16,7 @@ import (
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -383,7 +384,10 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	input.SetHeight(1)
 
 	activity := viewport.New()
-	activity.SoftWrap = true
+	// Pre-wrap content before it reaches the viewport. Its SoftWrap path
+	// repeatedly truncates a whole long line while scrolling to the bottom,
+	// which becomes quadratic for a large streamed response.
+	activity.SoftWrap = false
 	activity.MouseWheelEnabled = true
 
 	entries := make([]tuiEntry, 0, len(initial.messages))
@@ -653,10 +657,18 @@ func (m *tuiModel) resize() {
 
 func (m *tuiModel) refreshViewport() {
 	wasAtBottom := m.viewport.AtBottom()
-	m.viewport.SetContent(m.renderTimeline())
+	m.viewport.SetContent(m.renderViewportTimeline())
 	if wasAtBottom {
 		m.viewport.GotoBottom()
 	}
+}
+
+func (m *tuiModel) renderViewportTimeline() string {
+	width := m.viewport.Width()
+	if width <= 0 {
+		return m.renderTimeline()
+	}
+	return ansi.Hardwrap(m.renderTimeline(), width, true)
 }
 
 func (m *tuiModel) renderTimeline() string {
@@ -830,6 +842,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
 	agent := NewAgent(&client, tuiUserMessageSource(options.Prompt, controller.nextMessage), tools)
+	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
 	agent.output = stdout
 	agent.session = session
 	agent.store = store

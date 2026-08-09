@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -162,6 +163,37 @@ func TestSelectResumeSessionRejectsEmptyStore(t *testing.T) {
 	}
 }
 
+func TestSelectResumeSessionWarnsAboutSkippedFilesWithoutLeakingContents(t *testing.T) {
+	paths := mustConfigPaths(t)
+	store := NewSessionStore(paths)
+	workspace := t.TempDir()
+	session, err := store.Create(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "resume this")
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "session-picker-secret"
+	if err := os.WriteFile(store.path("corrupt"), []byte(`{"id":"corrupt","workspace":"`+secret+`","unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	selected, err := selectResumeSession(strings.NewReader("1\n"), &output, store, workspace)
+	if err != nil || selected != session.ID {
+		t.Fatalf("selected session = %q, error = %v", selected, err)
+	}
+	got := output.String()
+	if !strings.Contains(got, "Warning: skipped 1 unreadable or invalid saved session file.") {
+		t.Fatalf("picker warning = %q", got)
+	}
+	if strings.Contains(got, secret) || strings.Contains(got, "corrupt.json") {
+		t.Fatalf("picker warning leaked session data: %q", got)
+	}
+}
+
 func TestBareResumePromptsForSessionSelection(t *testing.T) {
 	paths := mustConfigPaths(t)
 	t.Setenv(MeldraHomeEnv, paths.Home)
@@ -239,6 +271,124 @@ func TestSessionPickerModelSelectsAndCancels(t *testing.T) {
 	cancelled.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	if cancelled.selected != "" {
 		t.Fatalf("cancelled picker selected %q", cancelled.selected)
+	}
+}
+
+func TestSessionPickerModelMarksUnavailableWorkspace(t *testing.T) {
+	model := &sessionPickerModel{sessions: []Session{{
+		ID:                   "session-1",
+		Messages:             []SessionMessage{{Role: "user", Content: "resume"}},
+		WorkspaceUnavailable: true,
+	}}, height: 10}
+	if content := model.View().Content; !strings.Contains(content, "[unavailable]") {
+		t.Fatalf("picker did not mark unavailable workspace: %q", content)
+	}
+}
+
+func TestSessionPickerModelShowsSafeSkippedFileWarning(t *testing.T) {
+	model := &sessionPickerModel{
+		sessions: []Session{{ID: "session-1"}},
+		warning:  sessionListDiagnosticsWarning(SessionListDiagnostics{SkippedFiles: 1}),
+		height:   10,
+	}
+	if content := model.View().Content; !strings.Contains(content, "Warning: skipped 1 unreadable or invalid saved session file.") {
+		t.Fatalf("picker diagnostic = %q", content)
+	}
+	if model.visibleRows() != 2 {
+		t.Fatalf("picker rows with warning = %d, want 2", model.visibleRows())
+	}
+}
+
+func TestRunSessionPickerWarnsAboutSkippedFilesWithoutLeakingContents(t *testing.T) {
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	store := NewSessionStore(paths)
+	if err := store.ensureDir(); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "tui-picker-secret"
+	if err := os.WriteFile(store.path("corrupt"), []byte(`{"id":"corrupt","workspace":"`+secret+`","unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input, err := os.CreateTemp(t.TempDir(), "picker-input-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	output, err := os.CreateTemp(t.TempDir(), "picker-output-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+
+	selected, err := runSessionPicker(input, output, t.TempDir())
+	if err != nil || selected != "" {
+		t.Fatalf("picker result = %q, error = %v", selected, err)
+	}
+	if _, err := output.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := io.ReadAll(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(contents)
+	if !strings.Contains(got, "Warning: skipped 1 unreadable or invalid saved session file.") || !strings.Contains(got, "No saved sessions.") {
+		t.Fatalf("picker output = %q", got)
+	}
+	if strings.Contains(got, secret) || strings.Contains(got, "corrupt.json") {
+		t.Fatalf("picker warning leaked session data: %q", got)
+	}
+}
+
+func TestRunSessionsCommandWarnsAboutSkippedSessionFilesWithoutLeakingContents(t *testing.T) {
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	store := NewSessionStore(paths)
+	if err := store.ensureDir(); err != nil {
+		t.Fatal(err)
+	}
+	secret := "provider-token-should-not-appear"
+	if err := os.WriteFile(store.path("corrupt"), []byte(`{"id":"corrupt","workspace":"`+secret+`","unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := runSessionsCommand(&output); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	if !strings.Contains(got, "Warning: skipped 1 unreadable or invalid saved session file.") {
+		t.Fatalf("session diagnostic = %q", got)
+	}
+	if strings.Contains(got, secret) || strings.Contains(got, "corrupt.json") {
+		t.Fatalf("session diagnostic leaked file data: %q", got)
+	}
+}
+
+func TestResumeLatestWarnsAboutSkippedSessionFilesWithoutLeakingContents(t *testing.T) {
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	store := NewSessionStore(paths)
+	if err := store.ensureDir(); err != nil {
+		t.Fatal(err)
+	}
+	const secret = "resume-latest-secret"
+	if err := os.WriteFile(store.path("corrupt"), []byte(`{"id":"corrupt","workspace":"`+secret+`","unexpected":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := runCLI([]string{"resume", "latest"}, strings.NewReader(""), &output)
+	if err == nil || !strings.Contains(err.Error(), "no saved sessions for workspace") {
+		t.Fatalf("resume latest error = %v", err)
+	}
+	got := output.String()
+	if !strings.Contains(got, "Warning: skipped 1 unreadable or invalid saved session file.") {
+		t.Fatalf("resume latest warning = %q", got)
+	}
+	if strings.Contains(got, secret) || strings.Contains(got, "corrupt.json") {
+		t.Fatalf("resume latest warning leaked session data: %q", got)
 	}
 }
 

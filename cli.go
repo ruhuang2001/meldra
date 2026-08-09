@@ -111,9 +111,14 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 				if err != nil {
 					return err
 				}
-				sessions, err := NewSessionStore(paths).ListWorkspace(resumeWorkspace)
+				sessions, diagnostics, err := NewSessionStore(paths).ListWorkspaceWithDiagnostics(resumeWorkspace)
 				if err != nil {
 					return err
+				}
+				if diagnostics.SkippedFiles > 0 {
+					if _, err := fmt.Fprintln(stdout, sessionListDiagnosticsWarning(diagnostics)); err != nil {
+						return err
+					}
 				}
 				if len(sessions) == 0 {
 					return fmt.Errorf("no saved sessions for workspace %s", resumeWorkspace)
@@ -155,7 +160,10 @@ func runConfigCommand(args []string, stdout io.Writer) error {
 		if err != nil {
 			return err
 		}
-		settings = effectiveSettings(settings)
+		settings, err = effectiveSettings(settings)
+		if err != nil {
+			return err
+		}
 		_, err = fmt.Fprint(stdout, FormatConfigShow(ConfigShowData(paths, settings)))
 		return err
 	}
@@ -291,9 +299,14 @@ func bufferedInput(input io.Reader) *bufio.Reader {
 }
 
 func selectResumeSession(input io.Reader, output io.Writer, store *SessionStore, workspace string) (string, error) {
-	sessions, err := store.ListWorkspace(workspace)
+	sessions, diagnostics, err := store.ListWorkspaceWithDiagnostics(workspace)
 	if err != nil {
 		return "", err
+	}
+	if diagnostics.SkippedFiles > 0 {
+		if _, err := fmt.Fprintln(output, sessionListDiagnosticsWarning(diagnostics)); err != nil {
+			return "", err
+		}
 	}
 	if len(sessions) == 0 {
 		return "", fmt.Errorf("no saved sessions")
@@ -304,7 +317,7 @@ func selectResumeSession(input io.Reader, output io.Writer, store *SessionStore,
 	}
 	for index, session := range sessions {
 		id := strings.ReplaceAll(sanitizeTerminalText(session.ID), "\n", " ")
-		workspace := strings.ReplaceAll(sanitizeTerminalText(session.Workspace), "\n", " ")
+		workspace := sessionWorkspaceLabel(session)
 		summary := sessionListPreview(session)
 		if _, err := fmt.Fprintf(output, "%d. %s  %s  %s\n   %s\n", index+1, id, session.UpdatedAt.Format(time.RFC3339), workspace, summary); err != nil {
 			return "", err
@@ -345,9 +358,14 @@ func runSessionsCommand(stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	sessions, err := NewSessionStore(paths).List()
+	sessions, diagnostics, err := NewSessionStore(paths).ListWithDiagnostics()
 	if err != nil {
 		return err
+	}
+	if diagnostics.SkippedFiles > 0 {
+		if _, err := fmt.Fprintln(stdout, sessionListDiagnosticsWarning(diagnostics)); err != nil {
+			return err
+		}
 	}
 	if len(sessions) == 0 {
 		_, err = fmt.Fprintln(stdout, "No saved sessions.")
@@ -355,11 +373,26 @@ func runSessionsCommand(stdout io.Writer) error {
 	}
 	for _, session := range sessions {
 		summary := sessionListPreview(session)
-		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), sanitizeTerminalText(session.Workspace), summary); err != nil {
+		if _, err := fmt.Fprintf(stdout, "%s  %s  %s  %s\n", session.ID, session.UpdatedAt.Format(time.RFC3339), sessionWorkspaceLabel(session), summary); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func sessionListDiagnosticsWarning(diagnostics SessionListDiagnostics) string {
+	if diagnostics.SkippedFiles == 1 {
+		return "Warning: skipped 1 unreadable or invalid saved session file."
+	}
+	return fmt.Sprintf("Warning: skipped %d unreadable or invalid saved session files.", diagnostics.SkippedFiles)
+}
+
+func sessionWorkspaceLabel(session Session) string {
+	workspace := strings.ReplaceAll(sanitizeTerminalText(session.Workspace), "\n", " ")
+	if session.WorkspaceUnavailable {
+		return workspace + " [unavailable]"
+	}
+	return workspace
 }
 
 func sessionListPreview(session Session) string {
@@ -384,6 +417,7 @@ func sessionListPreview(session Session) string {
 
 type sessionPickerModel struct {
 	sessions []Session
+	warning  string
 	cursor   int
 	offset   int
 	width    int
@@ -396,16 +430,24 @@ func runSessionPicker(input, output *os.File, workspace string) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	sessions, err := NewSessionStore(paths).ListWorkspace(workspace)
+	sessions, diagnostics, err := NewSessionStore(paths).ListWorkspaceWithDiagnostics(workspace)
 	if err != nil {
 		return "", err
 	}
 	if len(sessions) == 0 {
+		if diagnostics.SkippedFiles > 0 {
+			if _, err := fmt.Fprintln(output, sessionListDiagnosticsWarning(diagnostics)); err != nil {
+				return "", err
+			}
+		}
 		_, err := fmt.Fprintln(output, "No saved sessions.")
 		return "", err
 	}
 
 	model := &sessionPickerModel{sessions: sessions}
+	if diagnostics.SkippedFiles > 0 {
+		model.warning = sessionListDiagnosticsWarning(diagnostics)
+	}
 	program := tea.NewProgram(model, tea.WithInput(input), tea.WithOutput(output), tea.WithoutSignalHandler())
 	final, err := program.Run()
 	if err != nil {
@@ -453,7 +495,11 @@ func (m *sessionPickerModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *sessionPickerModel) visibleRows() int {
-	return max(1, m.height-6)
+	reservedRows := 6
+	if m.warning != "" {
+		reservedRows += 2
+	}
+	return max(1, m.height-reservedRows)
 }
 
 func (m *sessionPickerModel) keepCursorVisible() {
@@ -472,6 +518,10 @@ func (m *sessionPickerModel) View() tea.View {
 	content.WriteString("\n")
 	content.WriteString(tuiDimStyle.Render("↑/↓ Move  PgUp/PgDn Page  Enter Select  Esc Cancel"))
 	content.WriteString("\n\n")
+	if m.warning != "" {
+		content.WriteString(tuiWarnStyle.Render(m.warning))
+		content.WriteString("\n\n")
+	}
 	rows := m.visibleRows()
 	end := min(len(m.sessions), m.offset+rows)
 	for index := m.offset; index < end; index++ {
@@ -480,7 +530,11 @@ func (m *sessionPickerModel) View() tea.View {
 			prefix = "> "
 		}
 		session := m.sessions[index]
-		line := fmt.Sprintf("%s%s  %s  %s", prefix, session.ID, session.UpdatedAt.Format("2006-01-02 15:04"), sessionListPreview(session))
+		preview := sessionListPreview(session)
+		if session.WorkspaceUnavailable {
+			preview += "  [unavailable]"
+		}
+		line := fmt.Sprintf("%s%s  %s  %s", prefix, session.ID, session.UpdatedAt.Format("2006-01-02 15:04"), preview)
 		if index == m.cursor {
 			line = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true).Render(line)
 		}
@@ -502,7 +556,10 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if err != nil {
 		return err
 	}
-	settings = effectiveSettings(settings)
+	settings, err = effectiveSettings(settings)
+	if err != nil {
+		return err
+	}
 	applySettings(settings)
 	if settings.APIKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is not configured; run \"meldra config init\" and add it to %s, or set OPENAI_API_KEY", paths.CredentialsFile)
@@ -579,6 +636,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
 	agent := NewAgent(&client, getUserMessage, tools)
+	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
 	agent.output = stdout
 	agent.session = session
 	agent.store = store
@@ -589,17 +647,20 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	return readErr
 }
 
-func effectiveSettings(settings Settings) Settings {
+func effectiveSettings(settings Settings) (Settings, error) {
 	if settings.Model == "" {
 		settings.Model = defaultModel
 	}
 	if settings.BaseURL == "" {
 		settings.BaseURL = defaultBaseURL
 	}
+	if settings.MaxProviderResponseBytes == 0 {
+		settings.MaxProviderResponseBytes = defaultProviderResponseBytes
+	}
 	return overlayEnvironment(settings)
 }
 
-func overlayEnvironment(settings Settings) Settings {
+func overlayEnvironment(settings Settings) (Settings, error) {
 	if value := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); value != "" {
 		settings.APIKey = value
 	}
@@ -609,7 +670,20 @@ func overlayEnvironment(settings Settings) Settings {
 	if value := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); value != "" {
 		settings.BaseURL = value
 	}
-	return settings
+	if value := strings.TrimSpace(os.Getenv(ProviderResponseLimitEnv)); value != "" {
+		limit, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return Settings{}, fmt.Errorf("%s must be an integer: %w", ProviderResponseLimitEnv, err)
+		}
+		if err := validateProviderResponseLimit(limit); err != nil || limit == 0 {
+			if err == nil {
+				err = fmt.Errorf("must be positive")
+			}
+			return Settings{}, fmt.Errorf("%s: %w", ProviderResponseLimitEnv, err)
+		}
+		settings.MaxProviderResponseBytes = limit
+	}
+	return settings, nil
 }
 
 func applySettings(settings Settings) {
@@ -636,7 +710,7 @@ Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
   --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
-  --yes                          Approve file writes and executable commands without confirmation.
+  --yes                          Skip approvals; use only in an isolated container or VM.
 
 Configuration:
   Meldra reads ~/.meldra/config.toml and ~/.meldra/credentials.env by default.

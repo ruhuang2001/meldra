@@ -20,11 +20,14 @@ import (
 )
 
 const (
-	defaultModel             = "gpt-5.6-luna"
-	defaultBaseURL           = "https://api.openai.com/v1"
-	defaultMaxInferenceSteps = 20
-	defaultMaxToolCalls      = 50
-	defaultStreamIdleTimeout = 90 * time.Second
+	defaultModel                             = "gpt-5.6-luna"
+	defaultBaseURL                           = "https://api.openai.com/v1"
+	defaultMaxInferenceSteps                 = 20
+	defaultMaxToolCalls                      = 50
+	defaultStreamIdleTimeout                 = 90 * time.Second
+	defaultProviderResponseBytes       int64 = 32 << 20
+	maximumProviderResponseBytes       int64 = 256 << 20
+	defaultProviderResponsePrefixBytes int64 = 64 << 10
 )
 
 const agentInstructions = `You are Meldra, a coding agent operating inside a bounded workspace.
@@ -55,28 +58,33 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 }
 
 func NewAgent(client *openai.Client, getUserMessage func() (string, bool), tools []ToolDefinition) *Agent {
-	return &Agent{
-		getUserMessage: getUserMessage,
-		tools:          tools,
-		output:         os.Stdout,
-		createResponse: func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
-			return client.Responses.New(ctx, params)
-		},
-		createStream: func(ctx context.Context, params responses.ResponseNewParams) responseStream {
-			streamOptions := []option.RequestOption{
-				// The SDK otherwise defaults to Accept: application/json. Some
-				// OpenAI-compatible gateways forward that header upstream and
-				// buffer the response even when stream=true is present.
-				option.WithHeader("Accept", "text/event-stream"),
-			}
-			if usesCustomBaseURL() {
-				streamOptions = append(streamOptions, option.WithMiddleware(normalizeNonSSEStreamingResponse))
-			}
-			return client.Responses.NewStreaming(ctx, params, streamOptions...)
-		},
+	agent := &Agent{
+		getUserMessage:    getUserMessage,
+		tools:             tools,
+		output:            os.Stdout,
 		maxInferenceSteps: defaultMaxInferenceSteps,
 		maxToolCalls:      defaultMaxToolCalls,
 	}
+	agent.createResponse = func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
+		return client.Responses.New(ctx, params, option.WithMiddleware(limitProviderResponseWithLimit(agent.providerResponseLimit())))
+	}
+	agent.createStream = func(ctx context.Context, params responses.ResponseNewParams) responseStream {
+		streamOptions := []option.RequestOption{
+			// The SDK otherwise defaults to Accept: application/json. Some
+			// OpenAI-compatible gateways forward that header upstream and
+			// buffer the response even when stream=true is present.
+			option.WithHeader("Accept", "text/event-stream"),
+		}
+		if usesCustomBaseURL() {
+			// Register normalization before the raw-body limiter. The SDK applies
+			// earlier middleware outermost, so the limiter sees only the provider
+			// response rather than the small synthetic SSE envelope.
+			streamOptions = append(streamOptions, option.WithMiddleware(normalizeNonSSEStreamingResponseWithLimit(agent.providerResponseLimit())))
+		}
+		streamOptions = append(streamOptions, option.WithMiddleware(limitProviderResponseWithLimit(agent.providerResponseLimit())))
+		return client.Responses.NewStreaming(ctx, params, streamOptions...)
+	}
+	return agent
 }
 
 type responseCreateFunc func(context.Context, responses.ResponseNewParams) (*responses.Response, error)
@@ -111,8 +119,11 @@ type Agent struct {
 	// streamIdleTimeout is only overridden by tests. A zero value uses the
 	// conservative default; a negative value disables the watchdog.
 	streamIdleTimeout time.Duration
-	maxInferenceSteps int
-	maxToolCalls      int
+	// maxProviderResponseBytes is only overridden by tests. A zero value uses
+	// the conservative default.
+	maxProviderResponseBytes int64
+	maxInferenceSteps        int
+	maxToolCalls             int
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -427,6 +438,13 @@ func (a *Agent) effectiveStreamIdleTimeout() time.Duration {
 	return defaultStreamIdleTimeout
 }
 
+func (a *Agent) providerResponseLimit() int64 {
+	if a.maxProviderResponseBytes > 0 {
+		return a.maxProviderResponseBytes
+	}
+	return defaultProviderResponseBytes
+}
+
 func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewParamsInputUnion, previousResponseID string) (inferenceResult, error) {
 	tools := make([]responses.ToolUnionParam, 0, len(a.tools))
 	for _, tool := range a.tools {
@@ -484,6 +502,7 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 	var result inferenceResult
 	var text strings.Builder
 	var completedOutput []responses.ResponseOutputItemUnion
+	responseLimit := a.providerResponseLimit()
 	for stream.Next() {
 		if !idleWatchdog.noteEvent() {
 			result.streamedText = text.String()
@@ -496,6 +515,10 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 			a.emit(UIEvent{Kind: UIEventStatus, Text: "Thinking"})
 		case "response.output_text.delta":
 			if event.Delta != "" {
+				if exceedsProviderResponseLimit(text.Len(), len(event.Delta), responseLimit) {
+					result.streamedText = text.String()
+					return result, &providerResponseLimitError{limit: responseLimit}
+				}
 				result.receivedTextDelta = true
 				text.WriteString(event.Delta)
 				if delta := sanitizeTerminalText(event.Delta); delta != "" {
@@ -515,6 +538,10 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 			if text.Len() == 0 && event.Text != "" {
 				// This is still a streamed text event even though the gateway did
 				// not emit individual deltas.
+				if exceedsProviderResponseLimit(text.Len(), len(event.Text), responseLimit) {
+					result.streamedText = text.String()
+					return result, &providerResponseLimitError{limit: responseLimit}
+				}
 				result.receivedTextDelta = true
 				text.WriteString(event.Text)
 				if finalText := sanitizeTerminalText(event.Text); finalText != "" {
@@ -621,14 +648,113 @@ func isUnsupportedStreamError(err error) bool {
 	return strings.Contains(message, "stream") && (strings.Contains(message, "unsupported") || strings.Contains(message, "not supported") || strings.Contains(message, "not allowed") || strings.Contains(message, "not available"))
 }
 
+type providerResponseLimitError struct {
+	limit int64
+}
+
+func (e *providerResponseLimitError) Error() string {
+	return fmt.Sprintf("provider response exceeded the configured %s limit", formatResponseByteLimit(e.limit))
+}
+
+type providerResponsePrefixLimitError struct {
+	limit int64
+}
+
+func (e *providerResponsePrefixLimitError) Error() string {
+	return fmt.Sprintf("provider response prefix exceeded the configured %s limit", formatResponseByteLimit(e.limit))
+}
+
+func formatResponseByteLimit(limit int64) string {
+	switch {
+	case limit%(1<<20) == 0:
+		return fmt.Sprintf("%d MiB", limit/(1<<20))
+	case limit%(1<<10) == 0:
+		return fmt.Sprintf("%d KiB", limit/(1<<10))
+	case limit == 1:
+		return "1 byte"
+	default:
+		return fmt.Sprintf("%d bytes", limit)
+	}
+}
+
+func exceedsProviderResponseLimit(current, additional int, limit int64) bool {
+	return int64(current) > limit || int64(additional) > limit-int64(current)
+}
+
+// limitProviderResponse bounds the raw response body before the SDK
+// parses SSE. This covers output items and tool arguments in addition to the
+// assistant text accumulated by Agent.runInference.
+func limitProviderResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	return limitProviderResponseWithLimit(defaultProviderResponseBytes)(request, next)
+}
+
+func limitProviderResponseWithLimit(limit int64) option.Middleware {
+	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		response, err := next(request)
+		if err != nil || response == nil || response.Body == nil {
+			return response, err
+		}
+		if response.ContentLength > limit {
+			_ = response.Body.Close()
+			return response, &providerResponseLimitError{limit: limit}
+		}
+		response.Body = &providerResponseLimitReadCloser{
+			ReadCloser: response.Body,
+			remaining:  limit,
+			limit:      limit,
+		}
+		return response, nil
+	}
+}
+
+type providerResponseLimitReadCloser struct {
+	io.ReadCloser
+	remaining int64
+	limit     int64
+}
+
+func (r *providerResponseLimitReadCloser) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return r.ReadCloser.Read(buffer)
+	}
+	if r.remaining == 0 {
+		var probe [1]byte
+		count, err := r.ReadCloser.Read(probe[:])
+		if count > 0 {
+			return 0, &providerResponseLimitError{limit: r.limit}
+		}
+		return count, err
+	}
+	if int64(len(buffer)) > r.remaining {
+		buffer = buffer[:int(r.remaining)]
+	}
+	count, err := r.ReadCloser.Read(buffer)
+	r.remaining -= int64(count)
+	return count, err
+}
+
 // normalizeNonSSEStreamingResponse preserves the result when a compatible
 // provider accepts stream=true but replies with a complete Responses JSON body.
 // It turns that body into one terminal SSE event instead of issuing the prompt a
 // second time through the non-streaming API.
 func normalizeNonSSEStreamingResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+	return normalizeNonSSEStreamingResponseWithLimit(defaultProviderResponseBytes)(request, next)
+}
+
+func normalizeNonSSEStreamingResponseWithLimit(limit int64) option.Middleware {
+	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		return normalizeNonSSEStreamingResponseForLimit(request, next, limit)
+	}
+}
+
+func normalizeNonSSEStreamingResponseForLimit(request *http.Request, next option.MiddlewareNext, limit int64) (*http.Response, error) {
 	response, err := next(request)
 	if err != nil || response == nil || response.Body == nil || response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices || strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream") {
 		return response, err
+	}
+	if response.ContentLength > limit {
+		_ = response.Body.Close()
+		return response, &providerResponseLimitError{limit: limit}
 	}
 
 	// Some compatible gateways stream valid SSE but omit or mislabel the
@@ -636,53 +762,80 @@ func normalizeNonSSEStreamingResponse(request *http.Request, next option.Middlew
 	// to the SDK: the read would hold every delta until the model finishes. A
 	// small prefix is enough to distinguish a complete JSON response from SSE,
 	// and is replayed so the SDK still sees the entire stream.
-	isJSON, restoredBody, inspectErr := responseBodyStartsWithJSON(response.Body)
+	prefixLimit := int64(defaultProviderResponsePrefixBytes)
+	if limit < prefixLimit {
+		prefixLimit = limit
+	}
+	isJSON, restoredBody, inspectErr := responseBodyStartsWithJSONWithLimit(response.Body, prefixLimit)
 	if inspectErr != nil {
 		_ = response.Body.Close()
-		return nil, inspectErr
+		return response, inspectErr
 	}
 	response.Body = restoredBody
 	if !isJSON {
 		return response, nil
 	}
 
-	responseBody, readErr := io.ReadAll(response.Body)
+	responseBody, readErr := readProviderResponse(response.Body, limit)
 	closeErr := response.Body.Close()
 	if readErr != nil {
-		return nil, readErr
+		return response, readErr
 	}
 	if closeErr != nil {
-		return nil, closeErr
+		return response, closeErr
 	}
 
-	var completed responses.Response
-	if err := json.Unmarshal(responseBody, &completed); err != nil {
+	// Validate without unmarshalling into the SDK response type. Unmarshalling
+	// a near-limit body would retain a second, decoded copy of every output
+	// item and tool argument before the SDK parses the synthetic SSE event.
+	// Keep the original body for non-Responses JSON so the SDK can report its
+	// normal decoding error.
+	trimmed := bytes.TrimSpace(responseBody)
+	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		response.Body = io.NopCloser(bytes.NewReader(responseBody))
 		return response, nil
 	}
-	payload, err := json.Marshal(struct {
-		Type     string             `json:"type"`
-		Response responses.Response `json:"response"`
-	}{
-		Type:     "response.completed",
-		Response: completed,
-	})
-	if err != nil {
-		return nil, err
-	}
-	response.Body = io.NopCloser(strings.NewReader("event: response.completed\ndata: " + string(payload) + "\n\n"))
+	// Do not marshal the response into another byte slice. Besides escaping
+	// characters such as '<' and '>', that would temporarily hold the raw body,
+	// decoded response, marshaled payload, and converted string at once. The
+	// SDK only needs a valid SSE envelope, so compact the bounded raw JSON while
+	// streaming it between a small prefix and suffix. This keeps pretty-printed
+	// JSON in one SSE data line without expanding a newline-heavy response.
+	response.Body = io.NopCloser(io.MultiReader(
+		strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":"),
+		&jsonCompactReader{source: bytes.NewReader(trimmed)},
+		strings.NewReader("}\n\n"),
+	))
 	response.Header.Set("Content-Type", "text/event-stream")
 	response.ContentLength = -1
 	return response, nil
+}
+
+func readProviderResponse(body io.Reader, limit int64) ([]byte, error) {
+	responseBody, err := io.ReadAll(io.LimitReader(body, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(responseBody)) > limit {
+		return nil, &providerResponseLimitError{limit: limit}
+	}
+	return responseBody, nil
 }
 
 // responseBodyStartsWithJSON returns a reader which still includes every byte
 // consumed while checking the prefix. JSON permits leading whitespace, while
 // SSE normally begins with "event:", "data:", or a comment.
 func responseBodyStartsWithJSON(body io.ReadCloser) (bool, io.ReadCloser, error) {
+	return responseBodyStartsWithJSONWithLimit(body, defaultProviderResponsePrefixBytes)
+}
+
+func responseBodyStartsWithJSONWithLimit(body io.ReadCloser, limit int64) (bool, io.ReadCloser, error) {
 	reader := bufio.NewReader(body)
 	var prefix bytes.Buffer
 	for {
+		if int64(prefix.Len()) >= limit {
+			return false, nil, &providerResponsePrefixLimitError{limit: limit}
+		}
 		byteValue, err := reader.ReadByte()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
@@ -706,6 +859,66 @@ func responseBodyStartsWithJSON(body io.ReadCloser) (bool, io.ReadCloser, error)
 type prefixedReadCloser struct {
 	io.Reader
 	io.Closer
+}
+
+// jsonCompactReader removes JSON formatting whitespace without allocating a
+// second complete response body. The normalized response is sent as one SSE
+// data line, so physical newlines cannot terminate its event.
+type jsonCompactReader struct {
+	source      io.Reader
+	buffer      [32 << 10]byte
+	unread      []byte
+	sourceError error
+	inString    bool
+	escaped     bool
+}
+
+func (r *jsonCompactReader) Read(destination []byte) (int, error) {
+	written := 0
+	for len(destination) > 0 {
+		if len(r.unread) == 0 {
+			if r.sourceError != nil {
+				if written > 0 {
+					return written, nil
+				}
+				return 0, r.sourceError
+			}
+			count, err := r.source.Read(r.buffer[:])
+			if count > 0 {
+				r.unread = r.buffer[:count]
+			}
+			if err != nil {
+				r.sourceError = err
+			}
+			if count == 0 {
+				if written > 0 {
+					return written, nil
+				}
+				return 0, err
+			}
+		}
+
+		value := r.unread[0]
+		r.unread = r.unread[1:]
+		if !r.inString && (value == ' ' || value == '\n' || value == '\r' || value == '\t') {
+			continue
+		}
+		destination[0] = value
+		destination = destination[1:]
+		written++
+		if r.inString {
+			if r.escaped {
+				r.escaped = false
+			} else if value == '\\' {
+				r.escaped = true
+			} else if value == '"' {
+				r.inString = false
+			}
+		} else if value == '"' {
+			r.inString = true
+		}
+	}
+	return written, nil
 }
 
 func (a *Agent) persistPartialStream(text string) (bool, error) {

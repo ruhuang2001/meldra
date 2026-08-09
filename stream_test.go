@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -686,6 +687,195 @@ func TestAgentUsesOneRequestWhenCustomEndpointReturnsJSONForStream(t *testing.T)
 	}
 }
 
+func TestAgentNormalizesPrettyPrintedJSONForStream(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		requests++
+		if incoming.Method != http.MethodPost || incoming.URL.Path != "/responses" {
+			writer.WriteHeader(http.StatusNotFound)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{
+  "id": "resp_json",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "id": "msg_json",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {"type": "output_text", "text": "pretty reply", "annotations": []}
+      ]
+    }
+  ]
+}`)
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_BASE_URL", server.URL)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	var output bytes.Buffer
+	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.output = &output
+	if err := agent.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("custom endpoint requests = %d, want 1", requests)
+	}
+	if got := output.String(); !strings.Contains(got, "Meldra\u001b[0m: pretty reply\n") {
+		t.Fatalf("pretty JSON response output = %q", got)
+	}
+}
+
+func TestJSONCompactReaderPreservesStringsAcrossShortReads(t *testing.T) {
+	reader := &jsonCompactReader{source: strings.NewReader(`{
+  "id": "response text",
+  "quote": "a \"quoted\" value"
+}`)}
+	var got strings.Builder
+	var buffer [1]byte
+	for {
+		count, err := reader.Read(buffer[:])
+		if count > 0 {
+			got.Write(buffer[:count])
+		}
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	const want = `{"id":"response text","quote":"a \"quoted\" value"}`
+	if got.String() != want {
+		t.Fatalf("compacted JSON = %q, want %q", got.String(), want)
+	}
+}
+
+func TestAgentDoesNotRetryOversizedProviderResponse(t *testing.T) {
+	const limit int64 = 8
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		requests++
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Content-Length", fmt.Sprint(limit+1))
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_BASE_URL", server.URL)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.maxProviderResponseBytes = limit
+	err := agent.Run(context.Background())
+	var limitErr *providerResponseLimitError
+	if !errors.As(err, &limitErr) || limitErr.limit != limit {
+		t.Fatalf("oversized provider error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("oversized provider requests = %d, want 1", requests)
+	}
+}
+
+func TestNormalizeNonSSEStreamingResponseRejectsOversizedJSON(t *testing.T) {
+	const limit int64 = 8
+	request := httptest.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+	response, err := normalizeNonSSEStreamingResponseWithLimit(limit)(request, func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			ContentLength: -1,
+			Header:        http.Header{"Content-Type": []string{"application/json"}},
+			Body:          io.NopCloser(strings.NewReader(`{"text":"too long"}`)),
+		}, nil
+	})
+	if response == nil {
+		t.Fatal("oversized JSON response was discarded")
+	}
+	var limitErr *providerResponseLimitError
+	if !errors.As(err, &limitErr) || limitErr.limit != limit {
+		t.Fatalf("oversized JSON error = %v, want provider response limit %d", err, limit)
+	}
+}
+
+func TestAgentNormalizesEscapableJSONWithoutExpandingResponseBudget(t *testing.T) {
+	text := strings.Repeat("<", 64<<10)
+	responseBody := `{"id":"resp_json","status":"completed","output":[{"type":"message","id":"msg_json","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + text + `","annotations":[]}]}]}`
+	// The raw provider body exactly fits the budget. Re-marshalling this JSON
+	// escapes every '<' into six bytes, and limiting the synthetic SSE envelope
+	// instead of the raw provider response would also reject it for its fixed
+	// framing overhead.
+	limit := int64(len(responseBody))
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		requests++
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(writer, responseBody)
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_BASE_URL", server.URL)
+
+	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
+	var output bytes.Buffer
+	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.maxProviderResponseBytes = limit
+	agent.output = &output
+	if err := agent.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("custom endpoint requests = %d, want 1", requests)
+	}
+	if !strings.Contains(output.String(), text) {
+		t.Fatal("normalized response did not preserve the raw output text")
+	}
+}
+
+func TestResponseBodyStartsWithJSONRejectsOversizedPrefix(t *testing.T) {
+	const limit int64 = 8
+	isJSON, restored, err := responseBodyStartsWithJSONWithLimit(
+		io.NopCloser(strings.NewReader(strings.Repeat(" ", int(limit)+1)+`{"id":"response"}`)),
+		limit,
+	)
+	if isJSON || restored != nil {
+		t.Fatalf("oversized prefix result = isJSON:%t body:%#v", isJSON, restored)
+	}
+	var prefixErr *providerResponsePrefixLimitError
+	if !errors.As(err, &prefixErr) || prefixErr.limit != limit {
+		t.Fatalf("oversized prefix error = %v, want provider response prefix limit %d", err, limit)
+	}
+}
+
+func TestProviderResponseBodyLimit(t *testing.T) {
+	const limit int64 = 8
+	request := httptest.NewRequest(http.MethodPost, "https://provider.example/v1/responses", nil)
+	response, err := limitProviderResponseWithLimit(limit)(request, func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    http.StatusOK,
+			ContentLength: -1,
+			Header:        make(http.Header),
+			Body:          io.NopCloser(strings.NewReader("123456789")),
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	got, readErr := io.ReadAll(response.Body)
+	if string(got) != "12345678" {
+		t.Fatalf("limited response body = %q", got)
+	}
+	var limitErr *providerResponseLimitError
+	if !errors.As(readErr, &limitErr) || limitErr.limit != limit {
+		t.Fatalf("limited response read error = %v, want provider response limit %d", readErr, limit)
+	}
+	if got := (&providerResponseLimitError{limit: defaultProviderResponseBytes}).Error(); got != "provider response exceeded the configured 32 MiB limit" {
+		t.Fatalf("default provider response limit error = %q", got)
+	}
+}
+
 func TestAgentFallsBackWhenCustomEndpointRejectsStreamingJSON(t *testing.T) {
 	var requests []bool
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
@@ -839,6 +1029,32 @@ func TestRunInferenceTimesOutAnIdleStreamAfterPartialOutput(t *testing.T) {
 	}
 }
 
+func TestRunInferenceLimitsStreamedOutputAndPreservesPartialText(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	stream := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{
+		{Type: "response.output_text.delta", Delta: "partial"},
+		{Type: "response.output_text.delta", Delta: " overflow"},
+	}}
+	agent := Agent{
+		maxProviderResponseBytes: 8,
+		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
+			return stream
+		},
+	}
+
+	result, err := agent.runInference(context.Background(), responses.ResponseNewParamsInputUnion{}, "")
+	var limitErr *providerResponseLimitError
+	if !errors.As(err, &limitErr) || limitErr.limit != 8 {
+		t.Fatalf("stream limit error = %v, want provider response limit 8", err)
+	}
+	if result.streamedText != "partial" || !result.streamedTextShown {
+		t.Fatalf("partial stream result = %#v", result)
+	}
+	if !stream.closed {
+		t.Fatal("stream was not closed after exceeding response limit")
+	}
+}
+
 func TestRunInferenceResetsIdleTimeoutAfterEachSSEEvent(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
 	stream := &delayedResponseStream{
@@ -966,5 +1182,43 @@ func TestAgentPersistsPartialStreamAfterFailure(t *testing.T) {
 	}
 	if !loaded.resumed || loaded.PreviousResponseID != "" {
 		t.Fatalf("session continuation state = %#v", loaded)
+	}
+}
+
+func TestAgentPersistsPartialStreamWhenResponseExceedsLimit(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	store := NewSessionStore(mustConfigPaths(t))
+	session, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{
+		{Type: "response.output_text.delta", Delta: "partial"},
+		{Type: "response.output_text.delta", Delta: " overflow"},
+	}}
+	agent := Agent{
+		getUserMessage:           userMessages("reply"),
+		session:                  session,
+		store:                    store,
+		maxProviderResponseBytes: 8,
+		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
+			return stream
+		},
+	}
+
+	err = agent.Run(context.Background())
+	var limitErr *providerResponseLimitError
+	if !errors.As(err, &limitErr) || limitErr.limit != 8 {
+		t.Fatalf("response limit error = %v, want provider response limit 8", err)
+	}
+	loaded, err := store.Load(session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Messages) != 2 {
+		t.Fatalf("saved messages = %#v", loaded.Messages)
+	}
+	if got := loaded.Messages[1]; got.Role != "assistant" || !strings.Contains(got.Content, "partial") || !strings.Contains(got.Content, "Streaming interrupted") {
+		t.Fatalf("partial response = %#v", got)
 	}
 }

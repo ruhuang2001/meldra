@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -104,11 +106,11 @@ func TestLoadConfigRejectsInvalidTOML(t *testing.T) {
 }
 
 func TestConfigTOMLSupportedSyntaxAndValidation(t *testing.T) {
-	config, err := parseConfigTOML("model = 'model#name' # comment\nbase_url = \"https://example.test/v1#fragment\"\nfuture_key = \"ignored\"\n")
+	config, err := parseConfigTOML("model = 'model#name' # comment\nbase_url = \"https://example.test/v1#fragment\"\nmax_provider_response_bytes = 8192\nfuture_key = \"ignored\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Model != "model#name" || config.BaseURL != "https://example.test/v1#fragment" {
+	if config.Model != "model#name" || config.BaseURL != "https://example.test/v1#fragment" || config.MaxProviderResponseBytes != 8192 {
 		t.Fatalf("parsed config = %#v", config)
 	}
 	for _, contents := range []string{
@@ -116,6 +118,10 @@ func TestConfigTOMLSupportedSyntaxAndValidation(t *testing.T) {
 		"model = \"one\"\nmodel = \"two\"\n",
 		"model\n",
 		"model = \"unterminated\n",
+		"max_provider_response_bytes = \"8192\"\n",
+		"max_provider_response_bytes = 0\n",
+		"max_provider_response_bytes = -1\n",
+		fmt.Sprintf("max_provider_response_bytes = %d\n", maximumProviderResponseBytes+1),
 	} {
 		if _, err := parseConfigTOML(contents); err == nil {
 			t.Errorf("accepted invalid config %q", contents)
@@ -123,6 +129,9 @@ func TestConfigTOMLSupportedSyntaxAndValidation(t *testing.T) {
 	}
 	if err := SaveConfig(mustConfigPaths(t), Config{Model: "bad\nmodel"}); err == nil {
 		t.Fatal("SaveConfig accepted a model containing a newline")
+	}
+	if err := SaveConfig(mustConfigPaths(t), Config{MaxProviderResponseBytes: -1}); err == nil {
+		t.Fatal("SaveConfig accepted a negative provider response limit")
 	}
 	if err := SaveAPIKey(mustConfigPaths(t), "bad\nkey"); err == nil {
 		t.Fatal("SaveAPIKey accepted a key containing a newline")
@@ -208,7 +217,7 @@ func TestEnvironmentOverridesFilesAndConfigShowRedactsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveConfig(paths, Config{Model: "file-model", BaseURL: "https://file.example/v1"}); err != nil {
+	if err := SaveConfig(paths, Config{Model: "file-model", BaseURL: "https://file.example/v1", MaxProviderResponseBytes: 8192}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveAPIKey(paths, "file-secret-key"); err != nil {
@@ -217,13 +226,14 @@ func TestEnvironmentOverridesFilesAndConfigShowRedactsKey(t *testing.T) {
 	t.Setenv("OPENAI_MODEL", "env-model")
 	t.Setenv("OPENAI_BASE_URL", "https://env.example/v1")
 	t.Setenv("OPENAI_API_KEY", "env-secret-key")
+	t.Setenv(ProviderResponseLimitEnv, "4096")
 
 	var output bytes.Buffer
 	if err := runCLI([]string{"config", "show"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
 	got := output.String()
-	for _, want := range []string{home, "model=env-model", "base_url=https://env.example/v1", "openai_api_key=********"} {
+	for _, want := range []string{home, "model=env-model", "base_url=https://env.example/v1", "max_provider_response_bytes=4096", "openai_api_key=********"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config show output does not contain %q:\n%s", want, got)
 		}
@@ -269,6 +279,7 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv(ProviderResponseLimitEnv, "")
 	if err := SaveConfig(paths, Config{Model: configuredModel, BaseURL: server.URL}); err != nil {
 		t.Fatal(err)
 	}
@@ -296,19 +307,71 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 	}
 }
 
+func TestConfiguredProviderResponseLimitReachesChat(t *testing.T) {
+	const limit int64 = 8
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
+		requests++
+		writer.Header().Set("Content-Type", "application/json")
+		writer.Header().Set("Content-Length", fmt.Sprint(limit+1))
+		writer.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("OPENAI_MODEL", "")
+	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv(ProviderResponseLimitEnv, "")
+	if err := SaveConfig(paths, Config{BaseURL: server.URL, MaxProviderResponseBytes: limit}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveAPIKey(paths, "file-api-key"); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runChat(context.Background(), strings.NewReader("reply\n"), io.Discard, ChatOptions{Workspace: t.TempDir(), workspaceExplicit: true})
+	var limitErr *providerResponseLimitError
+	if !errors.As(err, &limitErr) || limitErr.limit != limit {
+		t.Fatalf("configured response limit error = %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("request count = %d, want 1", requests)
+	}
+}
+
 func TestConfigShowIncludesBuiltInDefaults(t *testing.T) {
 	t.Setenv(MeldraHomeEnv, filepath.Join(t.TempDir(), "meldra-home"))
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv(ProviderResponseLimitEnv, "")
 
 	var output bytes.Buffer
 	if err := runCLI([]string{"config", "show"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
 	got := output.String()
-	if !strings.Contains(got, "model="+defaultModel) || !strings.Contains(got, "base_url="+defaultBaseURL) {
+	if !strings.Contains(got, "model="+defaultModel) || !strings.Contains(got, "base_url="+defaultBaseURL) || !strings.Contains(got, fmt.Sprintf("max_provider_response_bytes=%d", defaultProviderResponseBytes)) {
 		t.Fatalf("config show does not include effective defaults:\n%s", got)
+	}
+}
+
+func TestProviderResponseLimitEnvironmentValidation(t *testing.T) {
+	for _, value := range []string{"not-a-number", "0", "-1", fmt.Sprint(maximumProviderResponseBytes + 1)} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(ProviderResponseLimitEnv, value)
+			if _, err := effectiveSettings(Settings{}); err == nil {
+				t.Fatalf("effectiveSettings accepted %s=%q", ProviderResponseLimitEnv, value)
+			}
+		})
+	}
+
+	t.Setenv(ProviderResponseLimitEnv, "8192")
+	settings, err := effectiveSettings(Settings{})
+	if err != nil || settings.MaxProviderResponseBytes != 8192 {
+		t.Fatalf("effective provider response limit = %#v, %v", settings, err)
 	}
 }
 
@@ -322,6 +385,7 @@ func TestMeldraNeverLoadsWorkingDirectoryDotEnv(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv(ProviderResponseLimitEnv, "")
 
 	err := runCLI(nil, strings.NewReader(""), &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY is not configured") {
@@ -337,6 +401,7 @@ func TestCLIHelpVersionAndErrors(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
+	t.Setenv(ProviderResponseLimitEnv, "")
 
 	t.Run("help", func(t *testing.T) {
 		var output bytes.Buffer

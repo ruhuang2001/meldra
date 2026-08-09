@@ -21,6 +21,10 @@ const (
 	configFileName        = "config.toml"
 	credentialsFileName   = "credentials.env"
 
+	// ProviderResponseLimitEnv overrides the configured provider response budget
+	// for one process without exposing any credential.
+	ProviderResponseLimitEnv = "MELDRA_MAX_PROVIDER_RESPONSE_BYTES"
+
 	privateDirPerm  fs.FileMode = 0o700
 	privateFilePerm fs.FileMode = 0o600
 )
@@ -29,6 +33,7 @@ const defaultConfigTemplate = `# Meldra configuration.
 #
 # model = "gpt-5.6-luna"
 # base_url = "https://api.openai.com/v1"
+# max_provider_response_bytes = 33554432
 `
 
 const defaultCredentialsTemplate = `# Meldra credentials. Keep this file private.
@@ -46,8 +51,9 @@ type ConfigPaths struct {
 
 // Config contains non-secret settings stored in config.toml.
 type Config struct {
-	Model   string
-	BaseURL string
+	Model                    string
+	BaseURL                  string
+	MaxProviderResponseBytes int64
 }
 
 // Credentials contains the secret settings stored in credentials.env.
@@ -59,19 +65,21 @@ type Credentials struct {
 // command-line overrides intentionally belong to the caller, so their
 // precedence stays explicit at the CLI boundary.
 type Settings struct {
-	Model   string
-	BaseURL string
-	APIKey  string
+	Model                    string
+	BaseURL                  string
+	APIKey                   string
+	MaxProviderResponseBytes int64
 }
 
 // ConfigShow is safe to display or serialize: APIKey is always redacted.
 type ConfigShow struct {
-	Home            string `json:"home"`
-	ConfigFile      string `json:"config_file"`
-	CredentialsFile string `json:"credentials_file"`
-	Model           string `json:"model"`
-	BaseURL         string `json:"base_url"`
-	APIKey          string `json:"openai_api_key"`
+	Home                     string `json:"home"`
+	ConfigFile               string `json:"config_file"`
+	CredentialsFile          string `json:"credentials_file"`
+	Model                    string `json:"model"`
+	BaseURL                  string `json:"base_url"`
+	MaxProviderResponseBytes int64  `json:"max_provider_response_bytes"`
+	APIKey                   string `json:"openai_api_key"`
 }
 
 // ResolveConfigPaths returns the current user's Meldra configuration paths.
@@ -123,8 +131,9 @@ func InitializeConfig(paths ConfigPaths) error {
 	return nil
 }
 
-// LoadConfig loads model and base_url from the explicit config.toml path. A
-// missing configuration directory or file is treated as an empty config.
+// LoadConfig loads non-secret runtime settings from the explicit config.toml
+// path. A missing configuration directory or file is treated as an empty
+// config.
 func LoadConfig(paths ConfigPaths) (Config, error) {
 	if err := validateConfigPaths(paths); err != nil {
 		return Config{}, err
@@ -188,9 +197,10 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 		return Settings{}, err
 	}
 	return Settings{
-		Model:   config.Model,
-		BaseURL: config.BaseURL,
-		APIKey:  credentials.OpenAIAPIKey,
+		Model:                    config.Model,
+		BaseURL:                  config.BaseURL,
+		APIKey:                   credentials.OpenAIAPIKey,
+		MaxProviderResponseBytes: config.MaxProviderResponseBytes,
 	}, nil
 }
 
@@ -204,6 +214,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	if err := validateConfigValue("base_url", config.BaseURL); err != nil {
 		return err
 	}
+	if err := validateProviderResponseLimit(config.MaxProviderResponseBytes); err != nil {
+		return err
+	}
 
 	contents := "# Meldra configuration.\n"
 	if config.Model != "" {
@@ -211,6 +224,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	}
 	if config.BaseURL != "" {
 		contents += "base_url = " + strconv.Quote(config.BaseURL) + "\n"
+	}
+	if config.MaxProviderResponseBytes != 0 {
+		contents += "max_provider_response_bytes = " + strconv.FormatInt(config.MaxProviderResponseBytes, 10) + "\n"
 	}
 	if err := writePrivateFile(paths, paths.ConfigFile, []byte(contents)); err != nil {
 		return fmt.Errorf("write config file: %w", err)
@@ -252,24 +268,26 @@ func ShowConfig(paths ConfigPaths) (ConfigShow, error) {
 // always redacted, even when the given Settings came from another source.
 func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 	return ConfigShow{
-		Home:            paths.Home,
-		ConfigFile:      paths.ConfigFile,
-		CredentialsFile: paths.CredentialsFile,
-		Model:           settings.Model,
-		BaseURL:         settings.BaseURL,
-		APIKey:          RedactSecret(settings.APIKey),
+		Home:                     paths.Home,
+		ConfigFile:               paths.ConfigFile,
+		CredentialsFile:          paths.CredentialsFile,
+		Model:                    settings.Model,
+		BaseURL:                  settings.BaseURL,
+		MaxProviderResponseBytes: settings.MaxProviderResponseBytes,
+		APIKey:                   RedactSecret(settings.APIKey),
 	}
 }
 
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nopenai_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nmax_provider_response_bytes=%d\nopenai_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
 		displayValue(show.Model),
 		displayValue(show.BaseURL),
+		show.MaxProviderResponseBytes,
 		show.APIKey,
 	)
 }
@@ -315,7 +333,7 @@ func ensureConfigHome(paths ConfigPaths) error {
 	if err := validateConfigPaths(paths); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(paths.Home, privateDirPerm); err != nil {
+	if err := makeDirectoryTreeDurable(paths.Home, privateDirPerm, syncDirectory); err != nil {
 		return fmt.Errorf("create Meldra home directory: %w", err)
 	}
 
@@ -365,8 +383,16 @@ func createPrivateFileIfMissing(path string, contents string) error {
 			_ = os.Remove(path)
 			return fmt.Errorf("write file: %w", writeErr)
 		}
+		if syncErr := file.Sync(); syncErr != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return fmt.Errorf("sync file: %w", syncErr)
+		}
 		if closeErr := file.Close(); closeErr != nil {
 			return fmt.Errorf("close file: %w", closeErr)
+		}
+		if syncErr := syncDirectory(filepath.Dir(path)); syncErr != nil {
+			return fmt.Errorf("sync configuration directory: %w", syncErr)
 		}
 		return nil
 	}
@@ -450,6 +476,9 @@ func writePrivateFile(paths ConfigPaths, target string, contents []byte) error {
 	if err := os.Chmod(target, privateFilePerm); err != nil {
 		return fmt.Errorf("secure file: %w", err)
 	}
+	if err := syncDirectory(paths.Home); err != nil {
+		return fmt.Errorf("sync configuration directory: %w", err)
+	}
 	return nil
 }
 
@@ -476,6 +505,16 @@ func validatePrivateWriteTarget(paths ConfigPaths, target string) error {
 func validateConfigValue(name, value string) error {
 	if strings.ContainsAny(value, "\r\n") {
 		return fmt.Errorf("%s must not contain line breaks", name)
+	}
+	return nil
+}
+
+func validateProviderResponseLimit(value int64) error {
+	if value < 0 {
+		return fmt.Errorf("max_provider_response_bytes must be positive")
+	}
+	if value > maximumProviderResponseBytes {
+		return fmt.Errorf("max_provider_response_bytes must not exceed %d", maximumProviderResponseBytes)
 	}
 	return nil
 }
@@ -518,6 +557,22 @@ func parseConfigTOML(contents string) (Config, error) {
 			} else {
 				config.BaseURL = value
 			}
+		case "max_provider_response_bytes":
+			if seen[key] {
+				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
+			}
+			seen[key] = true
+			value, err := strconv.ParseInt(rawValue, 10, 64)
+			if err != nil {
+				return Config{}, fmt.Errorf("line %d: %s must be an integer: %w", lineNumber+1, key, err)
+			}
+			if value == 0 {
+				return Config{}, fmt.Errorf("line %d: max_provider_response_bytes must be positive", lineNumber+1)
+			}
+			if err := validateProviderResponseLimit(value); err != nil {
+				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
+			}
+			config.MaxProviderResponseBytes = value
 		default:
 			// Unknown top-level keys are deliberately ignored. That makes config
 			// files forward-compatible without permitting unknown keys to affect

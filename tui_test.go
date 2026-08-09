@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -12,12 +13,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/openai/openai-go/v3/responses"
 )
 
 type observingTUIModel struct {
-	model  *tuiModel
-	events chan UIEvent
+	model     *tuiModel
+	events    chan UIEvent
+	approvals chan tuiApprovalMsg
 }
 
 func (m *observingTUIModel) Init() tea.Cmd {
@@ -29,6 +32,12 @@ func (m *observingTUIModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	if event, ok := message.(tuiEventMsg); ok {
 		select {
 		case m.events <- event.event:
+		default:
+		}
+	}
+	if approval, ok := message.(tuiApprovalMsg); ok && m.approvals != nil {
+		select {
+		case m.approvals <- approval:
 		default:
 		}
 	}
@@ -403,6 +412,28 @@ func TestTUIRoutesMouseWheelToTimelineWhileIdle(t *testing.T) {
 	}
 }
 
+func TestTUIViewportPreWrapsLongStreamedLines(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 28
+	model.height = 12
+	model.entries = []tuiEntry{{
+		kind:   tuiEntryAssistant,
+		text:   strings.Repeat("unbroken-streamed-text-", 20),
+		active: true,
+	}}
+	model.activeAssistant = 0
+	model.resize()
+
+	if model.viewport.SoftWrap {
+		t.Fatal("viewport still performs its own soft wrapping")
+	}
+	for _, line := range strings.Split(model.viewport.GetContent(), "\n") {
+		if width := ansi.StringWidth(line); width > model.viewport.Width() {
+			t.Fatalf("viewport line width = %d, want at most %d: %q", width, model.viewport.Width(), line)
+		}
+	}
+}
+
 func TestTUIPasteResizesViewport(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{})
 	model.width = 80
@@ -455,6 +486,47 @@ func TestTUIControllerRendersFirstDeltaAndBatchesTheRest(t *testing.T) {
 	controller.stop()
 	if active {
 		t.Fatal("assistant delta state was not reset after completion")
+	}
+}
+
+// BenchmarkTUIStreamingTimeline measures the full per-frame refresh cost for
+// a long-lived chat while an assistant reply is being streamed. This is the
+// current rendering path, so it provides a baseline before considering an
+// incremental rendering cache.
+func BenchmarkTUIStreamingTimeline(b *testing.B) {
+	for _, replyBytes := range []int{64 << 10, 256 << 10} {
+		b.Run(fmt.Sprintf("active_reply_%dKiB", replyBytes>>10), func(b *testing.B) {
+			model := newTUIModel(newTUIController(nil), tuiInitialState{
+				workspace: "/tmp/project",
+				model:     "gpt-test",
+			})
+			model.width = 120
+			model.height = 42
+			for index := range 100 {
+				kind := tuiEntryUser
+				if index%2 != 0 {
+					kind = tuiEntryAssistant
+				}
+				model.entries = append(model.entries, tuiEntry{
+					kind: kind,
+					text: fmt.Sprintf("history entry %03d: %s", index, strings.Repeat("context ", 24)),
+				})
+			}
+			model.entries = append(model.entries, tuiEntry{
+				kind:   tuiEntryAssistant,
+				text:   strings.Repeat("streamed response ", replyBytes/len("streamed response ")+1)[:replyBytes],
+				active: true,
+			})
+			model.activeAssistant = len(model.entries) - 1
+			model.resize()
+
+			b.SetBytes(int64(replyBytes))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				model.refreshViewport()
+			}
+		})
 	}
 }
 
@@ -572,6 +644,71 @@ func TestTUIControllerDeliversAgentEventsInOrder(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("agent did not stop")
+	}
+}
+
+func TestTUIControllerApprovalBridgeResolvesUserDecision(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller := newTUIController(cancel)
+	input, closeInput := io.Pipe()
+	defer closeInput.Close()
+	var output bytes.Buffer
+	model := &observingTUIModel{
+		model:     newTUIModel(controller, tuiInitialState{}),
+		events:    make(chan UIEvent, 1),
+		approvals: make(chan tuiApprovalMsg, 1),
+	}
+	program := tea.NewProgram(
+		model,
+		tea.WithInput(input),
+		tea.WithOutput(&output),
+		tea.WithContext(ctx),
+		tea.WithWindowSize(80, 24),
+		tea.WithoutSignalHandler(),
+	)
+	controller.program = program
+	programDone := make(chan error, 1)
+	go func() {
+		_, err := program.Run()
+		programDone <- err
+	}()
+	defer func() {
+		controller.stop()
+		select {
+		case <-programDone:
+		case <-time.After(time.Second):
+			t.Error("Bubble Tea program did not stop")
+		}
+	}()
+
+	select {
+	case <-controller.ready:
+	case <-time.After(time.Second):
+		t.Fatal("Bubble Tea model did not become ready")
+	}
+
+	approved := make(chan bool, 1)
+	go func() {
+		approved <- controller.approve(ctx, ApprovalRequest{Kind: ApprovalChanges, Title: "Review file changes", Detail: "+safe change"})
+	}()
+	select {
+	case request := <-model.approvals:
+		if request.request.Kind != ApprovalChanges || request.request.Title != "Review file changes" {
+			t.Fatalf("approval request = %#v", request.request)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("approval request was not delivered to the TUI")
+	}
+
+	program.Send(tea.KeyPressMsg(tea.Key{Text: "y"}))
+	select {
+	case got := <-approved:
+		if !got {
+			t.Fatal("TUI approval bridge rejected an explicit y")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TUI approval bridge did not resolve")
 	}
 }
 

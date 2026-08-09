@@ -49,6 +49,11 @@ Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 2. Files under `~/.meldra`
 3. Built-in defaults
 
+Provider responses are capped at 32 MiB by default. Set
+`max_provider_response_bytes` in `config.toml`, or
+`MELDRA_MAX_PROVIDER_RESPONSE_BYTES` for a process override, to choose a
+positive limit up to 256 MiB.
+
 ```bash
 meldra config init   # create starter config files
 meldra config        # show effective values and config paths (hides API key)
@@ -59,7 +64,7 @@ meldra version
 
 - File tools are constrained to the workspace root (resolves `..`, symlinks, absolute paths) and block access to `.git` and Meldra's own config/session directory.
 - Every edit prints a diff and waits for confirmation before writing.
-- Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Use `--yes` to skip confirmations in automation.
+- Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Approved commands run as your OS user and may access the filesystem and network; environment filtering is not a sandbox. Use `--yes` only inside an isolated container or VM.
 - Each agent turn is bounded to 20 model steps and 50 function calls.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 
