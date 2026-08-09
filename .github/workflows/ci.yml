@@ -1,6 +1,8 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -14,6 +16,7 @@ permissions:
 jobs:
   commit-messages:
     name: Commit messages
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -36,3 +39,18 @@ jobs:
           go-version: "1.26.5"
       - name: Check
         run: make release-check
+
+  runtime-macos:
+    name: macOS runtime
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+      - name: Test with race detector
+        run: go test -race ./...
+      - name: Build
+        run: go build ./...
