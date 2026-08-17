@@ -473,6 +473,24 @@ func TestWorkspaceExecutableCommandRequiresConfirmation(t *testing.T) {
 	}
 }
 
+func TestOpenCheckedRegularFileRejectsChangedIdentity(t *testing.T) {
+	first := filepath.Join(t.TempDir(), "first.txt")
+	second := filepath.Join(t.TempDir(), "second.txt")
+	if err := os.WriteFile(first, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := os.Stat(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := openCheckedRegularFile(second, expected); err == nil || !strings.Contains(err.Error(), "changed while") {
+		t.Fatalf("identity mismatch error = %v", err)
+	}
+}
+
 func TestWorkspaceCommandUsesParentCancellation(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.invalid/cancel\n\ngo 1.25\n"), 0o644); err != nil {
@@ -763,6 +781,36 @@ func TestWorkspaceVerifyPresets(t *testing.T) {
 	emptyWorkspace, _ := testWorkspace(t, t.TempDir(), "", true)
 	if _, err = callTool(t, emptyWorkspace, "verify", map[string]any{"preset": "format"}); err == nil || !strings.Contains(err.Error(), "no supported format verification") {
 		t.Fatalf("empty format verification error = %v", err)
+	}
+}
+
+func TestWorkspaceVerifyApprovesMultiCommandPlanOnce(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.invalid/approval\n\ngo 1.26\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "fixture.go"), []byte("package fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	workspace, output := testWorkspace(t, root, "yes\n", false)
+	result, err := callTool(t, workspace, "verify", map[string]any{"preset": "check"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); got != "Run verification plan with OS-user privileges?\ngo \"vet\" \"./...\"\ngo \"test\" \"./...\"\nApprove 2 command(s)? [y/N] " {
+		t.Fatalf("verification approval prompt = %q", got)
+	}
+	for _, want := range []string{"verification 1/2", "command: go vet ./...", "verification 2/2", "command: go test ./..."} {
+		if !strings.Contains(result, want) {
+			t.Errorf("verification output missing %q: %s", want, result)
+		}
+	}
+
+	declined, _ := testWorkspace(t, root, "no\n", false)
+	result, err = callTool(t, declined, "verify", map[string]any{"preset": "check"})
+	if err != nil || result != "Declined; verification not run." {
+		t.Fatalf("declined verification = %q, %v", result, err)
 	}
 }
 

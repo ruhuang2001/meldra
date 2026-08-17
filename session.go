@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,8 @@ type Session struct {
 	Summary              string           `json:"summary,omitempty"`
 	WorkspaceUnavailable bool             `json:"-"`
 	resumed              bool
+	savedRevision        [sha256.Size]byte
+	hasSavedRevision     bool
 }
 
 type SessionStore struct {
@@ -85,7 +88,7 @@ func (s *SessionStore) New(workspace string) (*Session, error) {
 }
 
 func newSessionID() (string, error) {
-	random := make([]byte, 4)
+	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return "", fmt.Errorf("create session ID: %w", err)
 	}
@@ -99,6 +102,11 @@ func (s *SessionStore) Save(session *Session) error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
+	unlock, err := acquireSessionStoreLock(s.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	session.UpdatedAt = time.Now().UTC()
 	if len(session.Messages) > maxSessionMessages {
 		session.Messages = append([]SessionMessage(nil), session.Messages[len(session.Messages)-maxSessionMessages:]...)
@@ -115,6 +123,19 @@ func (s *SessionStore) Save(session *Session) error {
 		return fmt.Errorf("session file exceeds %d byte limit", maxSessionFileBytes)
 	}
 	target := s.path(session.ID)
+	if session.hasSavedRevision {
+		current, err := readSessionFile(target)
+		if err != nil {
+			return fmt.Errorf("check session before saving: %w", err)
+		}
+		if sha256.Sum256(current) != session.savedRevision {
+			return fmt.Errorf("session %q has changed since it was loaded or last saved; refusing to overwrite newer state", session.ID)
+		}
+	} else if _, err := os.Lstat(target); err == nil {
+		return fmt.Errorf("session %q already exists; refusing to overwrite it", session.ID)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("check session before saving: %w", err)
+	}
 	temp, err := os.CreateTemp(s.dir, ".session-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create session file: %w", err)
@@ -142,6 +163,8 @@ func (s *SessionStore) Save(session *Session) error {
 	if err := syncDirectory(s.dir); err != nil {
 		return err
 	}
+	session.savedRevision = sha256.Sum256(contents)
+	session.hasSavedRevision = true
 	return nil
 }
 
@@ -182,6 +205,8 @@ func (s *SessionStore) Load(id string) (*Session, error) {
 		return nil, fmt.Errorf("session %q is invalid", id)
 	}
 	session.resumed = true
+	session.savedRevision = sha256.Sum256(contents)
+	session.hasSavedRevision = true
 	return &session, nil
 }
 

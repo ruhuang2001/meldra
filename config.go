@@ -26,6 +26,7 @@ const (
 	// ProviderResponseLimitEnv overrides the configured provider response budget
 	// for one process without exposing any credential.
 	ProviderResponseLimitEnv = "MELDRA_MAX_PROVIDER_RESPONSE_BYTES"
+	CustomTurnInputLimitEnv  = "MELDRA_MAX_CUSTOM_TURN_INPUT_BYTES"
 
 	privateDirPerm  fs.FileMode = 0o700
 	privateFilePerm fs.FileMode = 0o600
@@ -37,6 +38,7 @@ const defaultConfigTemplate = `# Meldra configuration.
 # base_url = "https://api.openai.com/v1"
 # allow_insecure_base_url = false
 # max_provider_response_bytes = 33554432
+# max_custom_turn_input_bytes = 4194304
 `
 
 const defaultCredentialsTemplate = `# Meldra credentials. Keep this file private.
@@ -58,6 +60,7 @@ type Config struct {
 	BaseURL                  string
 	AllowInsecureBaseURL     bool
 	MaxProviderResponseBytes int64
+	MaxCustomTurnInputBytes  int64
 }
 
 // Credentials contains the secret settings stored in credentials.env.
@@ -74,6 +77,7 @@ type Settings struct {
 	AllowInsecureBaseURL     bool
 	APIKey                   string
 	MaxProviderResponseBytes int64
+	MaxCustomTurnInputBytes  int64
 }
 
 // ConfigShow is safe to display or serialize: APIKey is always redacted.
@@ -85,6 +89,7 @@ type ConfigShow struct {
 	BaseURL                  string `json:"base_url"`
 	AllowInsecureBaseURL     bool   `json:"allow_insecure_base_url"`
 	MaxProviderResponseBytes int64  `json:"max_provider_response_bytes"`
+	MaxCustomTurnInputBytes  int64  `json:"max_custom_turn_input_bytes"`
 	APIKey                   string `json:"openai_api_key"`
 }
 
@@ -208,6 +213,7 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 		AllowInsecureBaseURL:     config.AllowInsecureBaseURL,
 		APIKey:                   credentials.OpenAIAPIKey,
 		MaxProviderResponseBytes: config.MaxProviderResponseBytes,
+		MaxCustomTurnInputBytes:  config.MaxCustomTurnInputBytes,
 	}, nil
 }
 
@@ -229,6 +235,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	if err := validateProviderResponseLimit(config.MaxProviderResponseBytes); err != nil {
 		return err
 	}
+	if err := validateCustomTurnInputLimit(config.MaxCustomTurnInputBytes); err != nil {
+		return err
+	}
 
 	contents := "# Meldra configuration.\n"
 	if config.Model != "" {
@@ -242,6 +251,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	}
 	if config.MaxProviderResponseBytes != 0 {
 		contents += "max_provider_response_bytes = " + strconv.FormatInt(config.MaxProviderResponseBytes, 10) + "\n"
+	}
+	if config.MaxCustomTurnInputBytes != 0 {
+		contents += "max_custom_turn_input_bytes = " + strconv.FormatInt(config.MaxCustomTurnInputBytes, 10) + "\n"
 	}
 	if err := writePrivateFile(paths, paths.ConfigFile, []byte(contents)); err != nil {
 		return fmt.Errorf("write config file: %w", err)
@@ -290,6 +302,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 		BaseURL:                  settings.BaseURL,
 		AllowInsecureBaseURL:     settings.AllowInsecureBaseURL,
 		MaxProviderResponseBytes: settings.MaxProviderResponseBytes,
+		MaxCustomTurnInputBytes:  settings.MaxCustomTurnInputBytes,
 		APIKey:                   RedactSecret(settings.APIKey),
 	}
 }
@@ -297,7 +310,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nopenai_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\nopenai_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
@@ -305,6 +318,7 @@ func FormatConfigShow(show ConfigShow) string {
 		displayValue(show.BaseURL),
 		show.AllowInsecureBaseURL,
 		show.MaxProviderResponseBytes,
+		show.MaxCustomTurnInputBytes,
 		show.APIKey,
 	)
 }
@@ -566,6 +580,16 @@ func validateProviderResponseLimit(value int64) error {
 	return nil
 }
 
+func validateCustomTurnInputLimit(value int64) error {
+	if value < 0 {
+		return fmt.Errorf("max_custom_turn_input_bytes must be positive")
+	}
+	if value > maximumCustomTurnInputBytes {
+		return fmt.Errorf("max_custom_turn_input_bytes must not exceed %d", maximumCustomTurnInputBytes)
+	}
+	return nil
+}
+
 func parseConfigTOML(contents string) (Config, error) {
 	var config Config
 	seen := make(map[string]bool)
@@ -630,6 +654,22 @@ func parseConfigTOML(contents string) (Config, error) {
 				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
 			}
 			config.MaxProviderResponseBytes = value
+		case "max_custom_turn_input_bytes":
+			if seen[key] {
+				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
+			}
+			seen[key] = true
+			value, err := strconv.ParseInt(rawValue, 10, 64)
+			if err != nil {
+				return Config{}, fmt.Errorf("line %d: %s must be an integer: %w", lineNumber+1, key, err)
+			}
+			if value == 0 {
+				return Config{}, fmt.Errorf("line %d: max_custom_turn_input_bytes must be positive", lineNumber+1)
+			}
+			if err := validateCustomTurnInputLimit(value); err != nil {
+				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
+			}
+			config.MaxCustomTurnInputBytes = value
 		default:
 			// Unknown top-level keys are deliberately ignored. That makes config
 			// files forward-compatible without permitting unknown keys to affect

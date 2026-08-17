@@ -25,6 +25,7 @@ const (
 	defaultMaxInferenceSteps                 = 20
 	defaultMaxToolCalls                      = 50
 	defaultMaxCustomTurnInputBytes           = 4 << 20
+	maximumCustomTurnInputBytes              = 64 << 20
 	defaultStreamIdleTimeout                 = 90 * time.Second
 	defaultProviderResponseBytes       int64 = 32 << 20
 	maximumProviderResponseBytes       int64 = 256 << 20
@@ -63,6 +64,7 @@ func NewAgent(client *openai.Client, getUserMessage func() (string, bool), tools
 		getUserMessage:    getUserMessage,
 		tools:             tools,
 		output:            os.Stdout,
+		model:             defaultModel,
 		maxInferenceSteps: defaultMaxInferenceSteps,
 		maxToolCalls:      defaultMaxToolCalls,
 	}
@@ -76,7 +78,7 @@ func NewAgent(client *openai.Client, getUserMessage func() (string, bool), tools
 			// buffer the response even when stream=true is present.
 			option.WithHeader("Accept", "text/event-stream"),
 		}
-		if usesCustomBaseURL() {
+		if agent.customProvider {
 			// Register normalization before the raw-body limiter. The SDK applies
 			// earlier middleware outermost, so the limiter sees only the provider
 			// response rather than the small synthetic SSE envelope.
@@ -116,6 +118,8 @@ type Agent struct {
 	createResponse    responseCreateFunc
 	createStream      responseStreamCreateFunc
 	events            UIEventSink
+	model             string
+	customProvider    bool
 	streamUnsupported bool
 	// streamIdleTimeout is only overridden by tests. A zero value uses the
 	// conservative default; a negative value disables the watchdog.
@@ -167,7 +171,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			modelInput = a.session.resumeContext() + "\nNew user request:\n" + userInput
 			previousResponseID = ""
 			a.session.resumed = false
-		} else if usesCustomBaseURL() && a.session != nil && len(a.session.Messages) > 0 {
+		} else if a.customProvider && a.session != nil && len(a.session.Messages) > 0 {
 			modelInput = a.session.resumeContext() + "\nNew user request:\n" + userInput
 			previousResponseID = ""
 		}
@@ -188,7 +192,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		inferenceSteps := 0
 		toolCalls := 0
 		metrics := UIMetrics{InferenceLimit: a.inferenceLimit(), ToolCallLimit: a.toolCallLimit()}
-		if usesCustomBaseURL() {
+		if a.customProvider {
 			bounded, contextBytes, _, err := boundCustomTurnInput(customBaseURLInput, a.customTurnInputLimit())
 			if err != nil {
 				return fmt.Errorf("initial custom-provider context: %w", err)
@@ -301,7 +305,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return a.handleInterruption(true)
 			}
-			if usesCustomBaseURL() {
+			if a.customProvider {
 				// A third-party endpoint can accept previous_response_id without
 				// retaining its actual context. Replay the complete current turn so
 				// it always receives the original user request, calls, and outputs.
@@ -495,7 +499,7 @@ func (a *Agent) runInference(ctx context.Context, input responses.ResponseNewPar
 	}
 
 	params := responses.ResponseNewParams{
-		Model:        modelName(),
+		Model:        a.modelName(),
 		Input:        input,
 		Instructions: openai.String(agentInstructions),
 		Tools:        tools,
@@ -664,7 +668,7 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 // reaches the user. Tool execution happens after runInference returns, so this
 // cannot repeat a local tool call.
 func (a *Agent) fallbackFromUnsupportedStream(ctx context.Context, params responses.ResponseNewParams, result inferenceResult, streamErr error) (inferenceResult, error) {
-	if !usesCustomBaseURL() || result.streamedTextShown || a.createResponse == nil {
+	if !a.customProvider || result.streamedTextShown || a.createResponse == nil {
 		return result, streamErr
 	}
 	response, err := a.createResponse(ctx, params)
@@ -1037,16 +1041,16 @@ func (a *Agent) handleInterruption(activeTurn bool) error {
 	return nil
 }
 
-func modelName() string {
-	if model := os.Getenv("OPENAI_MODEL"); model != "" {
-		return model
+func (a *Agent) modelName() string {
+	if a.model != "" {
+		return a.model
 	}
 	return defaultModel
 }
 
-func usesCustomBaseURL() bool {
-	baseURL := strings.TrimRight(os.Getenv("OPENAI_BASE_URL"), "/")
-	return baseURL != "" && baseURL != defaultBaseURL
+func isCustomBaseURL(baseURL string) bool {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	return baseURL != "" && !strings.EqualFold(baseURL, strings.TrimRight(defaultBaseURL, "/"))
 }
 
 func validateResponse(response *responses.Response) error {

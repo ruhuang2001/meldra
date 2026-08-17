@@ -606,7 +606,10 @@ func newChatRuntime(
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
 	agent := NewAgent(&client, getUserMessage, tools)
+	agent.model = settings.Model
+	agent.customProvider = isCustomBaseURL(settings.BaseURL)
 	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
+	agent.maxCustomTurnInputBytes = int(settings.MaxCustomTurnInputBytes)
 	agent.output = output
 	agent.session = session
 	agent.store = store
@@ -638,7 +641,6 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if err != nil {
 		return err
 	}
-	applySettings(settings)
 	if settings.APIKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is not configured; run \"meldra config init\" and add it to %s, or set OPENAI_API_KEY", paths.CredentialsFile)
 	}
@@ -694,6 +696,9 @@ func effectiveSettings(settings Settings) (Settings, error) {
 	if settings.MaxProviderResponseBytes == 0 {
 		settings.MaxProviderResponseBytes = defaultProviderResponseBytes
 	}
+	if settings.MaxCustomTurnInputBytes == 0 {
+		settings.MaxCustomTurnInputBytes = defaultMaxCustomTurnInputBytes
+	}
 	settings, err := overlayEnvironment(settings)
 	if err != nil {
 		return Settings{}, err
@@ -727,19 +732,20 @@ func overlayEnvironment(settings Settings) (Settings, error) {
 		}
 		settings.MaxProviderResponseBytes = limit
 	}
-	return settings, nil
-}
-
-func applySettings(settings Settings) {
-	setEnvironmentIfUnset("OPENAI_API_KEY", settings.APIKey)
-	setEnvironmentIfUnset("OPENAI_MODEL", settings.Model)
-	setEnvironmentIfUnset("OPENAI_BASE_URL", settings.BaseURL)
-}
-
-func setEnvironmentIfUnset(name, value string) {
-	if value != "" && os.Getenv(name) == "" {
-		_ = os.Setenv(name, value)
+	if value := strings.TrimSpace(os.Getenv(CustomTurnInputLimitEnv)); value != "" {
+		limit, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return Settings{}, fmt.Errorf("%s must be an integer: %w", CustomTurnInputLimitEnv, err)
+		}
+		if err := validateCustomTurnInputLimit(limit); err != nil || limit == 0 {
+			if err == nil {
+				err = fmt.Errorf("must be positive")
+			}
+			return Settings{}, fmt.Errorf("%s: %w", CustomTurnInputLimitEnv, err)
+		}
+		settings.MaxCustomTurnInputBytes = limit
 	}
+	return settings, nil
 }
 
 const usageText = `Usage:

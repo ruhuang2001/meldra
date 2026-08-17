@@ -282,23 +282,40 @@ func TestValidateResponse(t *testing.T) {
 }
 
 func TestModelNameCanBeConfigured(t *testing.T) {
-	t.Setenv("OPENAI_MODEL", "gpt-test")
-	if got := modelName(); got != "gpt-test" {
-		t.Fatalf("modelName returned %q, want gpt-test", got)
+	agent := Agent{model: "gpt-test"}
+	if got := agent.modelName(); got != "gpt-test" {
+		t.Fatalf("agent model name returned %q, want gpt-test", got)
 	}
 }
 
 func TestUsesCustomBaseURL(t *testing.T) {
 	for _, baseURL := range []string{"", defaultBaseURL, defaultBaseURL + "/"} {
-		t.Setenv("OPENAI_BASE_URL", baseURL)
-		if usesCustomBaseURL() {
-			t.Errorf("usesCustomBaseURL() = true for official URL %q", baseURL)
+		if isCustomBaseURL(baseURL) {
+			t.Errorf("isCustomBaseURL(%q) = true", baseURL)
 		}
 	}
 
-	t.Setenv("OPENAI_BASE_URL", "https://provider.example/v1")
-	if !usesCustomBaseURL() {
-		t.Error("usesCustomBaseURL() = false for compatible provider URL")
+	if !isCustomBaseURL("https://provider.example/v1") {
+		t.Error("isCustomBaseURL() = false for compatible provider URL")
+	}
+}
+
+func TestAgentRequestUsesInstanceModelInsteadOfEnvironment(t *testing.T) {
+	t.Setenv("OPENAI_MODEL", "environment-model")
+	var requestedModel string
+	agent := Agent{
+		model: "instance-model",
+		createResponse: func(_ context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
+			requestedModel = string(params.Model)
+			response := streamedCompletedResponse(t, "done")
+			return &response, nil
+		},
+	}
+	if _, err := agent.runInference(context.Background(), responses.ResponseNewParamsInputUnion{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if requestedModel != "instance-model" {
+		t.Fatalf("requested model = %q", requestedModel)
 	}
 }
 

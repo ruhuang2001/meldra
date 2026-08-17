@@ -397,6 +397,12 @@ type tuiModel struct {
 	submissionPending bool
 	stopped           bool
 	pending           *tuiApprovalMsg
+
+	completedPrefix        string
+	completedPrefixWidth   int
+	completedPrefixEntries int
+	completedPrefixValid   bool
+	completedPrefixBuilds  uint64
 }
 
 func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
@@ -503,6 +509,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.entries[m.activeTool].active = false
 			m.activeTool = -1
 		}
+		m.invalidateCompletedPrefix()
 		if msg.err != nil {
 			m.status = "Stopped after an error"
 			m.addEntry(tuiEntry{kind: tuiEntryError, text: msg.err.Error()})
@@ -640,6 +647,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 			m.entries[m.activeAssistant].finishStream()
 		}
 		m.activeAssistant = -1
+		m.invalidateCompletedPrefix()
 		m.refreshViewport()
 	case UIEventToolStarted:
 		m.submissionPending = false
@@ -658,6 +666,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 			m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, detail: event.Detail})
 		}
 		m.activeTool = -1
+		m.invalidateCompletedPrefix()
 		// The tool result is now being sent back to the model. Gateways do not
 		// always emit a new response.in_progress event for that follow-up, so
 		// update the visible state here.
@@ -683,6 +692,7 @@ func (m *tuiModel) addEntry(entry tuiEntry) {
 }
 
 func (m *tuiModel) appendEntry(entry tuiEntry) {
+	m.invalidateCompletedPrefix()
 	if len(m.entries) >= tuiMaxVisibleEntries {
 		m.entries = append(m.entries[:0], m.entries[1:]...)
 		m.hiddenEntries++
@@ -718,11 +728,27 @@ func (m *tuiModel) renderViewportTimeline() string {
 	if width <= 0 {
 		return m.renderTimeline()
 	}
-	var output strings.Builder
-	if m.hiddenEntries > 0 {
-		output.WriteString(ansi.Hardwrap(tuiDimStyle.Render(fmt.Sprintf("%d older UI entries hidden; saved session is unaffected", m.hiddenEntries)), width, true))
+	if !m.completedPrefixValid || m.completedPrefixWidth != width {
+		var prefix strings.Builder
+		if m.hiddenEntries > 0 {
+			prefix.WriteString(ansi.Hardwrap(tuiDimStyle.Render(fmt.Sprintf("%d older UI entries hidden; saved session is unaffected", m.hiddenEntries)), width, true))
+		}
+		m.completedPrefixEntries = 0
+		for m.completedPrefixEntries < len(m.entries) && !m.entries[m.completedPrefixEntries].active {
+			if prefix.Len() > 0 {
+				prefix.WriteString("\n\n")
+			}
+			prefix.WriteString(m.renderEntry(&m.entries[m.completedPrefixEntries], width))
+			m.completedPrefixEntries++
+		}
+		m.completedPrefix = prefix.String()
+		m.completedPrefixWidth = width
+		m.completedPrefixValid = true
+		m.completedPrefixBuilds++
 	}
-	for index := range m.entries {
+	var output strings.Builder
+	output.WriteString(m.completedPrefix)
+	for index := m.completedPrefixEntries; index < len(m.entries); index++ {
 		if output.Len() > 0 {
 			output.WriteString("\n\n")
 		}
@@ -735,6 +761,10 @@ func (m *tuiModel) renderViewportTimeline() string {
 		output.WriteString(ansi.Hardwrap(pending, width, true))
 	}
 	return output.String()
+}
+
+func (m *tuiModel) invalidateCompletedPrefix() {
+	m.completedPrefixValid = false
 }
 
 func (m *tuiModel) renderTimeline() string {

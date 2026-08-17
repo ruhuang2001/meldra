@@ -139,7 +139,7 @@ type fileChange struct {
 }
 
 func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if os.IsNotExist(err) {
 		return nil, false, 0o644, nil
 	}
@@ -153,11 +153,14 @@ func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
 		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
 	}
 
-	file, err := os.Open(path)
+	file, openedInfo, err := openCheckedRegularFile(path, info)
 	if err != nil {
 		return nil, false, 0, err
 	}
 	defer file.Close()
+	if openedInfo.Size() > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
 	contents, err := io.ReadAll(io.LimitReader(file, int64(maxEditableFileBytes)+1))
 	if err != nil {
 		return nil, false, 0, err
@@ -165,7 +168,28 @@ func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
 	if len(contents) > maxEditableFileBytes {
 		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
 	}
-	return contents, true, info.Mode().Perm(), nil
+	return contents, true, openedInfo.Mode().Perm(), nil
+}
+
+func openCheckedRegularFile(path string, expected fs.FileInfo) (*os.File, fs.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("target is not a regular file")
+	}
+	if expected == nil || !os.SameFile(expected, opened) {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("file changed while it was being opened")
+	}
+	return file, opened, nil
 }
 
 func validateChangeInput(in changeInput) error {
@@ -313,18 +337,11 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	if !pathInfo.Mode().IsRegular() {
 		return "", fmt.Errorf("read_file only supports regular files")
 	}
-	file, err := os.Open(p)
+	file, _, err := openCheckedRegularFile(p, pathInfo)
 	if err != nil {
 		return "", err
 	}
 	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return "", err
-	}
-	if !info.Mode().IsRegular() {
-		return "", fmt.Errorf("read_file only supports regular files")
-	}
 	off := in.Offset
 	if off == 0 {
 		off = 1
@@ -563,16 +580,11 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 			bounded = true
 			return errStop
 		}
-		file, e := os.Open(path)
+		file, openedInfo, e := openCheckedRegularFile(path, info)
 		if e != nil {
 			return e
 		}
-		openedInfo, e := file.Stat()
-		if e != nil {
-			_ = file.Close()
-			return e
-		}
-		if !openedInfo.Mode().IsRegular() {
+		if openedInfo.Size() > maxSearchBytes {
 			_ = file.Close()
 			return nil
 		}
@@ -1692,6 +1704,10 @@ func allSafeArgs(args []string) bool {
 	return true
 }
 func (w *Workspace) execute(command string, args []string, seconds int) (string, error) {
+	return w.executeWithApproval(command, args, seconds, true)
+}
+
+func (w *Workspace) executeWithApproval(command string, args []string, seconds int, requestApproval bool) (string, error) {
 	if !allowed(command, args) {
 		return "", fmt.Errorf("command is not allowlisted")
 	}
@@ -1771,7 +1787,7 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 	if w.contextErr() != nil {
 		return "Command cancelled before start.\n[cancelled]", nil
 	}
-	if commandRequiresApproval(command) && !w.confirmCommand(command, args) {
+	if requestApproval && commandRequiresApproval(command) && !w.confirmCommand(command, args) {
 		return "Declined; command not run.", nil
 	}
 	parent := w.ctx
@@ -1842,19 +1858,23 @@ func commandRequiresApproval(command string) bool {
 }
 
 func (w *Workspace) confirmCommand(command string, args []string) bool {
-	var rendered strings.Builder
-	rendered.WriteString(command)
-	for _, argument := range args {
-		rendered.WriteByte(' ')
-		rendered.WriteString(strconv.Quote(argument))
-	}
-	text := rendered.String()
+	text := renderCommand(command, args)
 	return w.requestApproval(ApprovalRequest{
 		Kind:   ApprovalCommand,
 		Title:  "Run command with OS user privileges",
 		Detail: text + "\n\nThis command runs repository code with your OS user privileges and may access the filesystem and network.",
 		Prompt: fmt.Sprintf("Run command with OS-user privileges? %s [y/N] ", text),
 	})
+}
+
+func renderCommand(command string, args []string) string {
+	var rendered strings.Builder
+	rendered.WriteString(command)
+	for _, argument := range args {
+		rendered.WriteByte(' ')
+		rendered.WriteString(strconv.Quote(argument))
+	}
+	return rendered.String()
 }
 
 func newCommandEnvironment() ([]string, func(), error) {
@@ -1941,15 +1961,36 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	needsApproval := false
+	var plan strings.Builder
+	for _, command := range commands {
+		if commandRequiresApproval(command.command) {
+			needsApproval = true
+		}
+		if plan.Len() > 0 {
+			plan.WriteByte('\n')
+		}
+		plan.WriteString(renderCommand(command.command, command.args))
+	}
+	if needsApproval && !w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalCommand,
+		Title:  "Run verification plan with OS user privileges",
+		Detail: plan.String() + "\n\nThese commands run repository code with your OS user privileges and may access the filesystem and network.",
+		Prompt: fmt.Sprintf("Run verification plan with OS-user privileges?\n%s\nApprove %d command(s)? [y/N] ", plan.String(), len(commands)),
+	}) {
+		return "Declined; verification not run.", nil
+	}
+
 	var output strings.Builder
 	for index, command := range commands {
-		result, err := w.execute(command.command, command.args, 120)
+		result, err := w.executeWithApproval(command.command, command.args, 120, false)
 		if err != nil {
 			return "", err
 		}
 		if index > 0 {
 			output.WriteString("\n\n")
 		}
+		fmt.Fprintf(&output, "verification %d/%d\n", index+1, len(commands))
 		output.WriteString(result)
 	}
 	return output.String(), nil
@@ -2063,8 +2104,22 @@ func (w *Workspace) readRootFile(name string) ([]byte, bool, error) {
 	if info.Size() > maxEditableFileBytes {
 		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
 	}
-	contents, err := os.ReadFile(path)
-	return contents, true, err
+	file, openedInfo, err := openCheckedRegularFile(path, info)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	if openedInfo.Size() > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, int64(maxEditableFileBytes)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(contents) > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	return contents, true, nil
 }
 
 func (w *Workspace) nodeProject() (map[string]string, string, bool, error) {

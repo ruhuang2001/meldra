@@ -6,10 +6,75 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestNewSessionIDUses128RandomBitsAndFilenameCompatibleFormat(t *testing.T) {
+	format := regexp.MustCompile(`^\d{8}-\d{6}-[0-9a-f]{32}$`)
+	seen := make(map[string]bool)
+	for range 100 {
+		id, err := newSessionID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !format.MatchString(id) || !validSessionID(id) {
+			t.Fatalf("session ID %q does not have the timestamp and 128-bit hex format", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate session ID %q", id)
+		}
+		seen[id] = true
+	}
+	if !validSessionID("20260817-120000-deadbeef") {
+		t.Fatal("legacy 32-bit session ID is no longer accepted")
+	}
+}
+
+func TestSessionStoreRejectsStaleConcurrentSave(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	original, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Load(original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := store.Load(original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Summary = "winning state"
+	if err := store.Save(first); err != nil {
+		t.Fatal(err)
+	}
+	winner, err := os.ReadFile(store.path(original.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale.Summary = "state that must not be written"
+	if err := store.Save(stale); err == nil || !strings.Contains(err.Error(), "has changed") || strings.Contains(err.Error(), stale.Summary) {
+		t.Fatalf("stale Save error = %v", err)
+	}
+	after, err := os.ReadFile(store.path(original.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, winner) {
+		t.Fatal("stale save changed the winning session file")
+	}
+	first.Summary = "second save by winner"
+	if err := store.Save(first); err != nil {
+		t.Fatalf("repeated save by winning Session failed: %v", err)
+	}
+}
 
 func TestSessionStoreSaveLoadLatestAndPermissions(t *testing.T) {
 	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))

@@ -185,6 +185,7 @@ func TestAgentStreamsDeltasToUIEvents(t *testing.T) {
 	var events []UIEvent
 	var output bytes.Buffer
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("reply"),
 		output:         &output,
 		events: UIEventSinkFunc(func(event UIEvent) {
@@ -305,6 +306,7 @@ func TestAgentReconstructsGatewayOutputItemsAfterToolCall(t *testing.T) {
 	toolCalls := 0
 	var events []UIEvent
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("use the tool"),
 		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
 			toolCalls++
@@ -353,6 +355,7 @@ func TestAgentReplaysFullToolContextForCustomBaseURL(t *testing.T) {
 	}
 	var params []responses.ResponseNewParams
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("use the tool"),
 		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
 			return "ok", nil
@@ -409,6 +412,7 @@ func TestAgentRejectsEmptyCustomToolFollowUpWithoutRetry(t *testing.T) {
 	toolCalls := 0
 	var params []responses.ResponseNewParams
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("use the tool"),
 		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
 			toolCalls++
@@ -492,6 +496,7 @@ func TestAgentStreamsForCustomBaseURL(t *testing.T) {
 		{Type: "response.completed", Response: streamedCompletedResponse(t, "streamed reply")},
 	}}
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("reply"),
 		output:         &bytes.Buffer{},
 		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
@@ -539,6 +544,7 @@ func TestAgentStreamsFromCustomResponseSSEEndpoint(t *testing.T) {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	var output bytes.Buffer
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.output = &output
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -585,6 +591,7 @@ func TestAgentStreamsFromCustomSSEEndpointWithoutContentType(t *testing.T) {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	firstDelta := make(chan struct{}, 1)
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.events = UIEventSinkFunc(func(event UIEvent) {
 		if event.Kind == UIEventAssistantDelta {
 			select {
@@ -628,6 +635,7 @@ func TestAgentFallsBackForCustomBaseURLWhenStreamingIsUnsupported(t *testing.T) 
 	responseCalled := 0
 	stream := &scriptedResponseStream{err: &openai.Error{StatusCode: http.StatusBadRequest, Message: "streaming is not supported"}}
 	agent := Agent{
+		customProvider: true,
 		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
 			streamCalled++
 			return stream
@@ -675,6 +683,7 @@ func TestAgentUsesOneRequestWhenCustomEndpointReturnsJSONForStream(t *testing.T)
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	var output bytes.Buffer
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.output = &output
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -718,6 +727,7 @@ func TestAgentNormalizesPrettyPrintedJSONForStream(t *testing.T) {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	var output bytes.Buffer
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.output = &output
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatal(err)
@@ -769,6 +779,7 @@ func TestAgentDoesNotRetryOversizedProviderResponse(t *testing.T) {
 
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.maxProviderResponseBytes = limit
 	err := agent.Run(context.Background())
 	var limitErr *providerResponseLimitError
@@ -820,6 +831,7 @@ func TestAgentNormalizesEscapableJSONWithoutExpandingResponseBudget(t *testing.T
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	var output bytes.Buffer
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.maxProviderResponseBytes = limit
 	agent.output = &output
 	if err := agent.Run(context.Background()); err != nil {
@@ -905,6 +917,7 @@ func TestAgentFallsBackWhenCustomEndpointRejectsStreamingJSON(t *testing.T) {
 	client := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(server.URL))
 	var output bytes.Buffer
 	agent := NewAgent(&client, userMessages("reply"), nil)
+	agent.customProvider = true
 	agent.output = &output
 
 	if err := agent.Run(context.Background()); err != nil {
@@ -923,6 +936,7 @@ func TestAgentDoesNotFallbackForTransientCustomStreamError(t *testing.T) {
 	want := context.DeadlineExceeded
 	stream := &scriptedResponseStream{err: want}
 	agent := Agent{
+		customProvider: true,
 		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
 			return stream
 		},
@@ -963,6 +977,7 @@ func TestAgentDoesNotFallbackAfterCustomStreamBegins(t *testing.T) {
 		{Type: "response.output_text.delta", Delta: "partial"},
 	}, err: errors.New("connection dropped")}
 	agent := Agent{
+		customProvider: true,
 		getUserMessage: userMessages("reply"),
 		createStream: func(context.Context, responses.ResponseNewParams) responseStream {
 			return stream

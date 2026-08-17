@@ -105,6 +105,66 @@ func TestTUIModelCachesCompletedEntriesAndBoundsHistory(t *testing.T) {
 	}
 }
 
+func TestTUIModelReusesCompletedPrefixDuringAssistantDeltas(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 44
+	model.height = 24
+	model.entries = []tuiEntry{
+		{kind: tuiEntryUser, text: "a completed question that wraps across lines"},
+		{kind: tuiEntryNotice, text: "completed notice"},
+	}
+	model.resize()
+	model.applyEvent(UIEvent{Kind: UIEventAssistantDelta, Text: "first"})
+	builds := model.completedPrefixBuilds
+	first := model.renderViewportTimeline()
+
+	model.applyEvent(UIEvent{Kind: UIEventAssistantDelta, Text: " second"})
+	got := model.renderViewportTimeline()
+	if model.completedPrefixBuilds != builds {
+		t.Fatalf("completed prefix builds = %d, want unchanged %d", model.completedPrefixBuilds, builds)
+	}
+	if !strings.Contains(first, "first") || !strings.Contains(got, "first second") {
+		t.Fatalf("streamed timelines = %q then %q", first, got)
+	}
+	if want := renderViewportTimelineWithoutPrefixCache(model); got != want {
+		t.Fatalf("cached timeline differs from full render\ngot:  %q\nwant: %q", got, want)
+	}
+
+	model.width = 30
+	model.resize()
+	if model.completedPrefixBuilds != builds+1 {
+		t.Fatalf("prefix was not rebuilt after resize: builds = %d, want %d", model.completedPrefixBuilds, builds+1)
+	}
+	model.applyEvent(UIEvent{Kind: UIEventNotice, Text: "history changed"})
+	if model.completedPrefixBuilds != builds+2 {
+		t.Fatalf("prefix was not rebuilt after history mutation: builds = %d, want %d", model.completedPrefixBuilds, builds+2)
+	}
+	if got, want := model.renderViewportTimeline(), renderViewportTimelineWithoutPrefixCache(model); got != want {
+		t.Fatalf("mutated cached timeline differs from full render\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func renderViewportTimelineWithoutPrefixCache(model *tuiModel) string {
+	width := model.viewport.Width()
+	var output strings.Builder
+	if model.hiddenEntries > 0 {
+		output.WriteString(ansi.Hardwrap(tuiDimStyle.Render(fmt.Sprintf("%d older UI entries hidden; saved session is unaffected", model.hiddenEntries)), width, true))
+	}
+	for index := range model.entries {
+		if output.Len() > 0 {
+			output.WriteString("\n\n")
+		}
+		output.WriteString(model.renderEntry(&model.entries[index], width))
+	}
+	if pending := model.renderPending(); pending != "" {
+		if output.Len() > 0 {
+			output.WriteString("\n\n")
+		}
+		output.WriteString(ansi.Hardwrap(pending, width, true))
+	}
+	return output.String()
+}
+
 func TestTUIModelShowsTurnMetrics(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{})
 	model.width = 120

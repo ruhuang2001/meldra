@@ -106,11 +106,11 @@ func TestLoadConfigRejectsInvalidTOML(t *testing.T) {
 }
 
 func TestConfigTOMLSupportedSyntaxAndValidation(t *testing.T) {
-	config, err := parseConfigTOML("model = 'model#name' # comment\nbase_url = \"https://example.test/v1#fragment\"\nmax_provider_response_bytes = 8192\nfuture_key = \"ignored\"\n")
+	config, err := parseConfigTOML("model = 'model#name' # comment\nbase_url = \"https://example.test/v1#fragment\"\nmax_provider_response_bytes = 8192\nmax_custom_turn_input_bytes = 4096\nfuture_key = \"ignored\"\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Model != "model#name" || config.BaseURL != "https://example.test/v1#fragment" || config.MaxProviderResponseBytes != 8192 {
+	if config.Model != "model#name" || config.BaseURL != "https://example.test/v1#fragment" || config.MaxProviderResponseBytes != 8192 || config.MaxCustomTurnInputBytes != 4096 {
 		t.Fatalf("parsed config = %#v", config)
 	}
 	for _, contents := range []string{
@@ -122,6 +122,9 @@ func TestConfigTOMLSupportedSyntaxAndValidation(t *testing.T) {
 		"max_provider_response_bytes = 0\n",
 		"max_provider_response_bytes = -1\n",
 		fmt.Sprintf("max_provider_response_bytes = %d\n", maximumProviderResponseBytes+1),
+		"max_custom_turn_input_bytes = 0\n",
+		"max_custom_turn_input_bytes = -1\n",
+		fmt.Sprintf("max_custom_turn_input_bytes = %d\n", maximumCustomTurnInputBytes+1),
 	} {
 		if _, err := parseConfigTOML(contents); err == nil {
 			t.Errorf("accepted invalid config %q", contents)
@@ -217,7 +220,7 @@ func TestEnvironmentOverridesFilesAndConfigShowRedactsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := SaveConfig(paths, Config{Model: "file-model", BaseURL: "https://file.example/v1", MaxProviderResponseBytes: 8192}); err != nil {
+	if err := SaveConfig(paths, Config{Model: "file-model", BaseURL: "https://file.example/v1", MaxProviderResponseBytes: 8192, MaxCustomTurnInputBytes: 16384}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveAPIKey(paths, "file-secret-key"); err != nil {
@@ -227,13 +230,14 @@ func TestEnvironmentOverridesFilesAndConfigShowRedactsKey(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", "https://env.example/v1")
 	t.Setenv("OPENAI_API_KEY", "env-secret-key")
 	t.Setenv(ProviderResponseLimitEnv, "4096")
+	t.Setenv(CustomTurnInputLimitEnv, "8192")
 
 	var output bytes.Buffer
 	if err := runCLI([]string{"config", "show"}, strings.NewReader(""), &output); err != nil {
 		t.Fatal(err)
 	}
 	got := output.String()
-	for _, want := range []string{home, "model=env-model", "base_url=https://env.example/v1", "max_provider_response_bytes=4096", "openai_api_key=********"} {
+	for _, want := range []string{home, "model=env-model", "base_url=https://env.example/v1", "max_provider_response_bytes=4096", "max_custom_turn_input_bytes=8192", "openai_api_key=********"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config show output does not contain %q:\n%s", want, got)
 		}
@@ -372,6 +376,23 @@ func TestProviderResponseLimitEnvironmentValidation(t *testing.T) {
 	settings, err := effectiveSettings(Settings{})
 	if err != nil || settings.MaxProviderResponseBytes != 8192 {
 		t.Fatalf("effective provider response limit = %#v, %v", settings, err)
+	}
+}
+
+func TestCustomTurnInputLimitEnvironmentValidation(t *testing.T) {
+	for _, value := range []string{"not-a-number", "0", "-1", fmt.Sprint(maximumCustomTurnInputBytes + 1)} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv(CustomTurnInputLimitEnv, value)
+			if _, err := effectiveSettings(Settings{}); err == nil {
+				t.Fatalf("effectiveSettings accepted %s=%q", CustomTurnInputLimitEnv, value)
+			}
+		})
+	}
+
+	t.Setenv(CustomTurnInputLimitEnv, "8192")
+	settings, err := effectiveSettings(Settings{})
+	if err != nil || settings.MaxCustomTurnInputBytes != 8192 {
+		t.Fatalf("effective custom context limit = %#v, %v", settings, err)
 	}
 }
 
