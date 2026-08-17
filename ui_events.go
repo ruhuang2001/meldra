@@ -5,10 +5,22 @@ import "context"
 // UIEvent is a presentation-safe update emitted by the agent while it works.
 // It deliberately excludes raw requests, model reasoning, and credentials.
 type UIEvent struct {
-	Kind   UIEventKind
-	Text   string
-	Name   string
-	Detail string
+	Kind    UIEventKind
+	Text    string
+	Name    string
+	Detail  string
+	Metrics *UIMetrics
+}
+
+// UIMetrics contains safe per-turn progress and provider usage totals.
+type UIMetrics struct {
+	InferenceSteps int
+	InferenceLimit int
+	ToolCalls      int
+	ToolCallLimit  int
+	ContextBytes   int
+	InputTokens    int64
+	OutputTokens   int64
 }
 
 type UIEventKind string
@@ -21,6 +33,7 @@ const (
 	UIEventAssistantDone    UIEventKind = "assistant_done"
 	UIEventToolStarted      UIEventKind = "tool_started"
 	UIEventToolFinished     UIEventKind = "tool_finished"
+	UIEventMetrics          UIEventKind = "metrics"
 	UIEventNotice           UIEventKind = "notice"
 	UIEventError            UIEventKind = "error"
 )

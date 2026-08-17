@@ -69,7 +69,7 @@ func TestTUIModelAccumulatesAndCompletesAssistantDeltas(t *testing.T) {
 		t.Fatalf("active assistant index = %d, want 1", model.activeAssistant)
 	}
 	entry := model.entries[model.activeAssistant]
-	if entry.text != "first second" || !entry.active {
+	if entry.content() != "first second" || !entry.active {
 		t.Fatalf("active assistant entry = %#v", entry)
 	}
 
@@ -82,6 +82,48 @@ func TestTUIModelAccumulatesAndCompletesAssistantDeltas(t *testing.T) {
 	}
 	if timeline := model.renderTimeline(); !strings.Contains(timeline, "first second") {
 		t.Fatalf("timeline does not include streamed reply: %q", timeline)
+	}
+}
+
+func TestTUIModelCachesCompletedEntriesAndBoundsHistory(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 80
+	model.height = 24
+	model.resize()
+	for index := 0; index < tuiMaxVisibleEntries+5; index++ {
+		model.addEntry(tuiEntry{kind: tuiEntryNotice, text: fmt.Sprintf("entry %d", index)})
+	}
+	if len(model.entries) != tuiMaxVisibleEntries || model.hiddenEntries != 5 {
+		t.Fatalf("visible entries = %d, hidden = %d", len(model.entries), model.hiddenEntries)
+	}
+	view := model.renderViewportTimeline()
+	if !strings.Contains(view, "5 older UI entries hidden") || strings.Contains(view, "entry 0") || !strings.Contains(view, "entry 204") {
+		t.Fatalf("bounded timeline = %q", view)
+	}
+	if model.entries[0].cached == "" || model.entries[0].cachedWidth != model.viewport.Width() {
+		t.Fatalf("completed entry was not cached: %#v", model.entries[0])
+	}
+}
+
+func TestTUIModelShowsTurnMetrics(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 120
+	model.height = 24
+	model.resize()
+	model.applyEvent(UIEvent{Kind: UIEventMetrics, Metrics: &UIMetrics{
+		InferenceSteps: 2,
+		InferenceLimit: 20,
+		ToolCalls:      3,
+		ToolCallLimit:  50,
+		ContextBytes:   2048,
+		InputTokens:    123,
+		OutputTokens:   45,
+	}})
+	view := model.View().Content
+	for _, want := range []string{"steps 2/20", "tools 3/50", "ctx 2.0 KiB", "tokens 123↓/45↑"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("TUI view missing %q: %s", want, view)
+		}
 	}
 }
 
@@ -571,7 +613,7 @@ func TestTUIControllerDeliversAgentEventsInOrder(t *testing.T) {
 	var output bytes.Buffer
 	model := &observingTUIModel{
 		model:  newTUIModel(controller, tuiInitialState{}),
-		events: make(chan UIEvent, 8),
+		events: make(chan UIEvent, 16),
 	}
 	program := tea.NewProgram(
 		model,
@@ -626,13 +668,19 @@ func TestTUIControllerDeliversAgentEventsInOrder(t *testing.T) {
 		UIEventStatus,
 	}
 	for index, kind := range want {
-		select {
-		case event := <-model.events:
-			if event.Kind != kind {
-				t.Fatalf("event %d = %q, want %q", index, event.Kind, kind)
+		for {
+			select {
+			case event := <-model.events:
+				if event.Kind == UIEventMetrics {
+					continue
+				}
+				if event.Kind != kind {
+					t.Fatalf("event %d = %q, want %q", index, event.Kind, kind)
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("event %d (%q) was not delivered", index, kind)
 			}
-		case <-time.After(time.Second):
-			t.Fatalf("event %d (%q) was not delivered", index, kind)
+			break
 		}
 	}
 

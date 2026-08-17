@@ -280,7 +280,7 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv(ProviderResponseLimitEnv, "")
-	if err := SaveConfig(paths, Config{Model: configuredModel, BaseURL: server.URL}); err != nil {
+	if err := SaveConfig(paths, Config{Model: configuredModel, BaseURL: server.URL, AllowInsecureBaseURL: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveAPIKey(paths, "file-api-key"); err != nil {
@@ -324,7 +324,7 @@ func TestConfiguredProviderResponseLimitReachesChat(t *testing.T) {
 	t.Setenv("OPENAI_MODEL", "")
 	t.Setenv("OPENAI_BASE_URL", "")
 	t.Setenv(ProviderResponseLimitEnv, "")
-	if err := SaveConfig(paths, Config{BaseURL: server.URL, MaxProviderResponseBytes: limit}); err != nil {
+	if err := SaveConfig(paths, Config{BaseURL: server.URL, AllowInsecureBaseURL: true, MaxProviderResponseBytes: limit}); err != nil {
 		t.Fatal(err)
 	}
 	if err := SaveAPIKey(paths, "file-api-key"); err != nil {
@@ -372,6 +372,85 @@ func TestProviderResponseLimitEnvironmentValidation(t *testing.T) {
 	settings, err := effectiveSettings(Settings{})
 	if err != nil || settings.MaxProviderResponseBytes != 8192 {
 		t.Fatalf("effective provider response limit = %#v, %v", settings, err)
+	}
+}
+
+func TestProviderBaseURLValidation(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseURL       string
+		allowInsecure bool
+		wantError     string
+	}{
+		{name: "default HTTPS", baseURL: defaultBaseURL},
+		{name: "custom HTTPS", baseURL: "https://provider.example/v1"},
+		{name: "loopback HTTP requires opt in", baseURL: "http://127.0.0.1:8080/v1", wantError: "allow_insecure_base_url"},
+		{name: "localhost HTTP with opt in", baseURL: "http://localhost:8080/v1", allowInsecure: true},
+		{name: "IPv4 loopback HTTP with opt in", baseURL: "http://127.0.0.1:8080/v1", allowInsecure: true},
+		{name: "IPv6 loopback HTTP with opt in", baseURL: "http://[::1]:8080/v1", allowInsecure: true},
+		{name: "public HTTP remains forbidden", baseURL: "http://provider.example/v1", allowInsecure: true, wantError: "only allowed for loopback"},
+		{name: "missing scheme", baseURL: "provider.example/v1", wantError: "absolute HTTP(S) URL"},
+		{name: "missing host", baseURL: "https:///v1", wantError: "absolute HTTP(S) URL"},
+		{name: "embedded credentials", baseURL: "https://user:password@provider.example/v1", wantError: "without credentials"},
+		{name: "query", baseURL: "https://provider.example/v1?key=value", wantError: "query or fragment"},
+		{name: "fragment", baseURL: "https://provider.example/v1#fragment", wantError: "query or fragment"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateProviderBaseURL(test.baseURL, test.allowInsecure)
+			if test.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("validation error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestProviderURLConfigRoundTripAndEnvironmentValidation(t *testing.T) {
+	paths := mustConfigPaths(t)
+	config := Config{
+		Model:                "custom-model",
+		BaseURL:              "http://localhost:8080/v1",
+		AllowInsecureBaseURL: true,
+	}
+	if err := SaveConfig(paths, config); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadConfig(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.AllowInsecureBaseURL != config.AllowInsecureBaseURL || loaded.BaseURL != config.BaseURL {
+		t.Fatalf("loaded config = %#v, want %#v", loaded, config)
+	}
+
+	t.Setenv("OPENAI_BASE_URL", "http://provider.example/v1")
+	_, err = effectiveSettings(Settings{AllowInsecureBaseURL: true})
+	if err == nil || !strings.Contains(err.Error(), "only allowed for loopback") {
+		t.Fatalf("environment URL validation error = %v", err)
+	}
+}
+
+func TestProviderCredentialWarningNamesHostWithoutLeakingKey(t *testing.T) {
+	const secret = "sk-provider-secret"
+	warning := providerCredentialWarning(Settings{
+		APIKey:  secret,
+		BaseURL: "https://provider.example:8443/v1",
+	})
+	if !strings.Contains(warning, "provider.example:8443") {
+		t.Fatalf("warning = %q", warning)
+	}
+	if strings.Contains(warning, secret) {
+		t.Fatalf("warning leaked API key: %q", warning)
+	}
+	if warning := providerCredentialWarning(Settings{BaseURL: defaultBaseURL}); warning != "" {
+		t.Fatalf("default provider warning = %q", warning)
 	}
 }
 

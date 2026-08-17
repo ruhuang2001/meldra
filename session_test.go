@@ -176,12 +176,109 @@ func TestSessionListSkipsEmptySessionsWithoutDeleting(t *testing.T) {
 	if err := store.Save(withMessages); err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := store.List()
-	if err != nil || len(sessions) != 1 || sessions[0].ID != withMessages.ID {
-		t.Fatalf("sessions = %#v, error = %v", sessions, err)
+	sessions, diagnostics, err := store.ListWithDiagnostics()
+	if err != nil || len(sessions) != 1 || sessions[0].ID != withMessages.ID || diagnostics.SkippedFiles != 0 {
+		t.Fatalf("sessions = %#v, diagnostics = %#v, error = %v", sessions, diagnostics, err)
 	}
 	if _, err := os.Stat(store.path(empty.ID)); err != nil {
 		t.Fatalf("empty session file was deleted, stat error = %v", err)
+	}
+}
+
+func TestSessionStoreRejectsOversizedFileBeforeDecode(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	if err := store.ensureDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.path("oversized"), make([]byte, maxSessionFileBytes+1), privateFilePerm); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load("oversized"); err == nil || !strings.Contains(err.Error(), "byte limit") {
+		t.Fatalf("Load error = %v, want byte limit error", err)
+	}
+	sessions, diagnostics, err := store.ListWithDiagnostics()
+	if err != nil || len(sessions) != 0 || diagnostics.SkippedFiles != 1 {
+		t.Fatalf("ListWithDiagnostics = %#v, %#v, %v", sessions, diagnostics, err)
+	}
+}
+
+func TestSessionStoreValidatesLoadedFieldLimits(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	if err := store.ensureDir(); err != nil {
+		t.Fatal(err)
+	}
+	base := Session{ID: "bounded", Workspace: t.TempDir()}
+	tests := map[string]func(*Session){
+		"message count": func(session *Session) {
+			session.Messages = make([]SessionMessage, maxSessionMessages+1)
+			for index := range session.Messages {
+				session.Messages[index] = SessionMessage{Role: "user", Content: "x"}
+			}
+		},
+		"message role": func(session *Session) { session.Messages = []SessionMessage{{Role: "tool", Content: "x"}} },
+		"message bytes": func(session *Session) {
+			session.Messages = []SessionMessage{{Role: "user", Content: strings.Repeat("x", maxSessionMessageBytes+1)}}
+		},
+		"plan count": func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
+		"plan step":  func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
+		"summary":    func(session *Session) { session.Summary = strings.Repeat("x", maxSessionSummaryBytes+1) },
+		"workspace":  func(session *Session) { session.Workspace = strings.Repeat("x", maxSessionPathBytes+1) },
+		"provider ID": func(session *Session) {
+			session.PreviousResponseID = strings.Repeat("x", maxSessionProviderIDBytes+1)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			session := base
+			mutate(&session)
+			contents, err := json.Marshal(session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(store.path(session.ID), contents, privateFilePerm); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Load(session.ID); err == nil {
+				t.Fatal("Load accepted invalid bounded field")
+			}
+		})
+	}
+}
+
+func TestSessionListRetainsOnlyLatestUserMessageForPreview(t *testing.T) {
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "meldra-home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewSessionStore(paths)
+	session, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "older preview")
+	session.appendMessage("assistant", "large history that listing need not retain")
+	session.appendMessage("user", "latest preview")
+	session.appendMessage("assistant", "final response")
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := store.List()
+	if err != nil || len(sessions) != 1 {
+		t.Fatalf("List = %#v, %v", sessions, err)
+	}
+	if got := sessionListPreview(sessions[0]); got != "latest preview" {
+		t.Fatalf("preview = %q, want latest preview", got)
+	}
+	if len(sessions[0].Messages) > 2 || sessions[0].Messages[len(sessions[0].Messages)-2].Content != "latest preview" {
+		t.Fatalf("retained messages = %#v", sessions[0].Messages)
 	}
 }
 

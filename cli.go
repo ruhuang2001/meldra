@@ -547,6 +547,84 @@ func (m *sessionPickerModel) View() tea.View {
 	return view
 }
 
+type chatRuntime struct {
+	store      *SessionStore
+	session    *Session
+	workspace  *Workspace
+	agent      *Agent
+	newSession bool
+}
+
+func newChatRuntime(
+	ctx context.Context,
+	paths ConfigPaths,
+	settings Settings,
+	options ChatOptions,
+	newWorkspace func(string, bool) (*Workspace, error),
+	getUserMessage func() (string, bool),
+	output io.Writer,
+) (*chatRuntime, error) {
+	store := NewSessionStore(paths)
+	var session *Session
+	var err error
+	if options.Resume != "" {
+		session, err = store.Load(options.Resume)
+		if err != nil {
+			return nil, err
+		}
+		if !options.workspaceExplicit {
+			options.Workspace = session.Workspace
+		}
+	}
+	if options.Workspace == "" {
+		options.Workspace, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("resolve current workspace: %w", err)
+		}
+	}
+	workspace, err := newWorkspace(options.Workspace, options.AutoApprove)
+	if err != nil {
+		return nil, err
+	}
+	if err := workspace.ProtectPath(paths.Home); err != nil {
+		return nil, err
+	}
+	workspace.SetContext(ctx)
+	if session != nil && session.Workspace != workspace.root {
+		return nil, fmt.Errorf("session %s belongs to workspace %s, not %s", session.ID, session.Workspace, workspace.root)
+	}
+	if session == nil {
+		session, err = store.New(workspace.root)
+		if err != nil {
+			return nil, err
+		}
+	}
+	client := openai.NewClient(
+		option.WithAPIKey(settings.APIKey),
+		option.WithBaseURL(settings.BaseURL),
+	)
+	tools := workspace.ToolDefinitions()
+	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
+	agent := NewAgent(&client, getUserMessage, tools)
+	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
+	agent.output = output
+	agent.session = session
+	agent.store = store
+	return &chatRuntime{
+		store:      store,
+		session:    session,
+		workspace:  workspace,
+		agent:      agent,
+		newSession: !session.resumed,
+	}, nil
+}
+
+func (runtime *chatRuntime) deleteEmptyNewSession() {
+	if runtime.newSession && len(runtime.session.Messages) == 0 {
+		_ = runtime.store.Delete(runtime.session.ID)
+	}
+}
+
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
 	paths, err := ResolveConfigPaths()
 	if err != nil {
@@ -564,56 +642,15 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if settings.APIKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is not configured; run \"meldra config init\" and add it to %s, or set OPENAI_API_KEY", paths.CredentialsFile)
 	}
+	providerWarning := providerCredentialWarning(settings)
 	if shouldUseTUI(stdin, stdout) {
-		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
+		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options, providerWarning)
+	}
+	if providerWarning != "" {
+		fmt.Fprintln(stdout, providerWarning)
 	}
 
 	reader := bufferedInput(stdin)
-	store := NewSessionStore(paths)
-	var session *Session
-	if options.Resume != "" {
-		session, err = store.Load(options.Resume)
-		if err != nil {
-			return err
-		}
-		if !options.workspaceExplicit {
-			options.Workspace = session.Workspace
-		}
-	}
-	if options.Workspace == "" {
-		options.Workspace, err = os.Getwd()
-		if err != nil {
-			return fmt.Errorf("resolve current workspace: %w", err)
-		}
-	}
-	workspace, err := NewWorkspace(options.Workspace, reader, stdout, options.AutoApprove)
-	if err != nil {
-		return err
-	}
-	if err := workspace.ProtectPath(paths.Home); err != nil {
-		return err
-	}
-	workspace.SetContext(ctx)
-	if session != nil && session.Workspace != workspace.root {
-		return fmt.Errorf("session %s belongs to workspace %s, not %s", session.ID, session.Workspace, workspace.root)
-	}
-	if session == nil {
-		session, err = store.New(workspace.root)
-		if err != nil {
-			return err
-		}
-	}
-	isNewSession := session != nil && !session.resumed
-	defer func() {
-		if isNewSession && len(session.Messages) == 0 {
-			_ = store.Delete(session.ID)
-		}
-	}()
-
-	client := openai.NewClient(
-		option.WithAPIKey(settings.APIKey),
-		option.WithBaseURL(settings.BaseURL),
-	)
 	var readErr error
 	initialPrompt := options.Prompt
 	getUserMessage := func() (string, bool) {
@@ -632,16 +669,16 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		}
 		return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), true
 	}
+	runtime, err := newChatRuntime(ctx, paths, settings, options, func(root string, autoApprove bool) (*Workspace, error) {
+		return NewWorkspace(root, reader, stdout, autoApprove)
+	}, getUserMessage, stdout)
+	if err != nil {
+		return err
+	}
+	defer runtime.deleteEmptyNewSession()
 
-	tools := workspace.ToolDefinitions()
-	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
-	agent := NewAgent(&client, getUserMessage, tools)
-	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
-	agent.output = stdout
-	agent.session = session
-	agent.store = store
-	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", session.ID, sanitizeTerminalText(workspace.root))
-	if err := agent.Run(ctx); err != nil {
+	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
+	if err := runtime.agent.Run(ctx); err != nil {
 		return err
 	}
 	return readErr
@@ -657,7 +694,14 @@ func effectiveSettings(settings Settings) (Settings, error) {
 	if settings.MaxProviderResponseBytes == 0 {
 		settings.MaxProviderResponseBytes = defaultProviderResponseBytes
 	}
-	return overlayEnvironment(settings)
+	settings, err := overlayEnvironment(settings)
+	if err != nil {
+		return Settings{}, err
+	}
+	if err := validateProviderBaseURL(settings.BaseURL, settings.AllowInsecureBaseURL); err != nil {
+		return Settings{}, err
+	}
+	return settings, nil
 }
 
 func overlayEnvironment(settings Settings) (Settings, error) {

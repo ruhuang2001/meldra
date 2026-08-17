@@ -19,6 +19,14 @@ import (
 const (
 	sessionsDirName                = "sessions"
 	maxSessionMessageBytes         = 16 << 10
+	maxSessionFileBytes            = 2 << 20
+	maxSessionMessages             = 100
+	maxSessionIDBytes              = 256
+	maxSessionPathBytes            = 32 << 10
+	maxSessionProviderIDBytes      = 32 << 10
+	maxSessionPlanSteps            = 20
+	maxSessionPlanStepBytes        = 32 << 10
+	maxSessionSummaryBytes         = 32 << 10
 	sessionMessageTruncationSuffix = "\n[truncated]"
 )
 
@@ -92,14 +100,20 @@ func (s *SessionStore) Save(session *Session) error {
 		return err
 	}
 	session.UpdatedAt = time.Now().UTC()
-	if len(session.Messages) > 100 {
-		session.Messages = append([]SessionMessage(nil), session.Messages[len(session.Messages)-100:]...)
+	if len(session.Messages) > maxSessionMessages {
+		session.Messages = append([]SessionMessage(nil), session.Messages[len(session.Messages)-maxSessionMessages:]...)
+	}
+	if err := validateSession(session, session.ID); err != nil {
+		return fmt.Errorf("invalid session: %w", err)
 	}
 	contents, err := json.MarshalIndent(session, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode session: %w", err)
 	}
 	contents = append(contents, '\n')
+	if len(contents) > maxSessionFileBytes {
+		return fmt.Errorf("session file exceeds %d byte limit", maxSessionFileBytes)
+	}
 	target := s.path(session.ID)
 	temp, err := os.CreateTemp(s.dir, ".session-*.tmp")
 	if err != nil {
@@ -164,7 +178,7 @@ func (s *SessionStore) Load(id string) (*Session, error) {
 		}
 		return nil, fmt.Errorf("parse session %q: trailing data: %w", id, err)
 	}
-	if session.ID != id || session.Workspace == "" {
+	if err := validateSession(&session, id); err != nil {
 		return nil, fmt.Errorf("session %q is invalid", id)
 	}
 	session.resumed = true
@@ -213,12 +227,12 @@ func (s *SessionStore) ListWithDiagnostics() ([]Session, SessionListDiagnostics,
 		if !validSessionID(id) {
 			continue
 		}
-		session, err := s.Load(id)
+		session, messageCount, err := readSessionListMetadata(s.path(id), id)
 		if err != nil {
 			diagnostics.SkippedFiles++
 			continue
 		}
-		if len(session.Messages) == 0 {
+		if messageCount == 0 {
 			continue
 		}
 		workspaceInfo, err := os.Stat(session.Workspace)
@@ -299,7 +313,131 @@ func readSessionFile(path string) ([]byte, error) {
 	if info.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("session file permissions are %04o; expected 0600", info.Mode().Perm())
 	}
+	if info.Size() > maxSessionFileBytes {
+		return nil, fmt.Errorf("session file exceeds %d byte limit", maxSessionFileBytes)
+	}
 	return os.ReadFile(path)
+}
+
+func validateSession(session *Session, expectedID string) error {
+	if session.ID != expectedID || len(session.ID) > maxSessionIDBytes || session.Workspace == "" || len(session.Workspace) > maxSessionPathBytes {
+		return fmt.Errorf("invalid identity or workspace")
+	}
+	if len(session.PreviousResponseID) > maxSessionProviderIDBytes || len(session.Summary) > maxSessionSummaryBytes {
+		return fmt.Errorf("oversized metadata")
+	}
+	if len(session.Messages) > maxSessionMessages || len(session.Plan) > maxSessionPlanSteps {
+		return fmt.Errorf("too many messages or plan steps")
+	}
+	for _, message := range session.Messages {
+		if (message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes {
+			return fmt.Errorf("invalid message")
+		}
+	}
+	for _, step := range session.Plan {
+		if len(step) > maxSessionPlanStepBytes {
+			return fmt.Errorf("oversized plan step")
+		}
+	}
+	return nil
+}
+
+// readSessionListMetadata validates the complete schema while retaining only
+// the message needed to produce the existing latest-user list preview.
+func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
+	contents, err := readSessionFile(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	decoder.DisallowUnknownFields()
+	var session Session
+	var messageCount int
+	var latestUser, latestAssistant SessionMessage
+	var latestUserIndex, latestAssistantIndex int
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return nil, 0, fmt.Errorf("parse session metadata")
+	}
+	seen := make(map[string]bool, 8)
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, 0, err
+		}
+		key, ok := keyToken.(string)
+		if !ok || seen[key] {
+			return nil, 0, fmt.Errorf("invalid or duplicate session field")
+		}
+		seen[key] = true
+		switch key {
+		case "id":
+			err = decoder.Decode(&session.ID)
+		case "workspace":
+			err = decoder.Decode(&session.Workspace)
+		case "created_at":
+			err = decoder.Decode(&session.CreatedAt)
+		case "updated_at":
+			err = decoder.Decode(&session.UpdatedAt)
+		case "previous_response_id":
+			err = decoder.Decode(&session.PreviousResponseID)
+		case "plan":
+			err = decoder.Decode(&session.Plan)
+		case "summary":
+			err = decoder.Decode(&session.Summary)
+		case "messages":
+			var start json.Token
+			start, err = decoder.Token()
+			if err == nil && start == nil {
+				break
+			}
+			if err == nil && start != json.Delim('[') {
+				err = fmt.Errorf("messages must be an array")
+			}
+			for err == nil && decoder.More() {
+				var message SessionMessage
+				err = decoder.Decode(&message)
+				messageCount++
+				if err == nil && ((message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes || messageCount > maxSessionMessages) {
+					err = fmt.Errorf("invalid message")
+				}
+				if err == nil && message.Role == "user" {
+					latestUser, latestUserIndex = message, messageCount
+				} else if err == nil {
+					latestAssistant, latestAssistantIndex = message, messageCount
+				}
+			}
+			if err == nil {
+				_, err = decoder.Token()
+			}
+		default:
+			err = fmt.Errorf("unknown session field %q", key)
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, 0, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, 0, fmt.Errorf("trailing session data")
+	}
+	if err := validateSession(&session, expectedID); err != nil {
+		return nil, 0, err
+	}
+	if latestUserIndex > 0 && latestAssistantIndex > 0 {
+		if latestUserIndex < latestAssistantIndex {
+			session.Messages = []SessionMessage{latestUser, latestAssistant}
+		} else {
+			session.Messages = []SessionMessage{latestAssistant, latestUser}
+		}
+	} else if latestUserIndex > 0 {
+		session.Messages = []SessionMessage{latestUser}
+	} else if latestAssistantIndex > 0 {
+		session.Messages = []SessionMessage{latestAssistant}
+	}
+	return &session, messageCount, nil
 }
 
 func validSessionID(id string) bool {
@@ -402,6 +540,9 @@ func (s *SessionTools) updatePlan(raw json.RawMessage) (string, error) {
 		if input.Steps[index] == "" {
 			return "", fmt.Errorf("plan steps must not be empty")
 		}
+		if len(input.Steps[index]) > maxSessionPlanStepBytes {
+			return "", fmt.Errorf("plan steps must not exceed %d bytes", maxSessionPlanStepBytes)
+		}
 	}
 	s.session.Plan = append([]string(nil), input.Steps...)
 	if err := s.store.Save(s.session); err != nil {
@@ -421,7 +562,7 @@ func (s *SessionTools) saveSummary(raw json.RawMessage) (string, error) {
 	if input.Summary == "" {
 		return "", fmt.Errorf("summary must not be empty")
 	}
-	if len(input.Summary) > 32<<10 {
+	if len(input.Summary) > maxSessionSummaryBytes {
 		return "", fmt.Errorf("summary is too large")
 	}
 	s.session.Summary = input.Summary

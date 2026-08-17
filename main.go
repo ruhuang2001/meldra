@@ -24,6 +24,7 @@ const (
 	defaultBaseURL                           = "https://api.openai.com/v1"
 	defaultMaxInferenceSteps                 = 20
 	defaultMaxToolCalls                      = 50
+	defaultMaxCustomTurnInputBytes           = 4 << 20
 	defaultStreamIdleTimeout                 = 90 * time.Second
 	defaultProviderResponseBytes       int64 = 32 << 20
 	maximumProviderResponseBytes       int64 = 256 << 20
@@ -124,6 +125,7 @@ type Agent struct {
 	maxProviderResponseBytes int64
 	maxInferenceSteps        int
 	maxToolCalls             int
+	maxCustomTurnInputBytes  int
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -185,6 +187,16 @@ func (a *Agent) Run(ctx context.Context) error {
 
 		inferenceSteps := 0
 		toolCalls := 0
+		metrics := UIMetrics{InferenceLimit: a.inferenceLimit(), ToolCallLimit: a.toolCallLimit()}
+		if usesCustomBaseURL() {
+			bounded, contextBytes, _, err := boundCustomTurnInput(customBaseURLInput, a.customTurnInputLimit())
+			if err != nil {
+				return fmt.Errorf("initial custom-provider context: %w", err)
+			}
+			customBaseURLInput = bounded
+			metrics.ContextBytes = contextBytes
+		}
+		a.emitMetrics(metrics)
 		for {
 			if ctx.Err() != nil {
 				return a.handleInterruption(true)
@@ -198,6 +210,8 @@ func (a *Agent) Run(ctx context.Context) error {
 				break
 			}
 			inferenceSteps++
+			metrics.InferenceSteps = inferenceSteps
+			a.emitMetrics(metrics)
 			result, err := a.runInference(ctx, input, previousResponseID)
 			if err != nil {
 				if result.streamedTextShown {
@@ -213,6 +227,11 @@ func (a *Agent) Run(ctx context.Context) error {
 				return err
 			}
 			response := result.response
+			if response != nil {
+				metrics.InputTokens += response.Usage.InputTokens
+				metrics.OutputTokens += response.Usage.OutputTokens
+			}
+			a.emitMetrics(metrics)
 			if err := validateResponse(response); err != nil {
 				if result.streamedTextShown {
 					a.finishAssistantStream()
@@ -276,6 +295,8 @@ func (a *Agent) Run(ctx context.Context) error {
 				break
 			}
 			toolCalls += requestedCalls
+			metrics.ToolCalls = toolCalls
+			a.emitMetrics(metrics)
 			toolResults := a.executeToolCallsContext(ctx, response.Output)
 			if ctx.Err() != nil {
 				return a.handleInterruption(true)
@@ -288,7 +309,22 @@ func (a *Agent) Run(ctx context.Context) error {
 				if err != nil {
 					return err
 				}
-				customBaseURLInput = append(customBaseURLInput, followUp...)
+				candidate := append(customBaseURLInput, followUp...)
+				bounded, contextBytes, compacted, err := boundCustomTurnInput(candidate, a.customTurnInputLimit())
+				if err != nil {
+					message := fmt.Sprintf("This turn reached the custom-provider context limit of %d bytes after older tool outputs were compacted. Workspace state and session context were saved; send \"continue\" to proceed.", a.customTurnInputLimit())
+					if err := a.pauseTurn(message); err != nil {
+						return err
+					}
+					previousResponseID = ""
+					break
+				}
+				if compacted {
+					a.emit(UIEvent{Kind: UIEventNotice, Text: "Older tool outputs were compacted to stay within the custom-provider context budget."})
+				}
+				customBaseURLInput = bounded
+				metrics.ContextBytes = contextBytes
+				a.emitMetrics(metrics)
 				input = responses.ResponseNewParamsInputUnion{
 					OfInputItemList: customBaseURLInput,
 				}
@@ -951,6 +987,13 @@ func (a *Agent) toolCallLimit() int {
 	return defaultMaxToolCalls
 }
 
+func (a *Agent) customTurnInputLimit() int {
+	if a.maxCustomTurnInputBytes > 0 {
+		return a.maxCustomTurnInputBytes
+	}
+	return defaultMaxCustomTurnInputBytes
+}
+
 func (a *Agent) pauseTurn(message string) error {
 	a.emitAssistantMessage(message)
 	if a.session == nil {
@@ -1110,6 +1153,35 @@ func toolFollowUpInput(output []responses.ResponseOutputItemUnion, toolResults r
 	return append(input, toolResults...), nil
 }
 
+const compactedToolOutput = "[older tool output omitted to fit the custom-provider context budget]"
+
+func boundCustomTurnInput(input responses.ResponseInputParam, limit int) (responses.ResponseInputParam, int, bool, error) {
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, 0, false, fmt.Errorf("measure custom-provider context: %w", err)
+	}
+	if len(encoded) <= limit {
+		return input, len(encoded), false, nil
+	}
+	bounded := append(responses.ResponseInputParam(nil), input...)
+	compacted := false
+	for index, item := range bounded {
+		if item.OfFunctionCallOutput == nil {
+			continue
+		}
+		bounded[index] = responses.ResponseInputItemParamOfFunctionCallOutput(item.OfFunctionCallOutput.CallID, compactedToolOutput)
+		compacted = true
+		encoded, err = json.Marshal(bounded)
+		if err != nil {
+			return nil, 0, compacted, fmt.Errorf("measure compacted custom-provider context: %w", err)
+		}
+		if len(encoded) <= limit {
+			return bounded, len(encoded), compacted, nil
+		}
+	}
+	return nil, len(encoded), compacted, fmt.Errorf("custom-provider context exceeds %d byte limit", limit)
+}
+
 func (a *Agent) executeTool(name string, input json.RawMessage) (string, error) {
 	for _, tool := range a.tools {
 		if tool.Name == name {
@@ -1129,6 +1201,13 @@ func (a *Agent) writer() io.Writer {
 func (a *Agent) emit(event UIEvent) {
 	if a.events != nil {
 		a.events.Emit(event)
+	}
+}
+
+func (a *Agent) emitMetrics(metrics UIMetrics) {
+	if a.events != nil {
+		copy := metrics
+		a.emit(UIEvent{Kind: UIEventMetrics, Metrics: &copy})
 	}
 }
 

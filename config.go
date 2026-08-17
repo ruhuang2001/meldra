@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,6 +35,7 @@ const defaultConfigTemplate = `# Meldra configuration.
 #
 # model = "gpt-5.6-luna"
 # base_url = "https://api.openai.com/v1"
+# allow_insecure_base_url = false
 # max_provider_response_bytes = 33554432
 `
 
@@ -53,6 +56,7 @@ type ConfigPaths struct {
 type Config struct {
 	Model                    string
 	BaseURL                  string
+	AllowInsecureBaseURL     bool
 	MaxProviderResponseBytes int64
 }
 
@@ -67,6 +71,7 @@ type Credentials struct {
 type Settings struct {
 	Model                    string
 	BaseURL                  string
+	AllowInsecureBaseURL     bool
 	APIKey                   string
 	MaxProviderResponseBytes int64
 }
@@ -78,6 +83,7 @@ type ConfigShow struct {
 	CredentialsFile          string `json:"credentials_file"`
 	Model                    string `json:"model"`
 	BaseURL                  string `json:"base_url"`
+	AllowInsecureBaseURL     bool   `json:"allow_insecure_base_url"`
 	MaxProviderResponseBytes int64  `json:"max_provider_response_bytes"`
 	APIKey                   string `json:"openai_api_key"`
 }
@@ -199,6 +205,7 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 	return Settings{
 		Model:                    config.Model,
 		BaseURL:                  config.BaseURL,
+		AllowInsecureBaseURL:     config.AllowInsecureBaseURL,
 		APIKey:                   credentials.OpenAIAPIKey,
 		MaxProviderResponseBytes: config.MaxProviderResponseBytes,
 	}, nil
@@ -214,6 +221,11 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	if err := validateConfigValue("base_url", config.BaseURL); err != nil {
 		return err
 	}
+	if config.BaseURL != "" {
+		if err := validateProviderBaseURL(config.BaseURL, config.AllowInsecureBaseURL); err != nil {
+			return err
+		}
+	}
 	if err := validateProviderResponseLimit(config.MaxProviderResponseBytes); err != nil {
 		return err
 	}
@@ -224,6 +236,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	}
 	if config.BaseURL != "" {
 		contents += "base_url = " + strconv.Quote(config.BaseURL) + "\n"
+	}
+	if config.AllowInsecureBaseURL {
+		contents += "allow_insecure_base_url = true\n"
 	}
 	if config.MaxProviderResponseBytes != 0 {
 		contents += "max_provider_response_bytes = " + strconv.FormatInt(config.MaxProviderResponseBytes, 10) + "\n"
@@ -273,6 +288,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 		CredentialsFile:          paths.CredentialsFile,
 		Model:                    settings.Model,
 		BaseURL:                  settings.BaseURL,
+		AllowInsecureBaseURL:     settings.AllowInsecureBaseURL,
 		MaxProviderResponseBytes: settings.MaxProviderResponseBytes,
 		APIKey:                   RedactSecret(settings.APIKey),
 	}
@@ -281,12 +297,13 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nmax_provider_response_bytes=%d\nopenai_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nopenai_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
 		displayValue(show.Model),
 		displayValue(show.BaseURL),
+		show.AllowInsecureBaseURL,
 		show.MaxProviderResponseBytes,
 		show.APIKey,
 	)
@@ -509,6 +526,36 @@ func validateConfigValue(name, value string) error {
 	return nil
 }
 
+func validateProviderBaseURL(value string, allowInsecure bool) error {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return fmt.Errorf("base_url must be an absolute HTTP(S) URL without credentials")
+	}
+	if parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("base_url must not contain a query or fragment")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	host := parsed.Hostname()
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("HTTP base_url is only allowed for loopback hosts")
+	}
+	if !allowInsecure {
+		return fmt.Errorf("HTTP loopback base_url requires allow_insecure_base_url = true")
+	}
+	return nil
+}
+
+func providerCredentialWarning(settings Settings) string {
+	parsed, err := url.Parse(settings.BaseURL)
+	if err != nil || strings.EqualFold(parsed.Hostname(), "api.openai.com") {
+		return ""
+	}
+	return fmt.Sprintf("Warning: OPENAI_API_KEY will be sent to custom provider host %s.", parsed.Host)
+}
+
 func validateProviderResponseLimit(value int64) error {
 	if value < 0 {
 		return fmt.Errorf("max_provider_response_bytes must be positive")
@@ -557,6 +604,16 @@ func parseConfigTOML(contents string) (Config, error) {
 			} else {
 				config.BaseURL = value
 			}
+		case "allow_insecure_base_url":
+			if seen[key] {
+				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
+			}
+			seen[key] = true
+			value, err := strconv.ParseBool(rawValue)
+			if err != nil {
+				return Config{}, fmt.Errorf("line %d: allow_insecure_base_url must be true or false", lineNumber+1)
+			}
+			config.AllowInsecureBaseURL = value
 		case "max_provider_response_bytes":
 			if seen[key] {
 				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)

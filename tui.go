@@ -18,15 +18,14 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
-	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 )
 
 const (
-	tuiHeaderHeight     = 1
-	tuiFooterHeight     = 1
-	tuiLayoutSeparators = 3
-	tuiStreamFrameDelay = time.Second / 30
+	tuiHeaderHeight      = 1
+	tuiFooterHeight      = 1
+	tuiLayoutSeparators  = 3
+	tuiStreamFrameDelay  = time.Second / 30
+	tuiMaxVisibleEntries = 200
 )
 
 var (
@@ -120,6 +119,7 @@ type tuiInitialState struct {
 	sessionID string
 	model     string
 	messages  []SessionMessage
+	notices   []string
 }
 
 // tuiUserMessageSource supplies --prompt before waiting for interactive TUI
@@ -342,11 +342,35 @@ const (
 )
 
 type tuiEntry struct {
-	kind   tuiEntryKind
-	text   string
-	name   string
-	detail string
-	active bool
+	kind        tuiEntryKind
+	text        string
+	stream      []byte
+	name        string
+	detail      string
+	active      bool
+	cachedWidth int
+	cached      string
+}
+
+func (e *tuiEntry) content() string {
+	if e.stream != nil {
+		return string(e.stream)
+	}
+	return e.text
+}
+
+func (e *tuiEntry) appendStream(text string) {
+	e.stream = append(e.stream, text...)
+	e.cached = ""
+}
+
+func (e *tuiEntry) finishStream() {
+	if e.stream != nil {
+		e.text = string(e.stream)
+		e.stream = nil
+	}
+	e.active = false
+	e.cached = ""
 }
 
 type tuiModel struct {
@@ -358,9 +382,11 @@ type tuiModel struct {
 	width  int
 	height int
 
-	viewport viewport.Model
-	input    textarea.Model
-	entries  []tuiEntry
+	viewport      viewport.Model
+	input         textarea.Model
+	entries       []tuiEntry
+	hiddenEntries int
+	metrics       UIMetrics
 
 	activeAssistant int
 	activeTool      int
@@ -400,6 +426,11 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 			kind = tuiEntryAssistant
 		}
 		entries = append(entries, tuiEntry{kind: kind, text: message.Content})
+	}
+	for _, notice := range initial.notices {
+		if notice != "" {
+			entries = append(entries, tuiEntry{kind: tuiEntryNotice, text: notice})
+		}
 	}
 
 	return &tuiModel{
@@ -465,7 +496,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.submissionPending = false
 		m.input.Blur()
 		if m.activeAssistant >= 0 {
-			m.entries[m.activeAssistant].active = false
+			m.entries[m.activeAssistant].finishStream()
 			m.activeAssistant = -1
 		}
 		if m.activeTool >= 0 {
@@ -594,10 +625,10 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		m.busy = true
 		m.input.Blur()
 		if m.activeAssistant < 0 {
-			m.entries = append(m.entries, tuiEntry{kind: tuiEntryAssistant, active: true})
+			m.appendEntry(tuiEntry{kind: tuiEntryAssistant, stream: make([]byte, 0, len(event.Text)), active: true})
 			m.activeAssistant = len(m.entries) - 1
 		}
-		m.entries[m.activeAssistant].text += event.Text
+		m.entries[m.activeAssistant].appendStream(event.Text)
 		m.refreshViewport()
 	case UIEventAssistantMessage:
 		m.submissionPending = false
@@ -606,14 +637,14 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 	case UIEventAssistantDone:
 		m.submissionPending = false
 		if m.activeAssistant >= 0 {
-			m.entries[m.activeAssistant].active = false
+			m.entries[m.activeAssistant].finishStream()
 		}
 		m.activeAssistant = -1
 		m.refreshViewport()
 	case UIEventToolStarted:
 		m.submissionPending = false
 		m.activeAssistant = -1
-		m.entries = append(m.entries, tuiEntry{kind: tuiEntryTool, name: event.Name, active: true})
+		m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, active: true})
 		m.activeTool = len(m.entries) - 1
 		m.status = "Running " + event.Name
 		m.busy = true
@@ -622,8 +653,9 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		if m.activeTool >= 0 && m.entries[m.activeTool].name == event.Name {
 			m.entries[m.activeTool].active = false
 			m.entries[m.activeTool].detail = event.Detail
+			m.entries[m.activeTool].cached = ""
 		} else {
-			m.entries = append(m.entries, tuiEntry{kind: tuiEntryTool, name: event.Name, detail: event.Detail})
+			m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, detail: event.Detail})
 		}
 		m.activeTool = -1
 		// The tool result is now being sent back to the model. Gateways do not
@@ -633,6 +665,10 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		m.busy = true
 		m.input.Blur()
 		m.refreshViewport()
+	case UIEventMetrics:
+		if event.Metrics != nil {
+			m.metrics = *event.Metrics
+		}
 	case UIEventNotice:
 		m.addEntry(tuiEntry{kind: tuiEntryNotice, text: event.Text})
 	case UIEventError:
@@ -642,8 +678,22 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 }
 
 func (m *tuiModel) addEntry(entry tuiEntry) {
-	m.entries = append(m.entries, entry)
+	m.appendEntry(entry)
 	m.refreshViewport()
+}
+
+func (m *tuiModel) appendEntry(entry tuiEntry) {
+	if len(m.entries) >= tuiMaxVisibleEntries {
+		m.entries = append(m.entries[:0], m.entries[1:]...)
+		m.hiddenEntries++
+		if m.activeAssistant >= 0 {
+			m.activeAssistant--
+		}
+		if m.activeTool >= 0 {
+			m.activeTool--
+		}
+	}
+	m.entries = append(m.entries, entry)
 }
 
 func (m *tuiModel) resize() {
@@ -668,7 +718,23 @@ func (m *tuiModel) renderViewportTimeline() string {
 	if width <= 0 {
 		return m.renderTimeline()
 	}
-	return ansi.Hardwrap(m.renderTimeline(), width, true)
+	var output strings.Builder
+	if m.hiddenEntries > 0 {
+		output.WriteString(ansi.Hardwrap(tuiDimStyle.Render(fmt.Sprintf("%d older UI entries hidden; saved session is unaffected", m.hiddenEntries)), width, true))
+	}
+	for index := range m.entries {
+		if output.Len() > 0 {
+			output.WriteString("\n\n")
+		}
+		output.WriteString(m.renderEntry(&m.entries[index], width))
+	}
+	if pending := m.renderPending(); pending != "" {
+		if output.Len() > 0 {
+			output.WriteString("\n\n")
+		}
+		output.WriteString(ansi.Hardwrap(pending, width, true))
+	}
+	return output.String()
 }
 
 func (m *tuiModel) renderTimeline() string {
@@ -677,38 +743,64 @@ func (m *tuiModel) renderTimeline() string {
 		if index > 0 {
 			output.WriteString("\n\n")
 		}
-		switch entry.kind {
-		case tuiEntryUser:
-			output.WriteString(tuiUserStyle.Render("You"))
-			output.WriteString("\n")
-			output.WriteString(sanitizeTerminalText(entry.text))
-		case tuiEntryAssistant:
-			output.WriteString(tuiAgentStyle.Render("Meldra"))
-			if entry.active {
-				output.WriteString(tuiDimStyle.Render("  streaming"))
-			}
-			output.WriteString("\n")
-			output.WriteString(sanitizeTerminalText(entry.text))
-		case tuiEntryTool:
-			state := "done"
-			if entry.active {
-				state = "working"
-			}
-			output.WriteString(tuiToolStyle.Render("tool  " + sanitizeTerminalText(entry.name) + "  " + state))
-			if entry.detail != "" {
-				output.WriteString("\n")
-				output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.detail)))
-			}
-		case tuiEntryNotice:
-			output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.text)))
-		case tuiEntryError:
-			output.WriteString(tuiErrorStyle.Render("Error: " + sanitizeTerminalText(entry.text)))
-		}
+		output.WriteString(m.renderEntryUnwrapped(&entry))
 	}
-	if m.pending != nil {
+	if pending := m.renderPending(); pending != "" {
 		if output.Len() > 0 {
 			output.WriteString("\n\n")
 		}
+		output.WriteString(pending)
+	}
+	return output.String()
+}
+
+func (m *tuiModel) renderEntry(entry *tuiEntry, width int) string {
+	if !entry.active && entry.cached != "" && entry.cachedWidth == width {
+		return entry.cached
+	}
+	rendered := ansi.Hardwrap(m.renderEntryUnwrapped(entry), width, true)
+	if !entry.active {
+		entry.cached = rendered
+		entry.cachedWidth = width
+	}
+	return rendered
+}
+
+func (m *tuiModel) renderEntryUnwrapped(entry *tuiEntry) string {
+	var output strings.Builder
+	switch entry.kind {
+	case tuiEntryUser:
+		output.WriteString(tuiUserStyle.Render("You"))
+		output.WriteString("\n")
+		output.WriteString(sanitizeTerminalText(entry.content()))
+	case tuiEntryAssistant:
+		output.WriteString(tuiAgentStyle.Render("Meldra"))
+		if entry.active {
+			output.WriteString(tuiDimStyle.Render("  streaming"))
+		}
+		output.WriteString("\n")
+		output.WriteString(sanitizeTerminalText(entry.content()))
+	case tuiEntryTool:
+		state := "done"
+		if entry.active {
+			state = "working"
+		}
+		output.WriteString(tuiToolStyle.Render("tool  " + sanitizeTerminalText(entry.name) + "  " + state))
+		if entry.detail != "" {
+			output.WriteString("\n")
+			output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.detail)))
+		}
+	case tuiEntryNotice:
+		output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.content())))
+	case tuiEntryError:
+		output.WriteString(tuiErrorStyle.Render("Error: " + sanitizeTerminalText(entry.content())))
+	}
+	return output.String()
+}
+
+func (m *tuiModel) renderPending() string {
+	var output strings.Builder
+	if m.pending != nil {
 		output.WriteString(tuiWarnStyle.Render(sanitizeTerminalText(m.pending.request.Title)))
 		if m.pending.request.Detail != "" {
 			output.WriteString("\n")
@@ -746,7 +838,17 @@ func (m *tuiModel) View() tea.View {
 		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	}
 
-	footerText := sanitizeTerminalText(m.status) + "  |  "
+	footerText := sanitizeTerminalText(m.status)
+	if m.metrics.InferenceLimit > 0 {
+		footerText += fmt.Sprintf("  steps %d/%d  tools %d/%d", m.metrics.InferenceSteps, m.metrics.InferenceLimit, m.metrics.ToolCalls, m.metrics.ToolCallLimit)
+		if m.metrics.ContextBytes > 0 {
+			footerText += fmt.Sprintf("  ctx %.1f KiB", float64(m.metrics.ContextBytes)/1024)
+		}
+		if m.metrics.InputTokens > 0 || m.metrics.OutputTokens > 0 {
+			footerText += fmt.Sprintf("  tokens %d↓/%d↑", m.metrics.InputTokens, m.metrics.OutputTokens)
+		}
+	}
+	footerText += "  |  "
 	if m.pending != nil {
 		footerText += "PgUp/PgDn scroll  y approve  n/Enter/Esc reject  Ctrl-C exit"
 	} else {
@@ -788,77 +890,32 @@ func newTUIWorkspace(root string, autoApprove bool) (*Workspace, error) {
 	return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, autoApprove)
 }
 
-func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths ConfigPaths, settings Settings, options ChatOptions) error {
+func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths ConfigPaths, settings Settings, options ChatOptions, providerWarning string) error {
 	chatCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	store := NewSessionStore(paths)
-	var session *Session
-	var err error
-	if options.Resume != "" {
-		session, err = store.Load(options.Resume)
-		if err != nil {
-			return err
-		}
-		if !options.workspaceExplicit {
-			options.Workspace = session.Workspace
-		}
-	}
-	if options.Workspace == "" {
-		options.Workspace, err = os.Getwd()
-		if err != nil {
-			return fmt.Errorf("resolve current workspace: %w", err)
-		}
-	}
-
-	workspace, err := newTUIWorkspace(options.Workspace, options.AutoApprove)
+	controller := newTUIController(cancel)
+	runtime, err := newChatRuntime(chatCtx, paths, settings, options, newTUIWorkspace, tuiUserMessageSource(options.Prompt, controller.nextMessage), stdout)
 	if err != nil {
 		return err
 	}
-	if err := workspace.ProtectPath(paths.Home); err != nil {
-		return err
-	}
-	workspace.SetContext(chatCtx)
-	if session != nil && session.Workspace != workspace.root {
-		return fmt.Errorf("session %s belongs to workspace %s, not %s", session.ID, session.Workspace, workspace.root)
-	}
-	if session == nil {
-		session, err = store.New(workspace.root)
-		if err != nil {
-			return err
-		}
-	}
-	isNewSession := session != nil && !session.resumed
-	defer func() {
-		if isNewSession && len(session.Messages) == 0 {
-			_ = store.Delete(session.ID)
-		}
-	}()
-
-	controller := newTUIController(cancel)
-	workspace.SetApprovalFunc(controller.approve)
-	workspace.SetApprovalPresenter(controller.presentApproval)
-	client := openai.NewClient(option.WithAPIKey(settings.APIKey), option.WithBaseURL(settings.BaseURL))
-	tools := workspace.ToolDefinitions()
-	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
-	agent := NewAgent(&client, tuiUserMessageSource(options.Prompt, controller.nextMessage), tools)
-	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
-	agent.output = stdout
-	agent.session = session
-	agent.store = store
-	agent.events = controller
+	defer runtime.deleteEmptyNewSession()
+	runtime.workspace.SetApprovalFunc(controller.approve)
+	runtime.workspace.SetApprovalPresenter(controller.presentApproval)
+	runtime.agent.events = controller
 
 	agentDone := make(chan error, 1)
 	started := false
 	uiErr := controller.run(chatCtx, stdin, stdout, tuiInitialState{
-		workspace: workspace.root,
-		sessionID: session.ID,
+		workspace: runtime.workspace.root,
+		sessionID: runtime.session.ID,
 		model:     settings.Model,
-		messages:  append([]SessionMessage(nil), session.Messages...),
+		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
+		notices:   []string{providerWarning},
 	}, func() {
 		started = true
 		go func() {
-			agentErr := agent.Run(chatCtx)
+			agentErr := runtime.agent.Run(chatCtx)
 			if agentErr != nil && chatCtx.Err() == nil {
 				controller.send(tuiAgentStoppedMsg{err: agentErr})
 			}
@@ -876,7 +933,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		return agentErr
 	}
 	if started && chatCtx.Err() != nil {
-		_, err := fmt.Fprintf(stdout, "Interrupted. Session %s was saved; resume with: meldra resume %s\n", session.ID, session.ID)
+		_, err := fmt.Fprintf(stdout, "Interrupted. Session %s was saved; resume with: meldra resume %s\n", runtime.session.ID, runtime.session.ID)
 		return err
 	}
 	return nil

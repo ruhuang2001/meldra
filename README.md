@@ -38,7 +38,7 @@ In a supported interactive terminal, Meldra opens a full-screen TUI and streams 
 ## Configuration
 
 ```text
-~/.meldra/config.toml       # model and base_url
+~/.meldra/config.toml       # model, provider URL, and limits
 ~/.meldra/credentials.env   # OPENAI_API_KEY
 ~/.meldra/sessions/         # resumable session state
 ```
@@ -54,6 +54,16 @@ Provider responses are capped at 32 MiB by default. Set
 `MELDRA_MAX_PROVIDER_RESPONSE_BYTES` for a process override, to choose a
 positive limit up to 256 MiB.
 
+Custom provider URLs must use HTTPS. For local development only, an HTTP URL
+on `localhost` or another loopback address can be enabled explicitly:
+
+```toml
+base_url = "http://localhost:8080/v1"
+allow_insecure_base_url = true
+```
+
+Meldra warns before a configured API key is sent to a custom provider host.
+
 ```bash
 meldra config init   # create starter config files
 meldra config        # show effective values and config paths (hides API key)
@@ -65,7 +75,9 @@ meldra version
 - File tools are constrained to the workspace root (resolves `..`, symlinks, absolute paths) and block access to `.git` and Meldra's own config/session directory.
 - Every edit prints a diff and waits for confirmation before writing.
 - Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Approved commands run as your OS user and may access the filesystem and network; environment filtering is not a sandbox. Use `--yes` only inside an isolated container or VM.
-- Each agent turn is bounded to 20 model steps and 50 function calls.
+- The `verify` tool detects root project markers and selects bounded presets for Make, Go, Python/pytest, Node/npm or pnpm, and Rust/Cargo projects. A Makefile's explicit `check` or `test` target takes priority.
+- Each agent turn is bounded to 20 model steps and 50 function calls. Custom providers also have a 4 MiB replay-context budget; older tool results are compacted first when needed.
+- Session files are bounded and validated while loading. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 
 ## Sessions

@@ -220,6 +220,45 @@ func TestToolFollowUpInputPreservesReasoningMessagesAndCalls(t *testing.T) {
 	}
 }
 
+func TestBoundCustomTurnInputCompactsOldestToolOutputs(t *testing.T) {
+	input := responses.ResponseInputParam{
+		responses.ResponseInputItemParamOfMessage("request", responses.EasyInputMessageRoleUser),
+		responses.ResponseInputItemParamOfFunctionCallOutput("old", strings.Repeat("x", 2048)),
+		responses.ResponseInputItemParamOfFunctionCallOutput("new", strings.Repeat("y", 2048)),
+	}
+	full, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limit := len(full) - 1024
+	bounded, size, compacted, err := boundCustomTurnInput(input, limit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compacted || size > limit {
+		t.Fatalf("bounded context = %d bytes, compacted %v, limit %d", size, compacted, limit)
+	}
+	encoded, err := json.Marshal(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), compactedToolOutput) || strings.Contains(string(encoded), strings.Repeat("x", 128)) {
+		t.Fatalf("old tool output was not compacted: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), strings.Repeat("y", 128)) {
+		t.Fatalf("newer tool output was compacted before necessary: %s", encoded)
+	}
+}
+
+func TestBoundCustomTurnInputRejectsIrreducibleContext(t *testing.T) {
+	input := responses.ResponseInputParam{
+		responses.ResponseInputItemParamOfMessage(strings.Repeat("x", 1024), responses.EasyInputMessageRoleUser),
+	}
+	if _, _, _, err := boundCustomTurnInput(input, 128); err == nil {
+		t.Fatal("irreducible custom-provider context was accepted")
+	}
+}
+
 func TestValidateResponse(t *testing.T) {
 	if err := validateResponse(&responses.Response{Status: responses.ResponseStatusCompleted}); err != nil {
 		t.Fatalf("completed response was rejected: %v", err)

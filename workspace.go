@@ -218,8 +218,8 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 		{Name: "edit_file", Description: "Replace exact text once, or create a missing file with empty old_str. Prints a unified diff and requires [y/N] confirmation unless auto-approved. Paths must stay in the workspace and outside .git.", Parameters: objectSchema(map[string]any{"path": str("Target path inside workspace."), "old_str": str("Exact text occurring once; empty only to create."), "new_str": str("Replacement or new file contents.")}, []string{"path", "old_str", "new_str"}), Function: w.editFile},
 		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.applyPatch},
 		{Name: "undo_last_change", Description: "Undo the last successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.undo},
-		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (a workspace-local Python file, workspace-local go run, go test/vet/build, gofmt -d, safe Make targets, or read-only git). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout is capped at 120 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; use null for 60, maximum 120.")}, []string{"command", "args", "timeout"}), Function: w.runCommand},
-		{Name: "verify", Description: "Run a safe workspace verification preset: test, check, build, format, or diff. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.verify},
+		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout is capped at 120 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; use null for 60, maximum 120.")}, []string{"command", "args", "timeout"}), Function: w.runCommand},
+		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.verify},
 		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.gitReview},
 	}
 }
@@ -1383,6 +1383,10 @@ func allowed(command string, args []string) bool {
 		return allowedPython3(args)
 	case "go":
 		return allowedGo(args)
+	case "npm", "pnpm":
+		return allowedNodePackageManager(args)
+	case "cargo":
+		return allowedCargo(args)
 	case "gofmt":
 		if len(args) <= 1 || args[0] != "-d" {
 			return false
@@ -1399,6 +1403,20 @@ func allowed(command string, args []string) bool {
 		return allowedGit(args)
 	}
 	return false
+}
+
+func allowedNodePackageManager(args []string) bool {
+	if len(args) == 1 && args[0] == "test" {
+		return true
+	}
+	return len(args) == 2 && args[0] == "run" && allIn(args[1:], []string{"test", "check", "build", "format:check", "fmt:check"})
+}
+
+func allowedCargo(args []string) bool {
+	if len(args) == 1 {
+		return allIn(args, []string{"test", "check", "build"})
+	}
+	return len(args) == 3 && args[0] == "fmt" && args[1] == "--" && args[2] == "--check"
 }
 
 func allowedPython3(args []string) bool {
@@ -1820,7 +1838,7 @@ func (w *Workspace) trustedExecutable(command string) (string, error) {
 }
 
 func commandRequiresApproval(command string) bool {
-	return command == "python3" || command == "go" || command == "make"
+	return command == "python3" || command == "go" || command == "npm" || command == "pnpm" || command == "cargo" || command == "make"
 }
 
 func (w *Workspace) confirmCommand(command string, args []string) bool {
@@ -1904,6 +1922,11 @@ func (b *limitedBuffer) String() string {
 	return truncateUTF8Text(b.Buffer.String(), b.limit, b.truncated)
 }
 
+type verificationCommand struct {
+	command string
+	args    []string
+}
+
 func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 	var in struct {
 		Preset string `json:"preset"`
@@ -1911,41 +1934,190 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 	if e := decodeToolInput(raw, &in, "preset"); e != nil {
 		return "", e
 	}
-	switch in.Preset {
-	case "test":
-		return w.execute("go", []string{"test", "./..."}, 120)
-	case "check":
-		if _, err := os.Stat(filepath.Join(w.root, "Makefile")); err == nil {
-			return w.execute("make", []string{"check"}, 120)
-		}
-		vet, err := w.execute("go", []string{"vet", "./..."}, 120)
-		if err != nil {
-			return "", err
-		}
-		test, err := w.execute("go", []string{"test", "./..."}, 120)
-		return vet + "\n" + test, err
-	case "build":
-		return w.execute("go", []string{"build", "./..."}, 120)
-	case "format":
-		args := []string{"-d"}
-		err := w.walk(w.root, func(path string, d fs.DirEntry, err error) error {
-			if err == nil && !d.IsDir() && d.Type()&os.ModeSymlink == 0 && strings.HasSuffix(path, ".go") {
-				rel, _ := filepath.Rel(w.root, path)
-				args = append(args, rel)
-			}
-			return err
-		})
-		if err != nil {
-			return "", err
-		}
-		if len(args) == 1 {
-			return "command: gofmt -d\nstatus: 0\n(no Go files)", nil
-		}
-		return w.execute("gofmt", args, 120)
-	case "diff":
+	if in.Preset == "diff" {
 		return w.execute("git", []string{"diff", "--"}, 60)
 	}
-	return "", fmt.Errorf("unknown preset")
+	commands, err := w.verificationCommands(in.Preset)
+	if err != nil {
+		return "", err
+	}
+	var output strings.Builder
+	for index, command := range commands {
+		result, err := w.execute(command.command, command.args, 120)
+		if err != nil {
+			return "", err
+		}
+		if index > 0 {
+			output.WriteString("\n\n")
+		}
+		output.WriteString(result)
+	}
+	return output.String(), nil
+}
+
+func (w *Workspace) verificationCommands(preset string) ([]verificationCommand, error) {
+	if !allIn([]string{preset}, []string{"test", "check", "build", "format"}) {
+		return nil, fmt.Errorf("unknown preset")
+	}
+	if (preset == "test" || preset == "check") && w.makeTargetExists(preset) {
+		return []verificationCommand{{command: "make", args: []string{preset}}}, nil
+	}
+
+	var commands []verificationCommand
+	if w.hasRootFile("go.mod") {
+		switch preset {
+		case "test":
+			commands = append(commands, verificationCommand{command: "go", args: []string{"test", "./..."}})
+		case "check":
+			commands = append(commands,
+				verificationCommand{command: "go", args: []string{"vet", "./..."}},
+				verificationCommand{command: "go", args: []string{"test", "./..."}},
+			)
+		case "build":
+			commands = append(commands, verificationCommand{command: "go", args: []string{"build", "./..."}})
+		case "format":
+			args, err := w.goFormatArgs()
+			if err != nil {
+				return nil, err
+			}
+			if len(args) > 1 {
+				commands = append(commands, verificationCommand{command: "gofmt", args: args})
+			}
+		}
+	}
+
+	if w.hasRootFile("pyproject.toml") || w.hasRootFile("pytest.ini") {
+		if preset == "test" || preset == "check" {
+			commands = append(commands, verificationCommand{command: "python3", args: []string{"-m", "pytest"}})
+		}
+	}
+
+	if scripts, packageManager, ok, err := w.nodeProject(); err != nil {
+		return nil, err
+	} else if ok {
+		script := nodeVerificationScript(preset, scripts)
+		if script != "" {
+			args := []string{"run", script}
+			if script == "test" {
+				args = []string{"test"}
+			}
+			commands = append(commands, verificationCommand{command: packageManager, args: args})
+		}
+	}
+
+	if w.hasRootFile("Cargo.toml") {
+		switch preset {
+		case "test", "check", "build":
+			commands = append(commands, verificationCommand{command: "cargo", args: []string{preset}})
+		case "format":
+			commands = append(commands, verificationCommand{command: "cargo", args: []string{"fmt", "--", "--check"}})
+		}
+	}
+
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("no supported %s verification found from root project files", preset)
+	}
+	return commands, nil
+}
+
+func (w *Workspace) hasRootFile(name string) bool {
+	info, err := os.Lstat(filepath.Join(w.root, name))
+	return err == nil && info.Mode().IsRegular()
+}
+
+func (w *Workspace) makeTargetExists(target string) bool {
+	contents, ok, err := w.readRootFile("Makefile")
+	if err != nil || !ok {
+		return false
+	}
+	for _, rawLine := range strings.Split(string(contents), "\n") {
+		if rawLine == "" || rawLine[0] == '\t' {
+			continue
+		}
+		line, _, _ := strings.Cut(rawLine, "#")
+		left, _, found := strings.Cut(line, ":")
+		if !found || strings.Contains(left, "=") {
+			continue
+		}
+		for _, candidate := range strings.Fields(left) {
+			if candidate == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (w *Workspace) readRootFile(name string) ([]byte, bool, error) {
+	path := filepath.Join(w.root, name)
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	if info.Size() > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	contents, err := os.ReadFile(path)
+	return contents, true, err
+}
+
+func (w *Workspace) nodeProject() (map[string]string, string, bool, error) {
+	contents, ok, err := w.readRootFile("package.json")
+	if err != nil || !ok {
+		return nil, "", ok, err
+	}
+	var manifest struct {
+		PackageManager string            `json:"packageManager"`
+		Scripts        map[string]string `json:"scripts"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, "", false, fmt.Errorf("parse package.json: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, "", false, fmt.Errorf("parse package.json: trailing data")
+		}
+		return nil, "", false, fmt.Errorf("parse package.json: trailing data: %w", err)
+	}
+	packageManager := "npm"
+	if w.hasRootFile("pnpm-lock.yaml") || strings.HasPrefix(strings.ToLower(manifest.PackageManager), "pnpm@") {
+		packageManager = "pnpm"
+	}
+	return manifest.Scripts, packageManager, true, nil
+}
+
+func nodeVerificationScript(preset string, scripts map[string]string) string {
+	candidates := map[string][]string{
+		"test":   {"test"},
+		"check":  {"check", "test"},
+		"build":  {"build"},
+		"format": {"format:check", "fmt:check"},
+	}
+	for _, candidate := range candidates[preset] {
+		if value := strings.TrimSpace(scripts[candidate]); value != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (w *Workspace) goFormatArgs() ([]string, error) {
+	args := []string{"-d"}
+	err := w.walk(w.root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Type()&os.ModeSymlink == 0 && strings.HasSuffix(path, ".go") {
+			rel, _ := filepath.Rel(w.root, path)
+			args = append(args, rel)
+		}
+		return err
+	})
+	return args, err
 }
 func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	var in struct{}

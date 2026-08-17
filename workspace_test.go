@@ -538,6 +538,16 @@ func TestWorkspaceCommandAllowlistBoundaries(t *testing.T) {
 		{"go", []string{"run", "./../outside.go"}, false},
 		{"go", []string{"run", "https://example.test/program.go"}, false},
 		{"go", []string{"test", "-coverprofile=coverage.out", "./..."}, false},
+		{"npm", []string{"test"}, true},
+		{"npm", []string{"run", "check"}, true},
+		{"npm", []string{"install"}, false},
+		{"npm", []string{"run", "prepare"}, false},
+		{"pnpm", []string{"run", "format:check"}, true},
+		{"pnpm", []string{"--dir", "../outside", "test"}, false},
+		{"cargo", []string{"test"}, true},
+		{"cargo", []string{"fmt", "--", "--check"}, true},
+		{"cargo", []string{"run"}, false},
+		{"cargo", []string{"test", "--manifest-path", "../Cargo.toml"}, false},
 		{"gofmt", []string{"-w", "main.go"}, false},
 		{"gofmt", []string{"-d", "-cpuprofile=profile.out", "main.go"}, false},
 		{"gofmt", []string{"-d", "../outside.go"}, false},
@@ -648,7 +658,7 @@ func TestWorkspaceValidatesPytestPaths(t *testing.T) {
 
 func TestWorkspaceCommandApprovalClassification(t *testing.T) {
 	for command, want := range map[string]bool{
-		"python3": true, "go": true, "make": true, "gofmt": false, "git": false,
+		"python3": true, "go": true, "npm": true, "pnpm": true, "cargo": true, "make": true, "gofmt": false, "git": false,
 	} {
 		if got := commandRequiresApproval(command); got != want {
 			t.Errorf("commandRequiresApproval(%q) = %t, want %t", command, got, want)
@@ -751,9 +761,107 @@ func TestWorkspaceVerifyPresets(t *testing.T) {
 	}
 
 	emptyWorkspace, _ := testWorkspace(t, t.TempDir(), "", true)
-	result, err = callTool(t, emptyWorkspace, "verify", map[string]any{"preset": "format"})
-	if err != nil || !strings.Contains(result, "no Go files") {
-		t.Fatalf("empty format verification = %q, %v", result, err)
+	if _, err = callTool(t, emptyWorkspace, "verify", map[string]any{"preset": "format"}); err == nil || !strings.Contains(err.Error(), "no supported format verification") {
+		t.Fatalf("empty format verification error = %v", err)
+	}
+}
+
+func TestWorkspaceProjectAwareVerificationCommands(t *testing.T) {
+	tests := []struct {
+		name   string
+		files  map[string]string
+		preset string
+		want   []verificationCommand
+	}{
+		{
+			name: "Make target takes precedence over Go",
+			files: map[string]string{
+				"Makefile": "check:\n\tgo vet ./...\n",
+				"go.mod":   "module example.invalid/make\n",
+			},
+			preset: "check",
+			want:   []verificationCommand{{command: "make", args: []string{"check"}}},
+		},
+		{
+			name:   "Python test",
+			files:  map[string]string{"pyproject.toml": "[project]\nname = \"fixture\"\n"},
+			preset: "test",
+			want:   []verificationCommand{{command: "python3", args: []string{"-m", "pytest"}}},
+		},
+		{
+			name: "pnpm scripts",
+			files: map[string]string{
+				"package.json":   `{"scripts":{"check":"tsc --noEmit","format:check":"prettier --check ."}}`,
+				"pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+			},
+			preset: "check",
+			want:   []verificationCommand{{command: "pnpm", args: []string{"run", "check"}}},
+		},
+		{
+			name:   "npm test fallback for check",
+			files:  map[string]string{"package.json": `{"scripts":{"test":"node --test"}}`},
+			preset: "check",
+			want:   []verificationCommand{{command: "npm", args: []string{"test"}}},
+		},
+		{
+			name:   "Cargo format check",
+			files:  map[string]string{"Cargo.toml": "[package]\nname = \"fixture\"\n"},
+			preset: "format",
+			want:   []verificationCommand{{command: "cargo", args: []string{"fmt", "--", "--check"}}},
+		},
+		{
+			name: "mixed root verifies each project",
+			files: map[string]string{
+				"go.mod":       "module example.invalid/mixed\n",
+				"package.json": `{"scripts":{"build":"tsc"}}`,
+				"Cargo.toml":   "[package]\nname = \"fixture\"\n",
+			},
+			preset: "build",
+			want: []verificationCommand{
+				{command: "go", args: []string{"build", "./..."}},
+				{command: "npm", args: []string{"run", "build"}},
+				{command: "cargo", args: []string{"build"}},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			for name, contents := range test.files {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			workspace, _ := testWorkspace(t, root, "", true)
+			got, err := workspace.verificationCommands(test.preset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(test.want) {
+				t.Fatalf("verification commands = %#v, want %#v", got, test.want)
+			}
+			for index := range got {
+				if got[index].command != test.want[index].command || strings.Join(got[index].args, "\x00") != strings.Join(test.want[index].args, "\x00") {
+					t.Fatalf("verification commands = %#v, want %#v", got, test.want)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkspaceProjectAwareVerificationRejectsInvalidManifest(t *testing.T) {
+	for _, manifest := range []string{"{", `{"scripts":{"test":42}}`, `{"scripts":{"test":"node --test"}} {}`} {
+		t.Run(manifest, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			workspace, _ := testWorkspace(t, root, "", true)
+			if _, err := workspace.verificationCommands("test"); err == nil || !strings.Contains(err.Error(), "parse package.json") {
+				t.Fatalf("invalid package.json error = %v", err)
+			}
+		})
 	}
 }
 
