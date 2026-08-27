@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -166,5 +167,81 @@ func TestWorkspaceRollsBackEveryFileWhenLaterDirectorySyncFails(t *testing.T) {
 	}
 	if calls != 4 {
 		t.Fatalf("directory sync calls = %d, want two writes and two rollbacks", calls)
+	}
+}
+
+func TestWorkspaceRollsBackDirectoriesCreatedBeforeSyncFailure(t *testing.T) {
+	root := t.TempDir()
+	w, _ := testWorkspace(t, root, "", true)
+	syncFailure := errors.New("new directory sync failed")
+	calls := 0
+	w.syncDir = func(string) error {
+		calls++
+		if calls == 1 {
+			return syncFailure
+		}
+		return nil
+	}
+
+	_, err := callTool(t, w, "edit_file", map[string]any{
+		"path": filepath.Join("new", "deep", "created.txt"), "old_str": "", "new_str": "created\n",
+	})
+	if !errors.Is(err, syncFailure) {
+		t.Fatalf("edit error = %v, want directory sync failure", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, "new")); !os.IsNotExist(statErr) {
+		t.Fatalf("created directory remained after rollback: %v", statErr)
+	}
+}
+
+func TestWorkspaceRollbackRemovesDirectoriesAfterLaterFileFailure(t *testing.T) {
+	root := t.TempDir()
+	w, _ := testWorkspace(t, root, "", true)
+	syncFailure := errors.New("later directory sync failed")
+	calls := 0
+	w.syncDir = func(string) error {
+		calls++
+		if calls == 4 {
+			return syncFailure
+		}
+		return nil
+	}
+
+	_, err := callTool(t, w, "apply_patch", map[string]any{
+		"patch": nil,
+		"changes": []map[string]any{
+			{"path": filepath.Join("first", "one.txt"), "old_str": "", "new_str": "one\n"},
+			{"path": filepath.Join("second", "two.txt"), "old_str": "", "new_str": "two\n"},
+		},
+	})
+	if !errors.Is(err, syncFailure) {
+		t.Fatalf("apply error = %v, want directory sync failure", err)
+	}
+	for _, path := range []string{
+		filepath.Join(root, "first"),
+		filepath.Join(root, "second"),
+		filepath.Join(root, "first", "one.txt"),
+		filepath.Join(root, "second", "two.txt"),
+	} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Fatalf("path remained after rollback: %s (%v)", path, statErr)
+		}
+	}
+}
+
+func TestWorkspaceUndoRemovesDirectoriesCreatedByChange(t *testing.T) {
+	root := t.TempDir()
+	w, _ := testWorkspace(t, root, "", true)
+	relative := filepath.Join("new", "deep", "created.txt")
+	if _, err := callTool(t, w, "edit_file", map[string]any{
+		"path": relative, "old_str": "", "new_str": "created\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := callTool(t, w, "undo_last_change", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new")); !os.IsNotExist(err) {
+		t.Fatalf("undo left created directory: %v", err)
 	}
 }
