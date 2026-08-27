@@ -78,11 +78,11 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 				return err
 			}
 			chatInput := stdin
-			resumeWorkspace, err := resumeWorkspacePath(options)
-			if err != nil {
-				return err
-			}
 			if options.selectResume {
+				resumeWorkspace, err := resumeWorkspacePath(options)
+				if err != nil {
+					return err
+				}
 				if shouldUseTUI(stdin, stdout) {
 					selected, err := runSessionPicker(stdin.(*os.File), stdout.(*os.File), resumeWorkspace)
 					if err != nil {
@@ -107,6 +107,10 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 				}
 			}
 			if options.Resume == "latest" {
+				resumeWorkspace, err := resumeWorkspacePath(options)
+				if err != nil {
+					return err
+				}
 				paths, err := ResolveConfigPaths()
 				if err != nil {
 					return err

@@ -226,6 +226,51 @@ func TestBareResumePromptsForSessionSelection(t *testing.T) {
 	}
 }
 
+func TestExplicitResumeDoesNotRequireCurrentWorkspace(t *testing.T) {
+	originalWorkspace, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalWorkspace); err != nil {
+			t.Errorf("restore current workspace: %v", err)
+		}
+	}()
+
+	paths := mustConfigPaths(t)
+	t.Setenv(MeldraHomeEnv, paths.Home)
+	t.Setenv("OPENAI_API_KEY", "")
+	store := NewSessionStore(paths)
+	session, err := store.Create(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "resume from a removed directory")
+	if err := store.Save(session); err != nil {
+		t.Fatal(err)
+	}
+
+	gone := filepath.Join(t.TempDir(), "gone")
+	if err := os.Mkdir(gone, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(gone); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = runCLI([]string{"resume", session.ID}, strings.NewReader(""), &output)
+	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY is not configured") {
+		t.Fatalf("explicit resume error = %v; it should reach chat setup without resolving cwd", err)
+	}
+	if strings.Contains(err.Error(), "resolve current workspace") {
+		t.Fatalf("explicit resume still resolved the removed cwd: %v", err)
+	}
+}
+
 func TestSessionPickerModelNavigatesAndPages(t *testing.T) {
 	sessions := make([]Session, 9)
 	for index := range sessions {
