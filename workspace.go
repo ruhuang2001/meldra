@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -136,6 +137,7 @@ type fileChange struct {
 	before, after        []byte
 	existed, afterExists bool
 	mode                 fs.FileMode
+	createdDirs          []string
 }
 
 func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
@@ -1083,9 +1085,11 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 		return err
 	}
 	done := []fileChange{}
-	for _, c := range changes {
+	createdDirs := []string{}
+	for index := range changes {
+		c := &changes[index]
 		if err := w.contextErr(); err != nil {
-			return combineRollbackError(fmt.Errorf("write cancelled: %w", err), w.rollback(done, reverse))
+			return combineRollbackError(fmt.Errorf("write cancelled: %w", err), w.rollback(done, reverse, createdDirs))
 		}
 		data := c.after
 		exists := c.afterExists
@@ -1096,27 +1100,40 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 		}
 		resolved, err := w.resolve(c.path, true)
 		if err != nil || resolved != c.path {
-			rollbackErr := w.rollback(done, reverse)
+			rollbackErr := w.rollback(done, reverse, createdDirs)
 			if err != nil {
 				return combineRollbackError(err, rollbackErr)
 			}
 			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
 		}
 		if exists {
-			if e := makeDirectoryTreeDurable(filepath.Dir(c.path), 0o755, w.syncDirectory); e != nil {
-				return combineRollbackError(e, w.rollback(done, reverse))
+			if !reverse {
+				created, e := makeDirectoryTreeDurableTracked(filepath.Dir(c.path), 0o755, w.syncDirectory)
+				createdDirs = append(createdDirs, created...)
+				c.createdDirs = append(c.createdDirs, created...)
+				if e != nil {
+					return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+				}
 			}
 			if e := atomicWriteFile(c.path, data, mode); e != nil {
-				return combineRollbackError(e, w.rollback(done, reverse))
+				return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
 			}
 		} else {
 			if e := os.Remove(c.path); e != nil && !os.IsNotExist(e) {
-				return combineRollbackError(e, w.rollback(done, reverse))
+				return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
 			}
 		}
-		done = append(done, c)
+		done = append(done, *c)
 		if e := w.syncDirectory(filepath.Dir(c.path)); e != nil {
-			return combineRollbackError(e, w.rollback(done, reverse))
+			return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+		}
+	}
+	if reverse {
+		removed, err := w.removeCreatedDirectories(recordedChangeDirectories(changes))
+		if err != nil {
+			restoreErr := w.restoreCreatedDirectories(removed)
+			rollbackErr := w.rollback(done, reverse, createdDirs)
+			return combineRollbackError(err, errors.Join(restoreErr, rollbackErr))
 		}
 	}
 	return nil
@@ -1182,7 +1199,7 @@ func atomicWriteFile(path string, contents []byte, mode fs.FileMode) error {
 	return nil
 }
 
-func (w *Workspace) rollback(done []fileChange, reverse bool) error {
+func (w *Workspace) rollback(done []fileChange, reverse bool, createdDirs []string) error {
 	var rollbackErrors []string
 	for i := len(done) - 1; i >= 0; i-- {
 		c := done[i]
@@ -1208,8 +1225,62 @@ func (w *Workspace) rollback(done []fileChange, reverse bool) error {
 			}
 		}
 	}
+	if _, err := w.removeCreatedDirectories(createdDirs); err != nil {
+		rollbackErrors = append(rollbackErrors, err.Error())
+	}
 	if len(rollbackErrors) > 0 {
 		return fmt.Errorf("%s", strings.Join(rollbackErrors, "; "))
+	}
+	return nil
+}
+
+// removeCreatedDirectories removes only directories created by this change.
+// os.Remove refuses non-empty directories, so cleanup never deletes a file
+// created concurrently or by the user.
+func (w *Workspace) removeCreatedDirectories(directories []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(directories))
+	removed := make([]string, 0, len(directories))
+	var removalErrors []string
+	for index := len(directories) - 1; index >= 0; index-- {
+		directory := directories[index]
+		if _, ok := seen[directory]; ok {
+			continue
+		}
+		seen[directory] = struct{}{}
+		if err := os.Remove(directory); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			removalErrors = append(removalErrors, fmt.Sprintf("remove directory %s: %v", directory, err))
+			continue
+		}
+		removed = append(removed, directory)
+		if err := w.syncDirectory(filepath.Dir(directory)); err != nil {
+			removalErrors = append(removalErrors, err.Error())
+		}
+	}
+	if len(removalErrors) > 0 {
+		return removed, fmt.Errorf("%s", strings.Join(removalErrors, "; "))
+	}
+	return removed, nil
+}
+
+func (w *Workspace) restoreCreatedDirectories(directories []string) error {
+	var restoreErrors []string
+	// removeCreatedDirectories records paths from deepest to shallowest, so
+	// recreate them in the opposite order before restoring any files.
+	for index := len(directories) - 1; index >= 0; index-- {
+		directory := directories[index]
+		if err := os.Mkdir(directory, 0o755); err != nil && !os.IsExist(err) {
+			restoreErrors = append(restoreErrors, fmt.Sprintf("restore directory %s: %v", directory, err))
+			continue
+		}
+		if err := w.syncDirectory(filepath.Dir(directory)); err != nil {
+			restoreErrors = append(restoreErrors, err.Error())
+		}
+	}
+	if len(restoreErrors) > 0 {
+		return fmt.Errorf("%s", strings.Join(restoreErrors, "; "))
 	}
 	return nil
 }
@@ -1226,6 +1297,7 @@ func cloneChanges(in []fileChange) []fileChange {
 	for i := range out {
 		out[i].before = bytes.Clone(out[i].before)
 		out[i].after = bytes.Clone(out[i].after)
+		out[i].createdDirs = slices.Clone(out[i].createdDirs)
 	}
 	return out
 }
@@ -1268,6 +1340,14 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	}
 	w.last = nil
 	return "Undo successful.\n" + diff, nil
+}
+
+func recordedChangeDirectories(changes []fileChange) []string {
+	var directories []string
+	for _, change := range changes {
+		directories = append(directories, change.createdDirs...)
+	}
+	return directories
 }
 
 const noFinalNewlineMarker = "\\ No newline at end of file\n"
@@ -1356,7 +1436,7 @@ func writeDiffLines(out *strings.Builder, prefix byte, contents []byte) {
 	if hasFinalNewline {
 		text = strings.TrimSuffix(text, "\n")
 	}
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		fmt.Fprintf(out, "%c%s\n", prefix, line)
 	}
 	if !hasFinalNewline {
@@ -1811,7 +1891,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	e := runCommandProcess(ctx, cmd)
 	status := 0
 	if e != nil {
-		if ee := new(exec.ExitError); errors.As(e, &ee) {
+		if ee, ok := errors.AsType[*exec.ExitError](e); ok {
 			status = ee.ExitCode()
 		} else if ctx.Err() != nil {
 			status = -1
