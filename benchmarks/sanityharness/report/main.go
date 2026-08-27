@@ -4,6 +4,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,7 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -192,11 +193,11 @@ func buildBaseline(options options, now func() time.Time) (baseline, error) {
 			passed++
 		}
 	}
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Language == results[j].Language {
-			return results[i].Task < results[j].Task
+	slices.SortFunc(results, func(a, b taskBaseline) int {
+		if order := cmp.Compare(a.Language, b.Language); order != 0 {
+			return order
 		}
-		return results[i].Language < results[j].Language
+		return cmp.Compare(a.Task, b.Task)
 	})
 
 	date, err := baselineDate(options.date, latest, now)
@@ -245,7 +246,7 @@ func expandResultPaths(inputs []string) ([]string, error) {
 			paths = append(paths, clean)
 		}
 	}
-	sort.Strings(paths)
+	slices.Sort(paths)
 	return paths, nil
 }
 
