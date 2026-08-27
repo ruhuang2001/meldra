@@ -680,8 +680,8 @@ func (a *Agent) fallbackFromUnsupportedStream(ctx context.Context, params respon
 }
 
 func isUnsupportedStreamError(err error) bool {
-	var apiErr *openai.Error
-	if !errors.As(err, &apiErr) || apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
+	apiErr, ok := errors.AsType[*openai.Error](err)
+	if !ok || apiErr.StatusCode < 400 || apiErr.StatusCode >= 500 {
 		return false
 	}
 	message := strings.ToLower(apiErr.Message + " " + apiErr.RawJSON())
