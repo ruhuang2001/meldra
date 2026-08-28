@@ -5,6 +5,35 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.1.0-alpha.4](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-08-28)
+
+
+### Features
+
+* **agent:** improve runtime safety and efficiency ([f78cd18](https://github.com/ruhuang2001/meldra/commit/f78cd18bb8dbe62bcdf8df5dc99148b8f43d1931))
+* **agent:** improve verification and runtime safeguards ([141bd6f](https://github.com/ruhuang2001/meldra/commit/141bd6f0c9b3895d3d75d5c46de14f8de812bb3f))
+* **benchmarks:** record sanityharness baselines ([428d6d8](https://github.com/ruhuang2001/meldra/commit/428d6d89c7aaa29e9a2de39dd5cc0edec0881fe0))
+* **ci:** acknowledge package requests with a reaction ([ce95bc3](https://github.com/ruhuang2001/meldra/commit/ce95bc3d214c5d5044f18bb8825df58157774917))
+* **ci:** add PR comment packaging workflow ([e963c58](https://github.com/ruhuang2001/meldra/commit/e963c58ecf0a3bde710c72192c324188fb1a4574))
+* **session:** improve resume and TUI experience ([7d4fc9d](https://github.com/ruhuang2001/meldra/commit/7d4fc9d05c332f36657f16715ef7c85cc0cfc2ff))
+
+
+### Bug Fixes
+
+* **agent:** limit provider responses ([aa78c7b](https://github.com/ruhuang2001/meldra/commit/aa78c7b10fce1655eb3fee9d4bf56faaf186404a))
+* **ci:** grant PR comment notification permissions ([e329277](https://github.com/ruhuang2001/meldra/commit/e3292779e006c5492e830d5a7463b63d1fcd7180))
+* **ci:** identify PR package runs by marker ([2d4d67b](https://github.com/ruhuang2001/meldra/commit/2d4d67ba76e046c479372c18eb53847a4aa643b1))
+* **ci:** keep PR package comments in report job ([8e12e44](https://github.com/ruhuang2001/meldra/commit/8e12e44e9a7093481f61cf8d0f368cd177d3f790))
+* **ci:** keep PR packaging running without comment permissions ([9876d26](https://github.com/ruhuang2001/meldra/commit/9876d26f3244d879aed946906c135e0421adec82))
+* **ci:** preserve PR package notifications ([fea2ce8](https://github.com/ruhuang2001/meldra/commit/fea2ce87d3277657690e7285462652fe780b3675))
+* **ci:** report PR package status reliably ([664f2ce](https://github.com/ruhuang2001/meldra/commit/664f2ce7f3cf63dce6c3c96cb84d8afb52fb082c))
+* **ci:** streamline PR package comments ([253690d](https://github.com/ruhuang2001/meldra/commit/253690d6da1ee94b4ba030027261efa64e55cb91))
+* **cli:** resume explicit sessions from saved workspace ([bbba07c](https://github.com/ruhuang2001/meldra/commit/bbba07c8b06094f4282499b23f4809b4d7202319))
+* **session:** preserve saved sessions durably ([7cdfe60](https://github.com/ruhuang2001/meldra/commit/7cdfe6010107abb4fdcd1dafd218963522706d99))
+* **workspace:** block pytest argument and path expansion ([94bde93](https://github.com/ruhuang2001/meldra/commit/94bde93fada6a2b1768f426ab6d00d06cce4397f))
+* **workspace:** bound edits and isolate commands ([e7906eb](https://github.com/ruhuang2001/meldra/commit/e7906eb4703eca38c81e4b9ccfe855f8642544ff))
+* **workspace:** restore created directories during rollback ([5424a53](https://github.com/ruhuang2001/meldra/commit/5424a5337a9eca53a7bb48c377218c8d2bbdf554))
+
 ## [0.1.0-alpha.3](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.2...v0.1.0-alpha.3) (2026-08-03)
 
 
