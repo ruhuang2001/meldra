@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -344,6 +345,20 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	defer file.Close()
+	// Do not feed binary or invalidly encoded bytes through Scanner: converting
+	// them to strings would produce replacement characters (�) in the TUI and
+	// make the result misleading. Return a compact, useful description instead.
+	var probe [8192]byte
+	probeN, probeErr := file.Read(probe[:])
+	if probeErr != nil && !errors.Is(probeErr, io.EOF) {
+		return "", fmt.Errorf("read file: %w", probeErr)
+	}
+	if binarySample(probe[:probeN]) {
+		return fmt.Sprintf("[binary file; %d bytes; use a binary-aware tool to inspect it]", pathInfo.Size()), nil
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind file: %w", err)
+	}
 	off := in.Offset
 	if off == 0 {
 		off = 1
@@ -369,6 +384,9 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	for scanner.Scan() {
 		if err := w.contextErr(); err != nil {
 			return "", fmt.Errorf("read file cancelled: %w", err)
+		}
+		if binarySample(scanner.Bytes()) {
+			return fmt.Sprintf("[binary file; %d bytes; use a binary-aware tool to inspect it]", pathInfo.Size()), nil
 		}
 		lineNumber++
 		scannedBytes += len(scanner.Bytes()) + 1
@@ -399,6 +417,23 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	}
 	fmt.Fprintf(&out, "[lines %d-%d; truncated=%t]", start, end, more)
 	return out.String(), nil
+}
+
+func binarySample(sample []byte) bool {
+	if bytes.IndexByte(sample, 0) >= 0 {
+		return true
+	}
+	if utf8.Valid(sample) {
+		return false
+	}
+	// A bounded probe can end in the middle of a valid UTF-8 sequence. Ignore
+	// only that incomplete suffix; invalid bytes elsewhere still identify a
+	// binary file, and the full scanner pass validates subsequent lines.
+	lastRune := len(sample) - 1
+	for lastRune >= 0 && !utf8.RuneStart(sample[lastRune]) {
+		lastRune--
+	}
+	return lastRune < 0 || utf8.FullRune(sample[lastRune:]) || !utf8.Valid(sample[:lastRune])
 }
 
 func (w *Workspace) walk(start string, fn fs.WalkDirFunc) error {

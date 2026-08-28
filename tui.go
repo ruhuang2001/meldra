@@ -846,7 +846,7 @@ func (m *tuiModel) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		view := tea.NewView("Starting Meldra...")
 		view.AltScreen = true
-		view.MouseMode = tea.MouseModeCellMotion
+		view.MouseMode = tea.MouseModeNone
 		return view
 	}
 
@@ -888,7 +888,9 @@ func (m *tuiModel) View() tea.View {
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
 	view := tea.NewView(content)
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
+	// Leave mouse tracking disabled so the terminal can natively select and
+	// copy rendered output. Keyboard PgUp/PgDn remains available for scroll.
+	view.MouseMode = tea.MouseModeNone
 	return view
 }
 

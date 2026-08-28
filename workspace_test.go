@@ -127,6 +127,36 @@ func TestWorkspaceReadSearchAndConfirmation(t *testing.T) {
 	}
 }
 
+func TestWorkspaceReadFileReportsBinaryWithoutReplacementRunes(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "payload.bin")
+	if err := os.WriteFile(path, []byte("\x00\xff\x10PAGEZERO"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", false)
+	got, err := callTool(t, w, "read_file", map[string]any{"path": "payload.bin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got, "�") || !strings.Contains(got, "binary file") {
+		t.Fatalf("binary read result = %q", got)
+	}
+}
+
+func TestWorkspaceReadFileDoesNotMisclassifyUTF8AtProbeBoundary(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "boundary.txt")
+	contents := strings.Repeat("a", 8191) + "界\n"
+	if err := os.WriteFile(path, []byte(contents), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", false)
+	got, err := callTool(t, w, "read_file", map[string]any{"path": "boundary.txt"})
+	if err != nil || strings.Contains(got, "binary file") || strings.Contains(got, "�") {
+		t.Fatalf("boundary UTF-8 read = %q, %v", got, err)
+	}
+}
+
 func TestWorkspaceConfirmationHandlesTerminalPasteAndInvalidAnswers(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "created.txt")

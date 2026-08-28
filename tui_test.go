@@ -413,14 +413,14 @@ func TestTUIAutoApprovedOperationStaysVisible(t *testing.T) {
 	}
 }
 
-func TestTUIViewEnablesMouseWheelEvents(t *testing.T) {
+func TestTUIViewLeavesMouseTrackingToTerminalForSelection(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{})
 	model.width = 80
 	model.height = 24
 	model.resize()
 
-	if got := model.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Fatalf("mouse mode = %v, want %v", got, tea.MouseModeCellMotion)
+	if got := model.View().MouseMode; got != tea.MouseModeNone {
+		t.Fatalf("mouse mode = %v, want %v", got, tea.MouseModeNone)
 	}
 }
 
