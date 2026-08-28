@@ -119,10 +119,10 @@ a manual fallback: select **Run workflow** and enter the PR number.
 The workflow must first be present on the default `main` branch before either
 trigger is available.
 
-Meldra follows Semantic Versioning. While the project is below 1.0, the
-automated release flow publishes `alpha` prereleases (`v0.1.0-alpha.N`).
-Publishing a stable release requires an explicit update to
-`release-please-config.json`.
+Meldra follows Semantic Versioning. Stable releases are published from the
+release branch after CI, security, and artifact checks pass. Release Please
+keeps the version in `release-please-config.json` and
+`.release-please-manifest.json` aligned with the release tag.
 
 ## License
 
