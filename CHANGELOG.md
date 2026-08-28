@@ -5,6 +5,13 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.1.0-alpha.5](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.4...v0.1.0-alpha.5) (2026-08-28)
+
+
+### Bug Fixes
+
+* **tui:** preserve native copy and valid file output ([fbc5d9f](https://github.com/ruhuang2001/meldra/commit/fbc5d9fa5eecb7e94285c65df1dcf6a7c8ec3c23))
+
 ## [0.1.0-alpha.4](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-08-28)
 
 
