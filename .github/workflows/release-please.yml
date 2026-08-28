@@ -72,7 +72,7 @@ jobs:
       - uses: actions/setup-go@v6
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
 
       - uses: goreleaser/goreleaser-action@v6
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}

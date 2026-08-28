@@ -94,7 +94,7 @@ jobs:
           printf 'artifact_name=meldra-pr-%s-%s\n' "$PR_NUMBER" "$sha" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           cache: false
       - name: Build snapshot archives
         run: make release-snapshot
