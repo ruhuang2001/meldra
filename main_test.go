@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -388,92 +389,37 @@ func TestAgentRunCompletesToolLoopWithInstructions(t *testing.T) {
 	}
 }
 
-func TestAgentToolCallLimitPausesAndRebuildsContext(t *testing.T) {
-	store := NewSessionStore(mustConfigPaths(t))
-	session, err := store.New(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+func TestAgentContinuesBeyondFormerTurnLimits(t *testing.T) {
+	responsesToReturn := make([]*responses.Response, 0, 22)
+	for step := 0; step < 21; step++ {
+		responsesToReturn = append(responsesToReturn, responseFromJSON(t, fmt.Sprintf(`{
+			"id":"resp_%d",
+			"status":"completed",
+			"output":[
+				{"type":"function_call","call_id":"call_%d_1","name":"echo","arguments":"{}"},
+				{"type":"function_call","call_id":"call_%d_2","name":"echo","arguments":"{}"},
+				{"type":"function_call","call_id":"call_%d_3","name":"echo","arguments":"{}"}
+			]
+		}`, step, step, step, step)))
 	}
-	first := responseFromJSON(t, `{
-		"id":"resp_limit",
-		"status":"completed",
-		"output":[
-			{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{}"},
-			{"type":"function_call","call_id":"call_2","name":"echo","arguments":"{}"}
-		]
-	}`)
-	second := responseFromJSON(t, `{
+	responsesToReturn = append(responsesToReturn, responseFromJSON(t, `{
 		"id":"resp_done",
 		"status":"completed",
-		"output":[{"type":"message","id":"msg_done","status":"completed","role":"assistant","content":[{"type":"output_text","text":"continued","annotations":[]}]}]
-	}`)
-	responsesToReturn := []*responses.Response{first, second}
-	var requests []responses.ResponseNewParams
+		"output":[{"type":"message","id":"msg_done","status":"completed","role":"assistant","content":[{"type":"output_text","text":"done","annotations":[]}]}]
+	}`))
+
+	requests := 0
 	executed := 0
 	agent := Agent{
-		getUserMessage: userMessages("start", "continue"),
+		getUserMessage: userMessages("finish the task"),
 		output:         io.Discard,
-		session:        session,
-		store:          store,
-		maxToolCalls:   1,
-		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
-			executed++
-			return "ok", nil
-		}}},
-		createResponse: func(_ context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
-			requests = append(requests, params)
-			response := responsesToReturn[0]
-			responsesToReturn = responsesToReturn[1:]
-			return response, nil
-		},
-	}
-
-	if err := agent.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if executed != 0 {
-		t.Fatalf("overflowing tool batch executed %d calls", executed)
-	}
-	if len(requests) != 2 || requests[1].PreviousResponseID.Valid() {
-		t.Fatalf("requests after pause = %#v", requests)
-	}
-	if !strings.Contains(requests[1].Input.OfString.Value, "reached the limit of 1 tool calls") {
-		t.Fatalf("rebuilt context = %q", requests[1].Input.OfString.Value)
-	}
-	loaded, err := store.Load(session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.PreviousResponseID != "resp_done" {
-		t.Fatalf("saved previous response = %q", loaded.PreviousResponseID)
-	}
-}
-
-func TestAgentInferenceLimitPausesAfterExecutedTools(t *testing.T) {
-	first := responseFromJSON(t, `{
-		"id":"resp_step",
-		"status":"completed",
-		"output":[{"type":"function_call","call_id":"call_1","name":"echo","arguments":"{}"}]
-	}`)
-	second := responseFromJSON(t, `{
-		"id":"resp_done",
-		"status":"completed",
-		"output":[{"type":"message","id":"msg_done","status":"completed","role":"assistant","content":[{"type":"output_text","text":"continued","annotations":[]}]}]
-	}`)
-	responsesToReturn := []*responses.Response{first, second}
-	executed := 0
-	var output bytes.Buffer
-	agent := Agent{
-		getUserMessage:    userMessages("start", "continue"),
-		output:            &output,
-		maxInferenceSteps: 1,
 		tools: []ToolDefinition{{Name: "echo", Function: func(json.RawMessage) (string, error) {
 			executed++
 			return "ok", nil
 		}}},
 		createResponse: func(_ context.Context, _ responses.ResponseNewParams) (*responses.Response, error) {
-			response := responsesToReturn[0]
-			responsesToReturn = responsesToReturn[1:]
+			response := responsesToReturn[requests]
+			requests++
 			return response, nil
 		},
 	}
@@ -481,8 +427,8 @@ func TestAgentInferenceLimitPausesAfterExecutedTools(t *testing.T) {
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if executed != 1 || !strings.Contains(output.String(), "limit of 1 model steps") {
-		t.Fatalf("executed = %d, output = %q", executed, output.String())
+	if requests != 22 || executed != 63 {
+		t.Fatalf("requests = %d, executed tools = %d; want 22 and 63", requests, executed)
 	}
 }
 

@@ -80,7 +80,7 @@ meldra version
 - Every edit prints a diff and waits for confirmation before writing.
 - Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Approved commands run as your OS user and may access the filesystem and network; environment filtering is not a sandbox. Use `--yes` only inside an isolated container or VM.
 - The `verify` tool detects root project markers and selects bounded presets for Make, Go, Python/pytest, Node/npm or pnpm, and Rust/Cargo projects. A Makefile's explicit `check` or `test` target takes priority, and the complete command plan is approved once before execution.
-- Each agent turn is bounded to 20 model steps and 50 function calls. Custom providers also have a 4 MiB replay-context budget; older tool results are compacted first when needed.
+- Custom providers have a 4 MiB replay-context budget; older tool results are compacted first when needed.
 - Session files are bounded and validated while loading; conflicting saves from another process are rejected instead of silently overwriting newer state. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 

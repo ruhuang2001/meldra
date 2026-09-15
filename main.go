@@ -22,8 +22,6 @@ import (
 const (
 	defaultModel                             = "gpt-5.6-luna"
 	defaultBaseURL                           = "https://api.openai.com/v1"
-	defaultMaxInferenceSteps                 = 20
-	defaultMaxToolCalls                      = 50
 	defaultMaxCustomTurnInputBytes           = 4 << 20
 	maximumCustomTurnInputBytes              = 64 << 20
 	defaultStreamIdleTimeout                 = 90 * time.Second
@@ -61,12 +59,10 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 
 func NewAgent(client *openai.Client, getUserMessage func() (string, bool), tools []ToolDefinition) *Agent {
 	agent := &Agent{
-		getUserMessage:    getUserMessage,
-		tools:             tools,
-		output:            os.Stdout,
-		model:             defaultModel,
-		maxInferenceSteps: defaultMaxInferenceSteps,
-		maxToolCalls:      defaultMaxToolCalls,
+		getUserMessage: getUserMessage,
+		tools:          tools,
+		output:         os.Stdout,
+		model:          defaultModel,
 	}
 	agent.createResponse = func(ctx context.Context, params responses.ResponseNewParams) (*responses.Response, error) {
 		return client.Responses.New(ctx, params, option.WithMiddleware(limitProviderResponseWithLimit(agent.providerResponseLimit())))
@@ -127,8 +123,6 @@ type Agent struct {
 	// maxProviderResponseBytes is only overridden by tests. A zero value uses
 	// the conservative default.
 	maxProviderResponseBytes int64
-	maxInferenceSteps        int
-	maxToolCalls             int
 	maxCustomTurnInputBytes  int
 }
 
@@ -189,9 +183,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			responses.ResponseInputItemParamOfMessage(modelInput, responses.EasyInputMessageRoleUser),
 		}
 
-		inferenceSteps := 0
-		toolCalls := 0
-		metrics := UIMetrics{InferenceLimit: a.inferenceLimit(), ToolCallLimit: a.toolCallLimit()}
+		metrics := UIMetrics{}
 		if a.customProvider {
 			bounded, contextBytes, _, err := boundCustomTurnInput(customBaseURLInput, a.customTurnInputLimit())
 			if err != nil {
@@ -205,17 +197,6 @@ func (a *Agent) Run(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return a.handleInterruption(true)
 			}
-			if inferenceSteps >= a.inferenceLimit() {
-				message := fmt.Sprintf("This turn reached the limit of %d model steps. Current workspace state and session context were saved; inspect the latest changes and send \"continue\" to proceed.", a.inferenceLimit())
-				if err := a.pauseTurn(message); err != nil {
-					return err
-				}
-				previousResponseID = ""
-				break
-			}
-			inferenceSteps++
-			metrics.InferenceSteps = inferenceSteps
-			a.emitMetrics(metrics)
 			result, err := a.runInference(ctx, input, previousResponseID)
 			if err != nil {
 				if result.streamedTextShown {
@@ -290,17 +271,6 @@ func (a *Agent) Run(ctx context.Context) error {
 				}
 				break
 			}
-			if toolCalls+requestedCalls > a.toolCallLimit() {
-				message := fmt.Sprintf("This turn reached the limit of %d tool calls. The overflowing batch was not executed; session context was saved. Send \"continue\" to proceed.", a.toolCallLimit())
-				if err := a.pauseTurn(message); err != nil {
-					return err
-				}
-				previousResponseID = ""
-				break
-			}
-			toolCalls += requestedCalls
-			metrics.ToolCalls = toolCalls
-			a.emitMetrics(metrics)
 			toolResults := a.executeToolCallsContext(ctx, response.Output)
 			if ctx.Err() != nil {
 				return a.handleInterruption(true)
@@ -975,20 +945,6 @@ func (a *Agent) persistPartialStream(text string) (bool, error) {
 		return false, err
 	}
 	return true, nil
-}
-
-func (a *Agent) inferenceLimit() int {
-	if a.maxInferenceSteps > 0 {
-		return a.maxInferenceSteps
-	}
-	return defaultMaxInferenceSteps
-}
-
-func (a *Agent) toolCallLimit() int {
-	if a.maxToolCalls > 0 {
-		return a.maxToolCalls
-	}
-	return defaultMaxToolCalls
 }
 
 func (a *Agent) customTurnInputLimit() int {
