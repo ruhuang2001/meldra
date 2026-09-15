@@ -12,15 +12,11 @@ type UIEvent struct {
 	Metrics *UIMetrics
 }
 
-// UIMetrics contains safe per-turn progress and provider usage totals.
+// UIMetrics contains safe per-turn provider usage totals.
 type UIMetrics struct {
-	InferenceSteps int
-	InferenceLimit int
-	ToolCalls      int
-	ToolCallLimit  int
-	ContextBytes   int
-	InputTokens    int64
-	OutputTokens   int64
+	ContextBytes int
+	InputTokens  int64
+	OutputTokens int64
 }
 
 type UIEventKind string

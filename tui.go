@@ -869,14 +869,11 @@ func (m *tuiModel) View() tea.View {
 	}
 
 	footerText := sanitizeTerminalText(m.status)
-	if m.metrics.InferenceLimit > 0 {
-		footerText += fmt.Sprintf("  steps %d/%d  tools %d/%d", m.metrics.InferenceSteps, m.metrics.InferenceLimit, m.metrics.ToolCalls, m.metrics.ToolCallLimit)
-		if m.metrics.ContextBytes > 0 {
-			footerText += fmt.Sprintf("  ctx %.1f KiB", float64(m.metrics.ContextBytes)/1024)
-		}
-		if m.metrics.InputTokens > 0 || m.metrics.OutputTokens > 0 {
-			footerText += fmt.Sprintf("  tokens %d↓/%d↑", m.metrics.InputTokens, m.metrics.OutputTokens)
-		}
+	if m.metrics.ContextBytes > 0 {
+		footerText += fmt.Sprintf("  ctx %.1f KiB", float64(m.metrics.ContextBytes)/1024)
+	}
+	if m.metrics.InputTokens > 0 || m.metrics.OutputTokens > 0 {
+		footerText += fmt.Sprintf("  tokens %d↓/%d↑", m.metrics.InputTokens, m.metrics.OutputTokens)
 	}
 	footerText += "  |  "
 	if m.pending != nil {

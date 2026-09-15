@@ -171,18 +171,19 @@ func TestTUIModelShowsTurnMetrics(t *testing.T) {
 	model.height = 24
 	model.resize()
 	model.applyEvent(UIEvent{Kind: UIEventMetrics, Metrics: &UIMetrics{
-		InferenceSteps: 2,
-		InferenceLimit: 20,
-		ToolCalls:      3,
-		ToolCallLimit:  50,
-		ContextBytes:   2048,
-		InputTokens:    123,
-		OutputTokens:   45,
+		ContextBytes: 2048,
+		InputTokens:  123,
+		OutputTokens: 45,
 	}})
 	view := model.View().Content
-	for _, want := range []string{"steps 2/20", "tools 3/50", "ctx 2.0 KiB", "tokens 123↓/45↑"} {
+	for _, want := range []string{"ctx 2.0 KiB", "tokens 123↓/45↑"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("TUI view missing %q: %s", want, view)
+		}
+	}
+	for _, unwanted := range []string{"steps", "tools"} {
+		if strings.Contains(view, unwanted) {
+			t.Errorf("TUI view unexpectedly contains %q: %s", unwanted, view)
 		}
 	}
 }
