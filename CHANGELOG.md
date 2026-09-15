@@ -5,6 +5,18 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.1.0](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.4...v0.1.0) (2026-09-15)
+
+
+### Features
+
+* **agent:** remove turn execution limits ([5b511d8](https://github.com/ruhuang2001/meldra/commit/5b511d8f326e2e301b8b8cc9ee2475898d893cd9))
+
+
+### Bug Fixes
+
+* **tui:** preserve native copy and valid file output ([fbc5d9f](https://github.com/ruhuang2001/meldra/commit/fbc5d9fa5eecb7e94285c65df1dcf6a7c8ec3c23))
+
 ## [0.1.0-alpha.4](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.3...v0.1.0-alpha.4) (2026-08-28)
 
 
