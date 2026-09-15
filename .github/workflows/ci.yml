@@ -40,6 +40,19 @@ jobs:
       - name: Check
         run: make release-check
 
+  vulnerability-scan:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.6"
+      - name: Scan reachable dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
   runtime-macos:
     name: macOS runtime
     runs-on: macos-latest
