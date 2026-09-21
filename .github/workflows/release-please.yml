@@ -69,7 +69,7 @@ jobs:
           COMMIT_SHA: ${{ steps.release-target.outputs.commit_sha }}
         run: test "$(git rev-parse HEAD)" = "$COMMIT_SHA"
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
           go-version: "1.26.6"

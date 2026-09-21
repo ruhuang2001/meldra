@@ -92,7 +92,7 @@ jobs:
         run: |
           sha=$(git rev-parse --short=12 HEAD)
           printf 'artifact_name=meldra-pr-%s-%s\n' "$PR_NUMBER" "$sha" >> "$GITHUB_OUTPUT"
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26.6"
           cache: false
