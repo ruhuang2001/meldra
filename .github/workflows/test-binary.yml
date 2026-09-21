@@ -99,7 +99,7 @@ jobs:
       - name: Build snapshot archives
         run: make release-snapshot
       - name: Upload test archives
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.source.outputs.artifact_name }}
           path: |
