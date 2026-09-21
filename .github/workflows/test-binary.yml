@@ -43,7 +43,7 @@ jobs:
           printf 'pr_number=%s\n' "$PR_NUMBER" >> "$GITHUB_OUTPUT"
           printf 'is_comment=%s\n' "$IS_COMMENT" >> "$GITHUB_OUTPUT"
       - name: Verify open pull request
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           PR_NUMBER: ${{ steps.request.outputs.pr_number }}
         with:
@@ -59,7 +59,7 @@ jobs:
       - name: Mark package request as received
         if: github.event_name == 'issue_comment'
         continue-on-error: true
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.reactions.createForIssueComment({
@@ -118,7 +118,7 @@ jobs:
       issues: write
     steps:
       - name: Reply with result
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           ARTIFACT_NAME: ${{ needs.build.outputs.artifact_name }}
