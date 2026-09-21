@@ -80,7 +80,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.source.outputs.artifact_name }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: refs/pull/${{ needs.prepare.outputs.pr_number }}/merge
           fetch-depth: 0
