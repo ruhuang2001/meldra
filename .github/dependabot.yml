@@ -8,6 +8,11 @@ updates:
       day: monday
       time: "09:00"
       timezone: Asia/Shanghai
+    groups:
+      charm-dependencies:
+        patterns:
+          - "charm.land/*"
+          - "github.com/charmbracelet/*"
 
   - package-ecosystem: github-actions
     directory: "/"
@@ -16,3 +21,7 @@ updates:
       day: monday
       time: "09:00"
       timezone: Asia/Shanghai
+    groups:
+      github-actions:
+        patterns:
+          - "*"
