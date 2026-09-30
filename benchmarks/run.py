@@ -67,9 +67,13 @@ def summarize(values: list[float]) -> dict:
 
 def parse_micro(events: list[dict], repeats: int) -> dict:
     samples: dict[str, dict[str, list[float]]] = {}
+    # test2json may flush a benchmark name before the timing columns arrive.
+    # Reassemble the output stream for each package before splitting lines.
+    streams: dict[str, list[str]] = {}
     for event in events:
-        package = event.get("Package", "")
-        for line in event.get("Output", "").splitlines():
+        streams.setdefault(event.get("Package", ""), []).append(event.get("Output", ""))
+    for package, fragments in streams.items():
+        for line in "".join(fragments).splitlines():
             fields = line.split()
             if len(fields) < 4 or not fields[0].startswith("Benchmark") or not fields[1].isdigit():
                 continue

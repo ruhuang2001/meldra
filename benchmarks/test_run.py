@@ -35,6 +35,14 @@ class ReportsTest(unittest.TestCase):
         self.assertEqual(case["ns/op"]["median"], 20)
         self.assertEqual(case["allocs/op"]["max"], 4)
 
+    def test_micro_joins_fragmented_rows_without_mixing_packages(self):
+        events = [self.event(Output="BenchmarkX-1\t"),
+                  {"Package": "other", "Output": "BenchmarkY-1 1 9 ns/op\n"},
+                  self.event(Output="10 2.5 ns/op 4 B/op\n")]
+        result = runner.parse_micro(events, 1)
+        self.assertEqual(result["meldra/internal/app/BenchmarkX"]["ns/op"]["median"], 2.5)
+        self.assertEqual(result["other/BenchmarkY"]["ns/op"]["median"], 9)
+
     def test_micro_rejects_empty_incomplete_nonfinite(self):
         for events, count in [([], 1), ([self.event(Output="BenchmarkX-1 1 5 ns/op\n")], 2),
                               ([self.event(Output="BenchmarkX-1 1 NaN ns/op\n")], 1)]:
