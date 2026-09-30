@@ -35,7 +35,9 @@ The runner uses `dist/meldra` by default, then falls back to `meldra` on your
 python3 benchmarks/swe-bench/run.py --meldra-bin /path/to/meldra
 ```
 
-### Dry run on a small subset
+### Live evaluation on a small subset
+
+This calls the configured model and consumes API quota; it is not a dry run.
 
 ```bash
 python3 benchmarks/swe-bench/run.py --max-instances 5

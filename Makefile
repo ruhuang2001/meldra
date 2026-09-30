@@ -9,7 +9,7 @@ VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage benchmark benchmark-sanity benchmark-sanity-baseline benchmark-swe-bench build check release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage benchmark benchmark-report benchmark-eval benchmark-report-test benchmark-compare benchmark-sanity benchmark-sanity-baseline benchmark-swe-bench build check release-check release-snapshot install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -28,8 +28,32 @@ test-coverage:
 	@coverage="$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ { print $$3 }' | tr -d '%')"; \
 		awk -v coverage="$$coverage" -v minimum="$(COVERAGE_MIN)" 'BEGIN { if (coverage < minimum) { printf "coverage %.1f%% is below %.1f%%\n", coverage, minimum; exit 1 }; printf "coverage %.1f%% meets %.1f%% minimum\n", coverage, minimum }'
 
+# Raw Go output is compatible with benchstat. JSON reports retain every sample.
+BENCH_COUNT ?= 5
+BENCH_TIME ?= 200ms
+BENCH_CPU ?= 1
+BENCH_OUTPUT ?= benchmarks/results/micro.json
+EVAL_OUTPUT ?= benchmarks/results/scenarios.json
+EVAL_COUNT ?= 3
+BENCH_BASELINE ?=
+BENCH_CANDIDATE ?=
+
 benchmark:
-	go test -run='^$$' -bench=. -benchmem ./...
+	go test -run='^$$' -bench=. -benchmem -count=$(BENCH_COUNT) -benchtime=$(BENCH_TIME) -cpu=$(BENCH_CPU) ./...
+
+benchmark-report:
+	python3 benchmarks/run.py micro --output "$(BENCH_OUTPUT)" --count $(BENCH_COUNT) --benchtime $(BENCH_TIME) --cpu $(BENCH_CPU)
+
+benchmark-eval:
+	python3 benchmarks/run.py scenarios --output "$(EVAL_OUTPUT)" --count $(EVAL_COUNT) --cpu $(BENCH_CPU)
+
+benchmark-report-test:
+	python3 -m unittest discover -s benchmarks -p 'test_*.py'
+
+benchmark-compare:
+	@test -n "$(BENCH_BASELINE)" || (echo "BENCH_BASELINE is required"; exit 1)
+	@test -n "$(BENCH_CANDIDATE)" || (echo "BENCH_CANDIDATE is required"; exit 1)
+	python3 benchmarks/run.py compare "$(BENCH_BASELINE)" "$(BENCH_CANDIDATE)"
 
 benchmark-sanity: build
 	@if ! command -v sanity >/dev/null 2>&1; then \

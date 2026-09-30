@@ -101,10 +101,13 @@ Requires Go 1.26+.
 
 ```bash
 make check       # formatting, vet, modules, race tests, coverage, and build
-make benchmark   # local performance baseline; not a noisy CI gate
+make benchmark   # repeated runtime microbenchmarks; not a noisy CI gate
 ```
 
 The test suite must maintain at least 75% statement coverage.
+
+See [Benchmarks](benchmarks/README.md) for JSON performance reports, the offline
+workflow suite, and comparable SanityHarness/SWE-bench evaluations.
 
 See [Architecture](docs/architecture.md) for package boundaries, the headless
 turn API, and the staged path toward background tasks and multi-agent execution.
