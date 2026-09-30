@@ -106,6 +106,9 @@ make benchmark   # local performance baseline; not a noisy CI gate
 
 The test suite must maintain at least 75% statement coverage.
 
+See [Architecture](docs/architecture.md) for package boundaries, the headless
+turn API, and the staged path toward background tasks and multi-agent execution.
+
 ## PR test binaries
 
 PR checks do not build downloadable artifacts by default. To request one from a
