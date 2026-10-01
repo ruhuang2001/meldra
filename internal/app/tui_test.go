@@ -167,7 +167,7 @@ func renderViewportTimelineWithoutPrefixCache(model *tuiModel) string {
 	return output.String()
 }
 
-func TestTUIModelShowsTurnMetrics(t *testing.T) {
+func TestTUIModelKeepsTurnMetricsOutOfTheFooter(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{})
 	model.width = 120
 	model.height = 24
@@ -178,12 +178,10 @@ func TestTUIModelShowsTurnMetrics(t *testing.T) {
 		OutputTokens: 45,
 	}})
 	view := model.View().Content
-	for _, want := range []string{"ctx 2.0 KiB", "tokens 123↓/45↑"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("TUI view missing %q: %s", want, view)
-		}
+	if model.metrics.ContextBytes != 2048 || model.metrics.InputTokens != 123 || model.metrics.OutputTokens != 45 {
+		t.Fatalf("metrics were not retained internally: %+v", model.metrics)
 	}
-	for _, unwanted := range []string{"steps", "tools"} {
+	for _, unwanted := range []string{"ctx 2.0 KiB", "tokens 123↓/45↑", "Enter send", "Alt+Enter", "PgUp/PgDn"} {
 		if strings.Contains(view, unwanted) {
 			t.Errorf("TUI view unexpectedly contains %q: %s", unwanted, view)
 		}
@@ -371,7 +369,7 @@ func TestTUIPendingApprovalInstructionsAndFooterMatch(t *testing.T) {
 	model.resize()
 
 	content := model.View().Content
-	for _, text := range []string{"[y] approve", "[n] reject", "[enter/esc] reject", "PgUp/PgDn scroll", "y approve  n/Enter/Esc reject"} {
+	for _, text := range []string{"[y] approve", "[n] reject", "[enter/esc] reject", "Approval: y approve · n/Enter reject"} {
 		if !strings.Contains(content, text) {
 			t.Fatalf("pending approval view is missing %q: %q", text, content)
 		}

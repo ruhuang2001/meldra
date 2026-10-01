@@ -873,17 +873,8 @@ func (m *tuiModel) View() tea.View {
 	}
 
 	footerText := sanitizeTerminalText(m.status)
-	if m.metrics.ContextBytes > 0 {
-		footerText += fmt.Sprintf("  ctx %.1f KiB", float64(m.metrics.ContextBytes)/1024)
-	}
-	if m.metrics.InputTokens > 0 || m.metrics.OutputTokens > 0 {
-		footerText += fmt.Sprintf("  tokens %d↓/%d↑", m.metrics.InputTokens, m.metrics.OutputTokens)
-	}
-	footerText += "  |  "
 	if m.pending != nil {
-		footerText += "PgUp/PgDn scroll  y approve  n/Enter/Esc reject  Ctrl-C exit"
-	} else {
-		footerText += "Enter send  Alt+Enter newline  PgUp/PgDn scroll  Ctrl-C exit"
+		footerText += "  Approval: y approve · n/Enter reject"
 	}
 	footer := tuiDimStyle.Render(footerText)
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
