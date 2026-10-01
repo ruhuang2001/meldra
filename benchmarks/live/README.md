@@ -1,10 +1,11 @@
 # Fixed 0.2.0 release quality cohort
 
-This is a five-task **evaluation scaffold**, not a recorded model score. It
-prepares small independent workspaces, plans a priced token reservation, and
-grades candidate files using hidden tests in Docker. It makes no model requests
-and deliberately has no live execution command until Meldra can enforce the
-approved cumulative token budget before admitting each request.
+This is a fixed five-task evaluation harness. It prepares independent workspaces,
+validates an explicitly priced plan, runs Meldra in Docker through a host-owned
+budget gateway, and grades candidate files with hidden tests in fresh containers.
+The harness is implemented and tested with a scripted local upstream; **no live
+model quality score has been recorded**. Paid execution requires approval of the
+exact provider, model, cohort, rates and total budget before using `execute.py`.
 
 | Task | Language | Capability | External acceptance |
 | --- | --- | --- | --- |
@@ -57,34 +58,95 @@ following variables must be explicitly supplied; there is no assumed pricing:
 python3 benchmarks/live/run.py plan \
   --model "$EVAL_MODEL" --provider "$EVAL_PROVIDER" \
   --input-price "$EVAL_INPUT_PRICE" --output-price "$EVAL_OUTPUT_PRICE" \
-  --token-budget 10000 --max-output-tokens 1000 --max-cost 5
+  --count-price-per-request "$EVAL_COUNT_PRICE" --max-requests 100 \
+  --token-budget 10000 --max-output-tokens 1000 --max-cost 5 \
+  > "$EVAL_WORKDIR/approved-plan.json"
 ```
 
-The conditional upper bound is `5 × tokens_per_task × max(input_price,
-output_price) / 1,000,000`. It conservatively treats every admitted token as the
-more expensive class, without assuming prompt-cache discounts. It rejects
-unknown, non-finite, zero or negative prices, invalid caps, and reservations
-above the approved cost. This is a **plan**, and always reports
-`budget_enforced: false` and `live_execution_enabled: false`.
+The schema-2 plan's conservative upper bound is
+`5 × tokens_per_task × max(input_price, output_price) / 1,000,000 +
+5 × max_requests × count_price_per_request`. The counting endpoint rate must be
+known; an explicit zero means the operator verified it is uncharged. There are
+no assumed model prices or cache discounts. Input/output rates must cover all
+applicable billable token classes, including cache writes and reasoning. The
+plan itself does not execute or approve anything (`budget_enforced: false`).
+Old schema-1 plans are rejected. Monetary input precision is bounded; arithmetic
+uses an independent 64-digit decimal context rather than ambient rounding.
 
-Before enabling live execution, the binary or a verified provider-side budget
-mechanism must enforce the cumulative input/output allowance, including replayed
-input, retries, failed responses and reasoning tokens. A timeout, response byte
-limit, output-only token limit, or post-response usage check is insufficient.
-Do not set `budget_enforced` merely because the user supplied a dollar amount.
-Do not run models when price or token-counting semantics are unknown. Prices
-must cover the selected provider's billable token classes; any other billable
-features need a separate reservation.
+The gateway admits only the fixed model, replayed text context and client-side
+function tools. It rejects hosted paid tools, external conversation IDs, custom
+service tiers and other unpriced features. For each generation it:
 
-The official Responses API defines `max_output_tokens` as covering visible
-output and reasoning tokens:
-[Responses create reference](https://developers.openai.com/api/reference/resources/responses/methods/create).
-That cap does not bound input tokens or total spend across multiple requests.
+1. Reserves the counting endpoint fee before making that request.
+2. Calls `POST /responses/input_tokens` with the generation input and tool schema.
+3. Reserves counted input plus configured maximum output tokens before sending
+   `POST /responses`. If either token or money allowance is insufficient, it stops.
+4. Retains the entire reservation even on HTTP errors, disconnects, missing usage
+   or truncation. Each client retry goes through a new admission. No upstream
+   retries or redirects occur inside the gateway.
+
+`max_output_tokens` covers visible and reasoning tokens. `store=false` and
+`reasoning.encrypted_content` make continuation explicit; encrypted reasoning
+is replayed inside the attempt, never published as grading evidence. Unknown
+input counts abort before generation. Usage beyond a reservation stops the
+cohort and marks the provider contract violated. The cap is conditional on the
+provider honoring its count/output-limit contract and the operator supplying
+correct upper-bound prices; it is not an account-wide billing guarantee.
+
+Official API contracts:
+[Responses create](https://developers.openai.com/api/reference/resources/responses/methods/create),
+[input token counts](https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count).
+
+## Execute an approved plan
+
+Build a Linux binary matching the trusted Docker image architecture, then use a
+fresh destination outside the repository. `execute.py` performs preparation;
+do not point it at an already-prepared/reused directory.
+
+```sh
+# Example for an arm64 Docker engine; use amd64 on an amd64 engine.
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/meldra-eval .
+# Explicitly provide EVAL_API_KEY through your preferred secure environment.
+python3 benchmarks/live/execute.py --execute-live \
+  --approved-plan "$EVAL_WORKDIR/approved-plan.json" --api-key-env EVAL_API_KEY \
+  --binary /tmp/meldra-eval --image meldra-release-eval:go1.26.6 \
+  --run-dir "$EVAL_WORKDIR/live-candidate" \
+  --output benchmarks/results/live-candidate.json --timeout 600
+```
+
+The explicit key variable is never discovered from `~/.meldra` or forwarded to
+Docker. A per-attempt nonce authorizes only the temporary host gateway. A
+loopback relay inside Docker preserves Meldra's loopback-only HTTP policy;
+it does not weaken production provider URL validation. The gateway listens
+only during an attempt but binds a host-reachable interface for Docker Desktop;
+it authenticates every request with that nonce. It accepts no arbitrary upstream
+URL, and JSON logs/metadata exclude the key and nonce.
+
+Each attempt records its reserved cost, provider-reported tokens when available,
+exit status, duration, tool counts and independent grader result. Actual billed
+cost remains `null`: upper-bound rates and usage are not a billing receipt.
+Reported token sums remain `null` if any generation lacks usage. The full five
+cases remain the denominator, including failures and skipped attempts. A
+failed cleanup prevents further attempts and grading until the container is
+confirmed stopped. The runner handles Ctrl-C, SIGTERM and SIGHUP; SIGKILL or a
+Docker daemon outage can still require manual container cleanup. Runs cannot
+be resumed or overwritten; a new attempt requires its own approval/budget.
+
+The gateway buffers a bounded complete response and imposes a 60-second
+upstream deadline before Meldra's 90-second idle watchdog. This harness measures
+**gateway-mediated task elapsed time**, not native stream latency or time to
+first token. Timeouts remain failed attempts with nonrefunded reservations.
+
+For regression evidence run the same cohort against the selected baseline and
+candidate binary/model. That is **ten attempts in total**, not five. The agreed
+total budget must cover both runs; allocate two plans whose caps sum to at most
+the approved total. Do not infer permission for the second run from a candidate-
+only approval. Compare task identities and fixture hashes before classifying
+newly failing tasks; the existing SanityHarness comparator is a different schema.
 
 ## Agent isolation contract
 
-Once the user approves the plan and enforceable limits exist, execute each
-Linux Meldra binary **inside** a fresh Docker container. Mount only that task's
+The approved runner executes each Linux Meldra binary **inside** a fresh Docker container. Mount only that task's
 workspace read/write and the binary read-only; use a read-only root filesystem,
 a private `/tmp`, explicit CPU/memory/PID limits, dropped capabilities and
 `no-new-privileges`. Supply only explicitly approved model credentials and
@@ -97,7 +159,7 @@ Record image ID, binary SHA-256/revision, exact model/provider, fixture hash,
 attempt identity, elapsed time, tool calls and reported token use for every
 attempt. Missing usage/cost stays `null`; an interrupted or failed attempt
 remains in the denominator. Preserve logs privately and exclude credentials.
-The scaffold does not automatically read or forward `~/.meldra` credentials.
+The runner does not automatically read or forward `~/.meldra` credentials.
 
 ## Independent Docker grading
 
@@ -136,3 +198,19 @@ records before treating grades as live model evidence. This small cohort is a
 release smoke test, not a broad coding benchmark or a SWE-bench result. A release
 quality comparison also needs the same cohort executed against the chosen base
 binary/model under the same attempt and budget policy.
+
+## Repeat the fully offline Docker smoke test
+
+```sh
+python3 benchmarks/live/smoke.py --binary /tmp/meldra-eval \
+  --image meldra-release-eval:go1.26.6 \
+  --output benchmarks/results/live-budget-offline-smoke.json
+```
+
+This uses authored repairs as scripted responses, the real Linux Meldra binary,
+real file tools, the HTTP gateway/relay and Docker graders. It checks encrypted
+reasoning replay and completed tool output round-trips. It never reads a real
+key or contacts a provider, and its report explicitly has `live_model: false`
+and `model_quality_evidence: false`. Failed smoke logs are preserved beside the
+report for diagnosis. On 2026-10-01 the complete path passed 5/5; this is harness
+validation only. The output report is not a substitute for approved live runs.

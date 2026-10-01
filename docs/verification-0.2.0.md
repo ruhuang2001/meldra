@@ -58,10 +58,10 @@ confirms the clean source checkpoint and retains all 240 samples.
 - The fixed five-task cohort has **not** been solved by a live model. Grader
   fixture checks do not establish agent quality. Model/provider/prices/expense
   authorization remain a required human decision; no paid API calls were made.
-- `benchmarks/live/run.py` intentionally does not run a model until enforceable
-  request/token admission limits exist. A timeout or post-response usage report
-  is not a hard dollar cap. External isolated evaluation under an explicitly
-  agreed budget remains possible; do not claim the current scaffold enforces it.
+- `benchmarks/live/execute.py` now provides a Docker execution path through a
+  count-before-generation budget gateway. Its offline tests and 5/5 scripted
+  Docker smoke prove harness integration only. Actual candidate/baseline runs
+  still require the approved provider, model, rates and combined budget.
 - Alpha user acceptance, candidate freeze and formal publication remain release
   operations after review. This PR does not alter the last released manifest or
   publish a version.
@@ -93,3 +93,23 @@ confirms the clean source checkpoint and retains all 240 samples.
 - PR #38 initial source `6528c43` passed all required checks, including actual
   native Darwin/Linux amd64/arm64 jobs. Final follow-up commit checks must also
   be verified; initial green results are not evidence for untested new code.
+
+## Budgeted evaluation harness follow-up
+
+The fixed cohort can now be executed after approval using a schema-2 priced
+plan, with counting fees reserved before count requests and generation reserved
+before forwarding. Failed/unknown responses retain reservations. The real key
+stays on the host; containers receive only a scoped attempt nonce. Exact bounded
+decimal arithmetic avoids inheriting low-precision host settings. The explicit
+provider count/output/rate assumptions and Docker bridge limitations are in
+`benchmarks/live/README.md`. No production runtime behavior changed in this step.
+
+The actual Docker smoke used the Linux arm64 binary SHA-256
+`c42d2ee4d76de92f15e1afb8599acac95185d113aa040b2f7637610a11650add`
+and toolchain image
+`sha256:e279468f7e0732d9447c126a14036689dfecd8d1bfe0787f335eb5f48864a86e`.
+All five scripted attempts completed through real tools and passed hidden tests;
+two generation requests and one patch call were recorded per task. Its local
+report is `benchmarks/results/live-budget-smoke-verified.json` and explicitly
+labels the provider injected/offline. Fixture usage values and priced reservations
+are synthetic in that report, not measured model usage or real spending.
