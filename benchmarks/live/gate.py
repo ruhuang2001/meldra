@@ -420,12 +420,15 @@ class BudgetGateway:
         close = getattr(self._transport, "close", None)
         if close is not None:
             close()
-        if self._client is not None:
+        # Handler.finish may clear _client as soon as shutdown wakes it. Keep
+        # one strong reference rather than re-reading a cross-thread attribute.
+        client = self._client
+        if client is not None:
             try:
-                self._client.shutdown(socket.SHUT_RDWR)
+                client.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            self._client.close()
+            client.close()
         if self._server is not None:
             self._server.shutdown()
             self._server.server_close()

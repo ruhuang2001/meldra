@@ -109,6 +109,21 @@ class GatewayTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_close_survives_handler_clearing_active_client(self):
+        proxy=gate.BudgetGateway(self.config,upstream_key=KEY,bearer_nonce=NONCE,
+                                 _transport=lambda *args: None)
+        class FinishingClient:
+            closed=False
+            def shutdown(self, how):
+                proxy._client=None
+            def close(self):
+                self.closed=True
+        client=FinishingClient()
+        proxy._client=client
+        proxy.__exit__(None,None,None)
+        self.assertTrue(client.closed)
+        self.assertTrue(proxy.report()["closed"])
+
     def test_validated_config_requires_explicit_prices_and_https(self):
         for key, value in [("provider_url", "http://upstream/v1"), ("provider_url", "https://user:pass@host/v1"),
                            ("provider_url", "https://host/v1?key=secret"), ("provider_url", "https://host:bad/v1"),
