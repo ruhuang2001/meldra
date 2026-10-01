@@ -110,7 +110,7 @@ See [Benchmarks](benchmarks/README.md) for JSON performance reports, the offline
 workflow suite, and comparable SanityHarness/SWE-bench evaluations.
 
 See [Architecture](docs/architecture.md) for package boundaries, the headless
-turn API, and the staged path toward background tasks and multi-agent execution.
+turn API, and the staged path toward recoverable foreground tasks and multi-agent execution.
 
 ## PR test binaries
 

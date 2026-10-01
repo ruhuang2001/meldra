@@ -1,7 +1,7 @@
 # Architecture and runtime boundaries
 
 Meldra is currently a local, serial coding agent. Its intended direction is
-background tasks and controlled parent/child agent execution. The current
+long-running foreground tasks and controlled parent/child agent execution. The current
 refactor establishes boundaries for that work; it does not introduce a daemon,
 durable task scheduler, or concurrent workspace writers.
 
@@ -85,14 +85,30 @@ Run `make check` for formatting, vet, module consistency, race tests, aggregate
 coverage and build. The boundary tests also verify headless continuation,
 concurrent turn rejection and cancellation reaching an active tool.
 
+## Task lifetime decision
+
+Closing the terminal ends the task. Background survival, a daemon, and
+attach/detach are not product requirements. Child agents and commands belong to
+the foreground run and must be cancelled when it ends. Graceful shutdown should
+save known outcomes and stop owned processes; forced termination may leave an
+operation's outcome unknown. On the next launch, reconcile that state without
+restarting work automatically. Continuing requires an explicit user resume.
+
+Persistent task records support inspection, recovery and explicit continuation;
+they do not imply automatic restart. Record approvals against the exact operation
+and workspace state, and revalidate them before any resumed side effect.
+
 ## Next architectural increments
+
+The concrete 0.2.0 scope and release gates are in [the release plan](roadmap-0.2.0.md).
 
 1. Add explicit Task/Run/ToolCall records and versioned persistence. Record
    intent and outcome around side effects; treat crash-ambiguous calls as unknown
    until reconciled, rather than automatically replaying them.
-2. Add a local service that owns runs. Terminal detach should not cancel a run;
-   attach replays sequenced events. Persist approval requests tied to operation
-   parameters and the reviewed workspace state.
+2. Make foreground task shutdown and explicit resume reliable. Propagate
+   cancellation to child agents and commands, retain sequenced execution records,
+   and reconcile incomplete operations before continuing. Persist approval
+   decisions tied to operation parameters and the reviewed workspace state.
 3. Add single-owner execution leases and isolated worktrees for child tasks.
    Parent tasks integrate child artifacts serially and verify the combined tree.
 4. Add shared parent/child budgets, structured command jobs and artifact storage.
