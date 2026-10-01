@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -598,6 +599,15 @@ func newChatRuntime(
 		return nil, err
 	}
 	if err := workspace.ProtectPath(paths.Home); err != nil {
+		return nil, err
+	}
+	// Execution locks live outside MELDRA_HOME so separate configurations share
+	// ownership. Protect their namespace when a broad workspace contains the cache.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := workspace.ProtectPath(filepath.Join(cache, "meldra")); err != nil {
 		return nil, err
 	}
 	workspace.SetContext(ctx)

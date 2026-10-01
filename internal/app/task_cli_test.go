@@ -254,3 +254,28 @@ func TestTaskResumeReconstructsMissingInitialSnapshot(t *testing.T) {
 		t.Fatalf("runs=%+v %v", runs, err)
 	}
 }
+
+func TestTaskWorkspaceProtectsExecutionLockNamespace(t *testing.T) {
+	// A user may choose a workspace that contains their normal OS cache. Runtime
+	// ownership files must stay protected just like configuration and sessions.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cache, 0700); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := ConfigPathsForHome(filepath.Join(t.TempDir(), "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "test", BaseURL: defaultBaseURL}, ChatOptions{Workspace: cache}, func(root string, approve bool) (*Workspace, error) {
+		return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, true)
+	}, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.workspace.resolve(filepath.Join(cache, "meldra", "locks", "candidate.lock"), true); err == nil {
+		t.Fatal("workspace allowed mutation of execution ownership files")
+	}
+}
