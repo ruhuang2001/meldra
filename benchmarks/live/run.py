@@ -18,6 +18,7 @@ import threading
 import time
 import uuid
 from urllib.parse import urlsplit
+import budget
 
 ROOT = Path(__file__).resolve().parent
 MAX_LOG = 64 * 1024
@@ -69,12 +70,13 @@ def prepare(output: Path) -> dict:
     return manifest
 
 
+@budget.exact
 def budget_plan(model: str, provider: str, input_price: str, output_price: str, token_budget: int,
                 max_output_tokens: int, max_cost: str, count_price_per_request: str, max_requests: int = 100) -> dict:
     try:
-        prices = [Decimal(input_price), Decimal(output_price)]
-        cost = Decimal(max_cost)
-        count_price = Decimal(count_price_per_request)
+        prices = [budget.amount(input_price), budget.amount(output_price)]
+        cost = budget.amount(max_cost)
+        count_price = budget.amount(count_price_per_request,zero=True)
     except InvalidOperation as exc:
         raise ValueError("provide known numeric prices and cost limit") from exc
     if any(not value.is_finite() or value <= 0 for value in [*prices, cost]):
@@ -83,6 +85,8 @@ def budget_plan(model: str, provider: str, input_price: str, output_price: str, 
         raise ValueError("count endpoint price must be known and nonnegative; max_requests must be positive")
     if not model.strip() or not provider.strip() or token_budget < 1 or max_output_tokens < 16 or max_output_tokens > token_budget:
         raise ValueError("provide a model/provider and positive per-task/per-response token caps")
+    for value in (token_budget,max_output_tokens,max_requests):
+        budget.count(value)
     endpoint = urlsplit(provider)
     if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
         raise ValueError("provider must be an HTTPS API base without credentials, query or fragment")
