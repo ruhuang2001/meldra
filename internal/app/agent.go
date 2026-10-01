@@ -380,7 +380,9 @@ func (a *Agent) handleInterruption(activeTurn bool) error {
 		a.session.PreviousResponseID = ""
 	}
 	a.session.resumed = true
-	if a.store != nil {
+	// Idle task state is already durable. Writing it here can create a task-era
+	// snapshot before legacy import and replace the source revision used by resume.
+	if a.store != nil && (activeTurn || a.execution == nil) {
 		if err := a.store.Save(a.session); err != nil {
 			return err
 		}

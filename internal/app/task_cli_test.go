@@ -279,3 +279,60 @@ func TestTaskWorkspaceProtectsExecutionLockNamespace(t *testing.T) {
 		t.Fatal("workspace allowed mutation of execution ownership files")
 	}
 }
+
+func TestLegacyResumeCancelledBeforeInputDoesNotCreateTaskSnapshot(t *testing.T) {
+	paths := mustConfigPaths(t)
+	legacy := NewSessionStore(paths)
+	session, err := legacy.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.appendMessage("user", "original request")
+	if err := legacy.Save(session); err != nil {
+		t.Fatal(err)
+	}
+	original, err := os.ReadFile(legacy.path(session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory := func(root string, auto bool) (*Workspace, error) {
+		return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, auto)
+	}
+	options := ChatOptions{Resume: session.ID}
+	for range 2 {
+		runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "fixture", BaseURL: defaultBaseURL}, options, factory, nil, io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := runtime.agent.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(newTaskSessionStore(paths).path(session.ID)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("idle resume created active snapshot: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(taskDirectory(paths), "tasks.db")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("idle resume created ledger: %v", err)
+		}
+	}
+	runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "fixture", BaseURL: defaultBaseURL}, options, factory, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.agent.backend = inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		return provider.Result{Response: finishResponse()}, nil
+	})
+	if err := runtime.agent.RunTurn(t.Context(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := os.ReadFile(legacy.path(session.ID))
+	if err != nil || !bytes.Equal(unchanged, original) {
+		t.Fatal("legacy source was modified")
+	}
+	db := openTaskDB(t, paths)
+	tasks, err := db.ListTasks(t.Context(), "", 10)
+	if err != nil || len(tasks) != 1 || !tasks[0].LegacyHistoryMissing {
+		t.Fatalf("tasks=%+v error=%v", tasks, err)
+	}
+}
