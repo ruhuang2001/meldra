@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "name": "offline-task-store-v1",
+  "package": "./internal/store",
+  "cases": [
+    "TestDurableTaskRunToolsAndEvents",
+    "TestRecoverInterruptedAndExplicitReconciliation",
+    "TestApprovalBindingDecisionsAndExpiry",
+    "TestFaultsRollbackStateAndEvents",
+    "TestOpenMigratesRejectsFutureAndPreservesRecords",
+    "TestImportIdempotentAtomicAndImmutable",
+    "TestArtifactsLimitsDigestsAndSymlinks",
+    "TestOwnershipAcrossTasksStoresAndSymlinkAliases",
+    "TestProcessLockContentionAndCrashRelease",
+    "TestIndependentTaskWritersSerializeTransactions",
+    "TestKilledTransactionDoesNotPersistPartialEvent",
+    "TestStorageLimitsRejectBeforeMutation",
+    "TestInvalidRecordInputsAndCrossTaskReferences",
+    "TestReadFailsOnCorruptRecordsAndDoesNotRepair",
+    "TestCancelledContextAndStoragePathGuards"
+  ]
+}

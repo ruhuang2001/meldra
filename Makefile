@@ -35,6 +35,7 @@ BENCH_CPU ?= 1
 BENCH_OUTPUT ?= benchmarks/results/micro.json
 EVAL_OUTPUT ?= benchmarks/results/scenarios.json
 EVAL_COUNT ?= 3
+EVAL_SUITE ?= benchmarks/suites/offline.json
 BENCH_BASELINE ?=
 BENCH_CANDIDATE ?=
 
@@ -45,10 +46,11 @@ benchmark-report:
 	python3 benchmarks/run.py micro --output "$(BENCH_OUTPUT)" --count $(BENCH_COUNT) --benchtime $(BENCH_TIME) --cpu $(BENCH_CPU)
 
 benchmark-eval:
-	python3 benchmarks/run.py scenarios --output "$(EVAL_OUTPUT)" --count $(EVAL_COUNT) --cpu $(BENCH_CPU)
+	python3 benchmarks/run.py scenarios --suite "$(EVAL_SUITE)" --output "$(EVAL_OUTPUT)" --count $(EVAL_COUNT) --cpu $(BENCH_CPU)
 
 benchmark-report-test:
 	python3 -m unittest discover -s benchmarks -p 'test_*.py'
+	python3 -m unittest discover -s benchmarks/live -p 'test_*.py'
 
 benchmark-compare:
 	@test -n "$(BENCH_BASELINE)" || (echo "BENCH_BASELINE is required"; exit 1)

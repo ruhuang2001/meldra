@@ -8,8 +8,10 @@ scripted tool workflows must not be presented as model success rates.
 
 | Layer | Coverage | Measurements | Model/API required |
 | --- | --- | --- | --- |
-| Go microbenchmarks | 41 parameterized cases across agent turns, tool dispatch, discovery, reads, patch preparation, durable edits/undo, sessions, streaming, replay compaction, JSON normalization and terminal rendering | ns/op, B/op, allocs/op, throughput where applicable; repeated raw samples and medians | No |
-| Offline runtime suite | 32 cases: 18 end-to-end tool/session workflows plus cancellation, concurrency, rollback, gateway, stream and persistence regressions | Pass/fail/skip per attempt, elapsed time, and tool/request counts where instrumented | No; provider is scripted or local |
+| Go microbenchmarks | 47 parameterized cases: the original 41 plus six task-store workloads for task reads, event append/page, tool lifecycle, recovery scanning and artifact deduplication | ns/op, B/op, allocs/op, throughput and artifact disk bytes where applicable; repeated samples and medians | No |
+| Offline runtime v2 | 62 cases: the original 32 plus task recording, approvals, artifacts, CLI migration, six hard-kill boundaries, explicit recovery, terminal EOF/hangup and process-group cleanup | Pass/fail/skip per attempt, elapsed time, and tool/request counts where instrumented | No; provider is scripted or local |
+| Offline task-store v1 | 15 cases: durable transactions, ownership across processes/config homes, killed transaction rollback, migrations, limits, corruption and explicit reconciliation | Pass/fail/skip per attempt and elapsed time | No |
+| Fixed release cohort | Five small Go/Python repair tasks with hidden independent Docker graders; scaffold preparation and grading are available, live execution is gated | Per-task grades; model, token and cost evidence must be attached separately | Grading: no; actual model attempts: yes |
 | SanityHarness | Small multi-language coding tasks; core and extended tiers | Actual task outcomes, task duration, attempts, caller-recorded estimated cost | Yes; Docker and SanityHarness |
 | SWE-bench | Repository issue fixing on the chosen dataset/split | Official resolved-task rate after external grading | Yes; dataset and evaluation harness |
 
@@ -29,12 +31,22 @@ Requires Go 1.26.6 and Python 3.10+ (standard library only):
 make benchmark-report-test
 make benchmark-report BENCH_OUTPUT=benchmarks/results/baseline-micro.json
 make benchmark-eval EVAL_OUTPUT=benchmarks/results/baseline-scenarios.json
+make benchmark-eval EVAL_SUITE=benchmarks/suites/store.json \
+  EVAL_OUTPUT=benchmarks/results/baseline-store.json
 ```
 
 Microbenchmarks default to five samples, 200 ms per adaptive Go benchmark, and
 `-cpu=1`. Scenarios default to three repetitions. Reports and raw Go JSON logs
 are saved under the ignored `benchmarks/results/` directory. Existing run paths
 are rejected so an earlier baseline is not overwritten accidentally.
+
+The default scenario manifest is `offline-runtime-v2` in `suites/offline.json`.
+Use `EVAL_SUITE` (or `scenarios --suite PATH`) to select a manifest. The original
+32-case manifest is retained byte-for-byte as `suites/offline-v1.json`, allowing
+comparisons with the earlier baseline. Do not compare v1 with v2 or merge store
+scores into application scores; each report records its own manifest hash and
+denominator. The store manifest includes real process contention and killed
+transaction tests, not only mocked failures.
 
 For a quick smoke check, use `BENCH_COUNT=1 BENCH_TIME=1x`; these one-shot values
 are **not** a stable performance baseline. Full runs can take several minutes,
@@ -110,6 +122,13 @@ report parser, without running the expensive microbenchmark matrix.
 
 ## Live model quality
 
+The [fixed 0.2.0 release cohort](live/README.md) prepares five small Go/Python
+tasks and grades submitted files in isolated Docker containers. Its budget
+planner rejects unknown prices and reservations above the cap, but does not
+claim runtime enforcement. Live execution stays disabled until explicit model,
+provider, cohort and cost approval plus enforceable token admission controls are
+available. Grader self-tests are not model quality evidence.
+
 Use [SanityHarness](sanityharness/README.md) for quick multi-language tasks and
 [SWE-bench](swe-bench/README.md) for realistic repository work. Both consume API
 quota. Use a fresh isolated run, fixed task cohort, fixed attempt budget and
@@ -145,6 +164,8 @@ retain empty/failed predictions in the denominator, and compare the same cohort.
 - Add tool workflows in `internal/app/evaluation_test.go`. The scenario's
   expected file contents/status are graded independently of model prose.
 - Add expected case names to `suites/offline.json`; missing names fail evaluation.
+- Add task-store fault/recovery cases to `suites/store.json`; select explicit
+  subtests where each crash boundary or signal must be counted independently.
 - Change the suite version when measurement semantics change. Keep failures and
   raw samples instead of selecting only successful or fastest attempts.
 - Prefer task success, regressions, latency, token/cost usage when available,

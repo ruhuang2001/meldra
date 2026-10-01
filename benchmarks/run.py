@@ -176,6 +176,23 @@ def execute_go(command: list[str], stream, timeout: int) -> int:
         raise
 
 
+def load_scenario_manifest(path: Path) -> dict:
+    manifest = json.loads(path.read_text())
+    if not isinstance(manifest, dict):
+        raise ValueError("scenario manifest must be an object")
+    if manifest.get("schema_version") != 1 or not isinstance(manifest.get("name"), str) or not manifest["name"]:
+        raise ValueError("scenario manifest needs schema_version 1 and a suite name")
+    package = manifest.get("package", "")
+    if not isinstance(package, str) or not re.fullmatch(r"\./[A-Za-z0-9_./-]+", package) or ".." in Path(package).parts:
+        raise ValueError("scenario package must be a local Go package path")
+    cases = manifest.get("cases")
+    if not isinstance(cases, list) or not cases or any(not isinstance(name, str) or not re.fullmatch(r"Test[A-Za-z0-9_]+(?:/[^\n]+)?", name) for name in cases):
+        raise ValueError("scenario manifest needs nonempty Go test case names")
+    if len(cases) != len(set(cases)):
+        raise ValueError("scenario manifest must contain unique cases")
+    return manifest
+
+
 def run_measurements(args: argparse.Namespace) -> int:
     output = args.output.resolve()
     if output.exists():
@@ -189,11 +206,13 @@ def run_measurements(args: argparse.Namespace) -> int:
         meta.update({"benchtime": args.benchtime, "benchmark_filter": args.bench})
         suite = "runtime-micro-v1"
     else:
-        manifest = json.loads((ROOT / "benchmarks/suites/offline.json").read_text())
+        manifest_path = getattr(args, "suite", None) or ROOT / "benchmarks/suites/offline.json"
+        manifest = load_scenario_manifest(manifest_path)
         parents = sorted({name.split("/", 1)[0] for name in manifest["cases"]})
         command += ["-run=^(" + "|".join(re.escape(name) for name in parents) + ")$", manifest["package"]]
         suite = manifest["name"]
         meta["manifest_sha256"] = hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest()
+        meta["manifest_path"] = str(manifest_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     log = output.with_suffix(".log")
     with log.open("x") as stream:
@@ -324,6 +343,8 @@ def main(argv=None) -> int:
         if name == "micro":
             command.add_argument("--benchtime", default="200ms")
             command.add_argument("--bench", default=".")
+        else:
+            command.add_argument("--suite", type=Path, help="scenario manifest (default: benchmarks/suites/offline.json)")
     for name in ("compare", "compare-quality"):
         command = sub.add_parser(name)
         command.add_argument("before", type=Path)

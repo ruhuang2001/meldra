@@ -125,7 +125,7 @@ class ReportsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "benchmarks/suites").mkdir(parents=True)
-            (root / "benchmarks/suites/offline.json").write_text(json.dumps({"cases": ["TestX"], "name": "test", "package": "./app"}))
+            (root / "benchmarks/suites/offline.json").write_text(json.dumps({"schema_version": 1, "cases": ["TestX"], "name": "test", "package": "./app"}))
             output = root / "report.json"
             args = argparse.Namespace(output=output, count=1, cpu=1, command="scenarios", timeout=10)
             def execute(command, stream, timeout):
@@ -158,6 +158,68 @@ class ReportsTest(unittest.TestCase):
                 runner.main(["--help"])
             self.assertEqual(raised.exception.code, 0)
             run.assert_not_called()
+
+    def test_cli_accepts_explicit_scenario_suite(self):
+        with mock.patch.object(runner, "run_measurements", return_value=0) as run:
+            self.assertEqual(runner.main(["scenarios", "--suite", "custom.json", "--output", "result.json"]), 0)
+            self.assertEqual(run.call_args.args[0].suite, Path("custom.json"))
+
+    def test_explicit_suite_controls_package_and_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = {"schema_version": 1, "name": "store-v1", "package": "./internal/store", "cases": ["TestStore"]}
+            source = root / "store.json"
+            source.write_text(json.dumps(manifest))
+            output = root / "result.json"
+            args = argparse.Namespace(output=output, suite=source, count=1, cpu=1, command="scenarios", timeout=10)
+
+            def execute(command, stream, timeout):
+                self.assertEqual(command[-1], "./internal/store")
+                self.assertIn("-run=^(TestStore)$", command)
+                for action in ("run", "pass"):
+                    stream.write(json.dumps({"Package": "meldra/internal/store", "Action": action, "Test": "TestStore", "Elapsed": .1}) + "\n")
+                return 0
+
+            with mock.patch.object(runner, "metadata", return_value={}), mock.patch.object(runner, "execute_go", side_effect=execute), mock.patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(runner.run_measurements(args), 0)
+            report = json.loads(output.read_text())
+            self.assertEqual(report["suite"], "store-v1")
+            self.assertEqual(report["summary"]["passed"], 1)
+            self.assertEqual(report["metadata"]["manifest_sha256"], runner.hashlib.sha256(json.dumps(manifest, sort_keys=True).encode()).hexdigest())
+
+    def test_invalid_suite_is_rejected_before_execution(self):
+        valid = {"schema_version": 1, "name": "store-v1", "package": "./internal/store", "cases": ["TestStore"]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "suite.json"
+            for field, value in [("schema_version", 2), ("package", "-exec=malicious"), ("package", "./../outside"), ("cases", []), ("cases", ["TestStore", "TestStore"]), ("cases", [12])]:
+                with self.subTest(field=field, value=value):
+                    path.write_text(json.dumps({**valid, field: value}))
+                    with self.assertRaises(ValueError):
+                        runner.load_scenario_manifest(path)
+
+    def test_original_suite_is_preserved_for_baseline_comparison(self):
+        manifest = runner.load_scenario_manifest(runner.ROOT / "benchmarks/suites/offline-v1.json")
+        self.assertEqual(manifest["name"], "offline-runtime-v1")
+        self.assertEqual(len(manifest["cases"]), 32)
+
+    def test_missing_suite_path_does_not_start_go(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(runner, "metadata", return_value={}), \
+             mock.patch.object(runner, "execute_go") as execute, mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(runner.main(["scenarios", "--suite", str(Path(directory) / "missing.json"),
+                                          "--output", str(Path(directory) / "report.json")]), 1)
+            execute.assert_not_called()
+
+    def test_scenario_comparison_requires_matching_selected_suite(self):
+        before = {"schema_version": 1, "kind": "scenarios", "suite": "store-v1", "completed": True,
+                  "metadata": {"manifest_sha256": "fixture"},
+                  "cases": {"TestStore": {"passed": 1, "attempts": [{}], "duration_ms": {"median": 10}}}}
+        self.assertEqual(runner.comparison(before, before)["changes"][0]["pass_rate_after"], 1)
+        for mutate in (lambda r: r.update(suite="app-v2"),
+                       lambda r: r["metadata"].update(manifest_sha256="changed")):
+            after = copy.deepcopy(before)
+            mutate(after)
+            with self.assertRaises(ValueError):
+                runner.comparison(before, after)
 
 
 if __name__ == "__main__":

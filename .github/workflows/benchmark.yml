@@ -35,6 +35,8 @@ jobs:
         run: make benchmark-report
       - name: Evaluate offline workflows
         run: make benchmark-eval
+      - name: Evaluate task persistence and recovery
+        run: make benchmark-eval EVAL_SUITE=benchmarks/suites/store.json EVAL_OUTPUT=benchmarks/results/store-scenarios.json
       - uses: actions/upload-artifact@v7
         if: always()
         with:
