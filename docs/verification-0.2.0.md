@@ -1,9 +1,9 @@
 # 0.2.0 implementation verification
 
 This records evidence for the implementation PR, not an announcement that 0.2.0
-has shipped. Source checkpoint: `dd06e00`. No production tags/releases or merge
-to main were performed. Subsequent documentation-only commits do not change the
-measurement source. Any later runtime change needs proportionate revalidation.
+has shipped. Performance/initial evaluation checkpoint: `dd06e00`. No production tags/releases or merge
+to main were performed. Later runtime fixes are revalidated separately below; they do not retroactively
+change the source revision recorded in the original benchmark files.
 
 ## Requirements and evidence
 
@@ -81,3 +81,15 @@ confirms the clean source checkpoint and retains all 240 samples.
   unknown for explicit handling; a saved plan alone is not a tool receipt.
 - SQL schema migration, source-session preservation and artifact integrity are
   tested locally. Backup/downgrade guidance is in `release-0.2.0.md`.
+
+## Independent audit follow-ups
+
+- `74257f9` makes Git root preflight observe the foreground context, timeout and
+  process-group cleanup, closing a cancellation gap before actual commands.
+- `bbc0617` keys ownership by device/inode rather than path spelling and
+  revalidates store/workspace identity. On case-insensitive APFS, casing aliases
+  now contend for the same lock; replaced directories fail closed. Tests also
+  cover distinct directories on case-sensitive filesystems without skipping.
+- PR #38 initial source `6528c43` passed all required checks, including actual
+  native Darwin/Linux amd64/arm64 jobs. Final follow-up commit checks must also
+  be verified; initial green results are not evidence for untested new code.
