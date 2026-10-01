@@ -55,13 +55,16 @@ confirms the clean source checkpoint and retains all 240 samples.
 
 - Remote PR CI and four native platform smoke jobs must be green on the final
   candidate. Local cross-compilation is not evidence of execution on all four.
-- The fixed five-task cohort has **not** been solved by a live model. Grader
-  fixture checks do not establish agent quality. Model/provider/prices/expense
-  authorization remain a required human decision; no paid API calls were made.
+- The fixed five-task cohort has **not** been solved by a live model. On
+  2026-10-01 the user explicitly chose code + PR delivery and deferred real
+  model evaluation until before publication. It is a future release gate, not
+  an outstanding requirement for this implementation handoff. Grader fixtures
+  do not establish agent quality; no paid API calls were made.
 - `benchmarks/live/execute.py` now provides a Docker execution path through a
   count-before-generation budget gateway. Its offline tests and 5/5 scripted
   Docker smoke prove harness integration only. Actual candidate/baseline runs
-  still require the approved provider, model, rates and combined budget.
+  still require the approved provider, model, rates and combined budget at the
+  later release-evaluation stage.
 - Alpha user acceptance, candidate freeze and formal publication remain release
   operations after review. This PR does not alter the last released manifest or
   publish a version.
@@ -113,3 +116,9 @@ two generation requests and one patch call were recorded per task. Its local
 report is `benchmarks/results/live-budget-smoke-verified.json` and explicitly
 labels the provider injected/offline. Fixture usage values and priced reservations
 are synthetic in that report, not measured model usage or real spending.
+
+The evaluation gateway/runner follow-up passed 47 offline tests, including a
+deterministic regression for a Linux CI-discovered client-close race. This
+changed only evaluation tooling, not the Meldra runtime. The operator explicitly
+deferred actual model runs; code delivery is reviewed separately from alpha or
+stable publication readiness.
