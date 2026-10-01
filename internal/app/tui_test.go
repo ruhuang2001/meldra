@@ -447,6 +447,26 @@ func TestTUIInputStylesKeepTerminalBackground(t *testing.T) {
 	}
 }
 
+func TestTUIViewPublishesRealCursorForIMEPositioning(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{
+		workspace: "/tmp/project",
+		model:     "gpt-test",
+	})
+	model.width = 100
+	model.height = 24
+	model.input.Focus()
+	model.input.SetValue("你好")
+	model.resize()
+
+	view := model.View()
+	if view.Cursor == nil {
+		t.Fatal("TUI did not publish a real cursor for the focused composer")
+	}
+	if view.Cursor.Position.X <= 0 || view.Cursor.Position.Y < tuiHeaderHeight {
+		t.Fatalf("cursor position = %+v, want an input-box position", view.Cursor.Position)
+	}
+}
+
 func isNoColor(value any) bool {
 	_, ok := value.(lipgloss.NoColor)
 	return ok

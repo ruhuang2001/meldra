@@ -410,6 +410,10 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	input.Prompt = "> "
 	input.Placeholder = "Describe the change you want"
 	input.SetStyles(tuiInputStyles(nil))
+	// Let the terminal know the actual insertion point. The default virtual
+	// cursor is visually correct, but macOS IME candidate windows use the real
+	// terminal cursor position and otherwise appear at a stale screen location.
+	input.SetVirtualCursor(false)
 	input.ShowLineNumbers = false
 	input.DynamicHeight = true
 	input.MaxHeight = 4
@@ -884,6 +888,13 @@ func (m *tuiModel) View() tea.View {
 	footer := tuiDimStyle.Render(footerText)
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
 	view := tea.NewView(content)
+	if m.pending == nil && !m.busy && !m.stopped && m.input.Focused() {
+		if cursor := m.input.Cursor(); cursor != nil {
+			cursor.Position.X += tuiInputStyle.GetBorderLeftSize() + tuiInputStyle.GetPaddingLeft()
+			cursor.Position.Y += tuiHeaderHeight + m.viewport.Height() + tuiInputStyle.GetBorderTopSize() + tuiInputStyle.GetPaddingTop()
+			view.Cursor = cursor
+		}
+	}
 	view.AltScreen = true
 	// Leave mouse tracking disabled so the terminal can natively select and
 	// copy rendered output. Keyboard PgUp/PgDn remains available for scroll.
