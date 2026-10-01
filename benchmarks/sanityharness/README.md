@@ -60,7 +60,7 @@ baseline.
 ## Customization
 
 Edit `sanity.toml` to change the model or timeout. The agent is configured to
-run from SanityHarness's isolated task workspace with `--yes --prompt "{prompt}"`.
+run from SanityHarness's isolated task workspace with `--auto-approve --prompt "{prompt}"`.
 It deliberately does not pass `--workspace /workspace`: `/workspace` is the
 Docker validation path, while the agent runs in a separate temporary workspace.
 

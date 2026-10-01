@@ -76,7 +76,7 @@ config.chmod(0o600)
 environment = dict(os.environ, HOME='/tmp/home', MELDRA_HOME=str(home),
     OPENAI_API_KEY=nonce, OPENAI_MODEL=model,
     OPENAI_BASE_URL='http://127.0.0.1:%d/v1' % server.server_address[1])
-status = subprocess.run(['/opt/meldra', '--yes', '--workspace', '/workspace', '--prompt', prompt],
+status = subprocess.run(['/opt/meldra', '--auto-approve', '--workspace', '/workspace', '--prompt', prompt],
     stdin=subprocess.DEVNULL, env=environment).returncode
 # Agent-owned records are useful diagnostics, not an independent success oracle.
 metrics = {'tool_calls': None, 'tool_statuses': None}

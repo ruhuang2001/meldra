@@ -112,7 +112,7 @@ def run_meldra(workspace: Path, prompt: str, timeout: int, meldra_bin: str) -> s
     # workspace. This matches the location used for the credential fallback.
     env["MELDRA_HOME"] = str(resolve_meldra_home(env))
 
-    cmd = [meldra_bin, "--workspace", str(workspace), "--yes", "--prompt", prompt]
+    cmd = [meldra_bin, "--workspace", str(workspace), "--auto-approve", "--prompt", prompt]
     result = subprocess.run(
         cmd,
         cwd=str(workspace),

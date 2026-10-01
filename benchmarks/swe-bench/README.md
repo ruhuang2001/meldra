@@ -84,7 +84,7 @@ python -m swebench.harness.run_evaluation \
 1. Loads the SWE-bench dataset from HuggingFace.
 2. For each instance:
    - Clones the target repository and checks out the `base_commit`.
-   - Runs the selected Meldra binary with `--workspace <repo> --yes --prompt "<issue>"`.
+   - Runs the selected Meldra binary with `--workspace <repo> --auto-approve --prompt "<issue>"`.
    - Extracts tracked changes and untracked files as `model_patch`.
 3. Writes one prediction per line to `predictions.jsonl`.
 

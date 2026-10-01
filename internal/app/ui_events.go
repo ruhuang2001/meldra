@@ -67,5 +67,5 @@ type ApprovalRequest struct {
 type ApprovalFunc func(context.Context, ApprovalRequest) bool
 
 // ApprovalPresenter shows an operation that was approved without requiring a
-// confirmation response, such as an operation approved by --yes.
+// confirmation response, such as an operation approved by --auto-approve.
 type ApprovalPresenter func(ApprovalRequest)

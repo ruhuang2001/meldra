@@ -15,7 +15,7 @@ auto_pull = true
 
 [agents.meldra]
 command = "meldra"
-args = ["--yes", "--prompt", "{prompt}"]
+args = ["--auto-approve", "--prompt", "{prompt}"]
 # Each task gets ephemeral configuration and session storage. Authentication is
 # supplied through the inherited OPENAI_API_KEY instead of mounting ~/.meldra.
 env = { MELDRA_HOME = "/tmp/meldra" }

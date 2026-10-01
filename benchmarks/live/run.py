@@ -105,7 +105,7 @@ def budget_plan(model: str, provider: str, input_price: str, output_price: str, 
             "required_before_live": ["explicit approval of model, provider, cohort and prices",
                                      "gateway count-before-generation admission and retained reservations",
                                      "max_output_tokens on every model request, including reasoning",
-                                     "Docker-only agent execution; no host --yes"]}
+                                     "Docker-only agent execution; no host --auto-approve"]}
 
 
 def validate_submission(workspace: Path, task: dict) -> list[str]:

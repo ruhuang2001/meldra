@@ -209,7 +209,7 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch {
-		case argument == "--yes":
+		case argument == "--auto-approve" || argument == "--yes":
 			options.AutoApprove = true
 		case argument == "--workspace":
 			index++
@@ -799,7 +799,7 @@ Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
   --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
-  --yes                          Skip approvals; use only in an isolated container or VM.
+	  --auto-approve                 Skip operation approvals; use only in an isolated container or VM.
 
 Configuration:
   Meldra reads ~/.meldra/config.toml and ~/.meldra/credentials.env by default.

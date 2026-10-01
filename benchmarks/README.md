@@ -141,7 +141,7 @@ available. Grader self-tests are not model quality evidence.
 Use [SanityHarness](sanityharness/README.md) for quick multi-language tasks and
 [SWE-bench](swe-bench/README.md) for realistic repository work. Both consume API
 quota. Use a fresh isolated run, fixed task cohort, fixed attempt budget and
-recorded model/provider settings. Meldra's `--yes` mode requires an isolated
+recorded model/provider settings. Meldra's `--auto-approve` mode requires an isolated
 container or VM; a temporary directory alone is not an OS sandbox.
 
 Create SanityHarness baselines using the existing `make benchmark-sanity-baseline`

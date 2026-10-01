@@ -151,7 +151,7 @@ workspace read/write and the binary read-only; use a read-only root filesystem,
 a private `/tmp`, explicit CPU/memory/PID limits, dropped capabilities and
 `no-new-privileges`. Supply only explicitly approved model credentials and
 configuration. Never mount the Docker socket, host home/configuration, repository
-or grader directories. Never invoke host `meldra --yes`. Agent network access is
+or grader directories. Never invoke host `meldra --auto-approve`. Agent network access is
 limited by the execution environment; a normal Docker bridge is not a domain
 allowlist and must not be described as one.
 

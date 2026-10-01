@@ -23,7 +23,7 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 	}{
 		{
 			name: "session ID followed by yes",
-			args: []string{"session-123", "--yes"},
+			args: []string{"session-123", "--auto-approve"},
 			want: ChatOptions{Resume: "session-123", AutoApprove: true},
 		},
 		{
@@ -38,7 +38,7 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 		},
 		{
 			name: "flags before session ID",
-			args: []string{"--yes", "session-123"},
+			args: []string{"--auto-approve", "session-123"},
 			want: ChatOptions{Resume: "session-123", AutoApprove: true},
 		},
 		{
@@ -450,7 +450,7 @@ func TestParseChatOptionsRejectsAnotherFlagAsAnOptionValue(t *testing.T) {
 }
 
 func TestParseChatOptionsAcceptsPrompt(t *testing.T) {
-	got, err := parseChatOptions([]string{"--workspace", "./project", "--yes", "--prompt", "fix the bug"})
+	got, err := parseChatOptions([]string{"--workspace", "./project", "--auto-approve", "--prompt", "fix the bug"})
 	if err != nil {
 		t.Fatal(err)
 	}

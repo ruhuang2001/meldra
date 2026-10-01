@@ -237,7 +237,7 @@ time.sleep(90)
 	}))
 	t.Cleanup(server.Close)
 	paths := shutdownPaths(t, server.URL)
-	process, _ := startShutdownProcess(t, paths, []string{"--workspace", workspace, "--yes", "--prompt", "run the owned command"}, false)
+	process, _ := startShutdownProcess(t, paths, []string{"--workspace", workspace, "--auto-approve", "--prompt", "run the owned command"}, false)
 	var pids []int
 	deadline := time.NewTimer(15 * time.Second)
 	defer deadline.Stop()

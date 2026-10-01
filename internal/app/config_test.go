@@ -660,7 +660,7 @@ func TestCLIWorkspaceSessionsAndResume(t *testing.T) {
 }
 
 func TestParseChatOptions(t *testing.T) {
-	options, err := parseChatOptions([]string{"--workspace=./project", "--resume", "latest", "--yes"})
+	options, err := parseChatOptions([]string{"--workspace=./project", "--resume", "latest", "--auto-approve"})
 	if err != nil {
 		t.Fatal(err)
 	}
