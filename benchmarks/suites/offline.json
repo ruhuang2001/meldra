@@ -67,6 +67,13 @@
     "TestTaskRecoveryFailedCallIsNeverAutomaticallyRetried",
     "TestTaskCancellationStopsGitPreflight",
     "TestTaskVerificationPreservesFailureAndStopsUnknown/failure",
-    "TestTaskVerificationPreservesFailureAndStopsUnknown/cancel"
+    "TestTaskVerificationPreservesFailureAndStopsUnknown/cancel",
+    "TestLegacyResumeCancelledBeforeInputDoesNotCreateTaskSnapshot",
+    "TestTaskRecoveryReplaysRequestsBeforeStartingAnotherRun",
+    "TestTaskRecoveryDoesNotDeduplicateSeparateIdenticalRequests",
+    "TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint",
+    "TestTaskEditConflictRemainsRecoverableWithoutUnknownOutcome",
+    "TestUndoPreimageConflictIsKnownFailure",
+    "TestWriteFailureAfterMutationStillRequiresReconciliation"
   ]
 }

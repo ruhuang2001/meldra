@@ -138,7 +138,13 @@ upstream deadline before Meldra's 90-second idle watchdog. This harness measures
 first token. Timeouts remain failed attempts with nonrefunded reservations.
 
 For regression evidence run the same cohort against the selected baseline and
-candidate binary/model. That is **ten attempts in total**, not five. The agreed
+candidate binary/model. That is **ten attempts in total**, not five.
+For a 0.1.x baseline pass `--agent-cli legacy-0.1` to `execute.py`; it supplies
+that binary's `--yes` option. The default `--agent-cli current` uses
+`--auto-approve`. The chosen profile and approval option are recorded in the
+execution manifest/report. This adapter only controls the tested binary's argv:
+the new Meldra CLI still rejects `--yes`. Use identical model/cohort/budget
+settings for both profiles. The agreed
 total budget must cover both runs; allocate two plans whose caps sum to at most
 the approved total. Do not infer permission for the second run from a candidate-
 only approval. Compare task identities and fixture hashes before classifying

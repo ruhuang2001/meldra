@@ -9,8 +9,8 @@ scripted tool workflows must not be presented as model success rates.
 | Layer | Coverage | Measurements | Model/API required |
 | --- | --- | --- | --- |
 | Go microbenchmarks | 48 parameterized cases: the original 41 plus seven task-store workloads for task reads, event append/page, tool lifecycle, recovery scanning, indexed provider-call lookup and artifact deduplication | ns/op, B/op, allocs/op, throughput and artifact disk bytes where applicable; repeated samples and medians | No |
-| Offline runtime v2 | 65 cases: the original 32 plus task recording, approvals, artifacts, CLI migration, six hard-kill boundaries, explicit recovery, terminal EOF/hangup, process-group cleanup and cancellation during preflight/verification | Pass/fail/skip per attempt, elapsed time, and tool/request counts where instrumented | No; provider is scripted or local |
-| Offline task-store v1 | 22 cases: durable transactions, ownership across processes/config homes, killed transaction rollback, migrations, indexed provider-call lookup, filesystem identity/alias ownership, limits, corruption and explicit reconciliation | Pass/fail/skip per attempt and elapsed time | No |
+| Offline runtime v2 | 72 cases: the original 32 plus task recording, approvals, artifacts, CLI migration, six hard-kill boundaries, explicit recovery, terminal EOF/hangup, process-group cleanup and cancellation during preflight/verification | Pass/fail/skip per attempt, elapsed time, and tool/request counts where instrumented | No; provider is scripted or local |
+| Offline task-store v1 | 23 cases: durable transactions, ownership across processes/config homes, killed transaction rollback, migrations, indexed provider-call lookup, filesystem identity/alias ownership, limits, corruption and explicit reconciliation | Pass/fail/skip per attempt and elapsed time | No |
 | Fixed release cohort | Five small Go/Python repair tasks with hidden independent Docker graders; scaffold preparation and grading are available, live execution is gated | Per-task grades; model, token and cost evidence must be attached separately | Grading: no; actual model attempts: yes |
 | SanityHarness | Small multi-language coding tasks; core and extended tiers | Actual task outcomes, task duration, attempts, caller-recorded estimated cost | Yes; Docker and SanityHarness |
 | SWE-bench | Repository issue fixing on the chosen dataset/split | Official resolved-task rate after external grading | Yes; dataset and evaluation harness |
@@ -49,7 +49,7 @@ denominator. The store manifest includes real process contention and killed
 transaction tests, not only mocked failures.
 
 The saved `dd06e00` reports describe an earlier checkpoint, not the expanded
-65/22-case manifests:
+current 72/23-case manifests:
 
 - `app`: 62 cases, 186/186 passed; manifest SHA-256 `fe03cfc4f93f181f7f8f580bcf8449707d72169032b51310c0dd77fb262ea1bf`.
 - `store`: 17 cases, 51/51 passed; manifest SHA-256 `ebd91de8c0eb50c490c8e2428c630853a81df78f1bf6b612011d46ea8fc2bad8`.

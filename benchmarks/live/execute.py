@@ -29,6 +29,7 @@ import gate
 import run as cohort_runner
 
 MAX_LOG = 64 * 1024
+AGENT_CLI_APPROVAL = {'current': '--auto-approve', 'legacy-0.1': '--yes'}
 
 
 class CleanupUnconfirmed(RuntimeError):
@@ -43,7 +44,8 @@ class DockerInterrupted(KeyboardInterrupt):
 # The loopback relay preserves Meldra's HTTP-only-on-loopback validation.
 CONTAINER_SCRIPT = r'''
 import http.client, http.server, json, os, pathlib, sqlite3, subprocess, sys, threading
-port, nonce, model, prompt, marker = sys.argv[1:]
+approval_flag, port, nonce, model, prompt, marker = sys.argv[1:]
+if approval_flag not in ("--auto-approve", "--yes"): raise ValueError("unsupported agent approval option")
 class Relay(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
     def do_POST(self):
@@ -76,7 +78,7 @@ config.chmod(0o600)
 environment = dict(os.environ, HOME='/tmp/home', MELDRA_HOME=str(home),
     OPENAI_API_KEY=nonce, OPENAI_MODEL=model,
     OPENAI_BASE_URL='http://127.0.0.1:%d/v1' % server.server_address[1])
-status = subprocess.run(['/opt/meldra', '--auto-approve', '--workspace', '/workspace', '--prompt', prompt],
+status = subprocess.run(['/opt/meldra', approval_flag, '--workspace', '/workspace', '--prompt', prompt],
     stdin=subprocess.DEVNULL, env=environment).returncode
 # Agent-owned records are useful diagnostics, not an independent success oracle.
 metrics = {'tool_calls': None, 'tool_statuses': None}
@@ -169,7 +171,10 @@ def binary_metadata(binary: Path) -> dict:
 
 
 def agent_argv(image_id: str, workspace: Path, binary: Path, name: str,
-               port: int, nonce: str, model: str, prompt: str, marker: str) -> list[str]:
+               port: int, nonce: str, model: str, prompt: str, marker: str,
+               agent_cli: str = 'current') -> list[str]:
+    if agent_cli not in AGENT_CLI_APPROVAL:
+        raise ValueError('unsupported agent CLI profile')
     for path in (workspace.resolve(), binary.resolve()):
         if ',' in str(path) or '\n' in str(path):
             raise ValueError('Docker mount paths cannot contain commas or newlines')
@@ -184,7 +189,7 @@ def agent_argv(image_id: str, workspace: Path, binary: Path, name: str,
             '--env', 'GOCACHE=/tmp/go-cache', '--env', 'PYTHONDONTWRITEBYTECODE=1',
             '--mount', f'type=bind,source={workspace.resolve()},target=/workspace',
             '--mount', f'type=bind,source={binary.resolve()},target=/opt/meldra,readonly',
-            image_id, 'python3', '-c', CONTAINER_SCRIPT, str(port), nonce, model, prompt, marker]
+            image_id, 'python3', '-c', CONTAINER_SCRIPT, AGENT_CLI_APPROVAL[agent_cli], str(port), nonce, model, prompt, marker]
 
 
 def safe_text(value: str, credentials: tuple[str, ...]) -> str:
@@ -281,6 +286,9 @@ def run_evaluation(args, *, gateway_factory=None) -> dict:
         raise ValueError('per-task timeout must be between 1 and 3600 seconds')
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', args.api_key_env):
         raise ValueError('name the explicit upstream API key environment variable')
+    agent_cli = getattr(args, 'agent_cli', 'current')
+    if agent_cli not in AGENT_CLI_APPROVAL:
+        raise ValueError('unsupported agent CLI profile')
     api_key = os.environ.get(args.api_key_env, '')
     if not api_key:
         raise ValueError('the explicitly named API key variable is empty')
@@ -312,6 +320,7 @@ def run_evaluation(args, *, gateway_factory=None) -> dict:
     factory = gateway_factory or gate.BudgetGateway
     manifest.update(metadata, schema_version=2, kind='live_execution', live_model=not injected,
                     model=plan['model'], provider=plan['provider'], approved_plan_sha256=plan_hash,
+                    agent_cli=agent_cli, approval_option=AGENT_CLI_APPROVAL[agent_cli],
                     image_id=image_id, budget_plan=plan,
                     network_isolation='Docker bridge; no domain egress allowlist',
                     credential_isolation='upstream key host-only; per-attempt bounded gateway nonce',
@@ -353,7 +362,7 @@ def run_evaluation(args, *, gateway_factory=None) -> dict:
                 private_json(manifest_path, manifest, replace=True)
                 command = agent_argv(image_id, args.run_dir / task['id'] / 'workspace', snapshot,
                                      name, gateway.address[1], nonce, plan['model'],
-                                     (args.run_dir / task['id'] / 'prompt.txt').read_text(), marker)
+                                     (args.run_dir / task['id'] / 'prompt.txt').read_text(), marker, agent_cli)
                 status, output, truncated = docker_attempt(command, name, args.timeout)
                 attempt['cleanup_confirmed'] = True
             attempt['status'] = 'completed' if status == 0 else 'timed_out' if status == 124 else 'failed'
@@ -440,6 +449,8 @@ def main() -> int:
     parser.add_argument('--api-key-env', required=True)
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--image', required=True)
+    parser.add_argument('--agent-cli', choices=tuple(AGENT_CLI_APPROVAL), default='current',
+                        help='CLI profile of the binary under test; use legacy-0.1 only for a 0.1.x baseline')
     parser.add_argument('--run-dir', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--timeout', type=int, default=600)

@@ -24,6 +24,7 @@
     "TestTaskOwnershipUsesStoreFilesystemIdentity",
     "TestLeaseRejectsReplacedWorkspaceDirectory",
     "TestStoreRejectsReplacedDirectory",
-    "TestTaskCanResumeThroughSameDirectoryAlias"
+    "TestTaskCanResumeThroughSameDirectoryAlias",
+    "TestRequestEventsPageOnlyRequestsInTaskOrder"
   ]
 }

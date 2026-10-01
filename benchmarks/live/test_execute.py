@@ -117,7 +117,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertTrue(mounts[1].endswith('target=/opt/meldra,readonly'))
         for forbidden in ('docker.sock', '/grader', str(Path.home()), KEY):
             self.assertNotIn(forbidden, ' '.join(argv))
-        self.assertEqual(argv[-8:-6], ['python3', '-c'])
+        self.assertEqual(argv[-9:-7], ['python3', '-c'])
         with self.assertRaises(ValueError):
             runner.agent_argv(IMAGE, Path('/tmp/comma,bad'), Path('/tmp/bin'), 'n', 1, 'n', 'm', 'p', 'q')
 
@@ -137,11 +137,31 @@ class ExecutionTests(unittest.TestCase):
             binary.chmod(0o755)
             script = runner.CONTAINER_SCRIPT.replace('/tmp/meldra', str(Path(tmp) / 'config'))
             script = script.replace('/opt/meldra', str(binary))
-            result = subprocess.run([sys.executable, '-c', script, '9', 'test-only-nonce',
+            result = subprocess.run([sys.executable, '-c', script, '--auto-approve', '9', 'test-only-nonce',
                                      'offline-model', 'offline prompt', 'metrics:'],
                                     capture_output=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertIn('metrics:', result.stdout.decode())
+
+    def test_wrapper_selects_legacy_cli_without_changing_candidate_parser(self):
+        for profile, option in runner.AGENT_CLI_APPROVAL.items():
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as tmp:
+                binary = Path(tmp) / 'fake-meldra'
+                binary.write_text('#!' + sys.executable + '\nimport sys\n'
+                                  + 'assert sys.argv[1] == ' + repr(option) + '\n'
+                                  + 'assert sys.argv[2:4] == ["--workspace", "/workspace"]\n')
+                binary.chmod(0o755)
+                argv = runner.agent_argv(IMAGE, Path(tmp) / 'workspace', binary, 'attempt',
+                                         9, 'test-only-nonce', 'm', 'p', 'metrics:', profile)
+                script = runner.CONTAINER_SCRIPT.replace('/tmp/meldra', str(Path(tmp) / 'config'))
+                script = script.replace('/opt/meldra', str(binary))
+                command = [sys.executable, '-c', script, *argv[-6:]]
+                result = subprocess.run(command, capture_output=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr.decode())
+                self.assertIn('metrics:', result.stdout.decode())
+        with self.assertRaises(ValueError):
+            runner.agent_argv(IMAGE, Path('/tmp/work'), Path('/tmp/bin'),
+                              'n', 9, 'n', 'm', 'p', 'q', 'arbitrary')
 
     def test_failed_attempt_kept_in_denominator_logs_private_budget_shared_and_no_rerun(self):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {'EXPLICIT_EVAL_KEY': KEY}):
@@ -165,6 +185,8 @@ class ExecutionTests(unittest.TestCase):
                 self.assertFalse(result['model_quality_evidence'])
                 self.assertFalse(result['live_model'])
                 self.assertEqual(result['kind'], 'offline_execution_test')
+                self.assertEqual(result['agent_cli'], 'current')
+                self.assertEqual(result['approval_option'], '--auto-approve')
                 self.assertEqual(result['reserved_cost_usd'], '0.005')
                 self.assertIsNone(result['reported_cost_usd'])
                 self.assertEqual([str(g.config.max_cost_usd) for g in FakeGateway.instances],

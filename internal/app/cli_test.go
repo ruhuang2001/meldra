@@ -494,3 +494,15 @@ func TestRunSessionsCommandTruncatesUTF8OnRuneBoundary(t *testing.T) {
 		t.Fatalf("session list = %q, want valid UTF-8 containing %q", got, want)
 	}
 }
+
+func TestApprovalCLIRejectsRemovedYesAlias(t *testing.T) {
+	for _, parse := range []func([]string) (ChatOptions, error){parseChatOptions, parseResumeOptions} {
+		if _, err := parse([]string{"--yes"}); err == nil {
+			t.Fatal("removed --yes alias was accepted")
+		}
+		options, err := parse([]string{"--auto-approve"})
+		if err != nil || !options.AutoApprove {
+			t.Fatalf("public approval option=%+v err=%v", options, err)
+		}
+	}
+}
