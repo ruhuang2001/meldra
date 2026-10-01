@@ -71,6 +71,21 @@ func (s *Store) GetToolCall(ctx context.Context, id string) (task.ToolCall, erro
 	return getRecord[task.ToolCall](ctx, s.db, "SELECT record FROM tool_calls WHERE id=?", id)
 }
 
+const providerLookupSQL = `SELECT record FROM tool_calls WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.provider_call_id')=? ORDER BY planned,id LIMIT 1`
+
+// GetToolCallByProviderID looks up a replay identity within one task. It loads
+// at most one bounded record even when a long task has thousands of calls.
+// Empty provider IDs are not identities and never match another empty ID.
+func (s *Store) GetToolCallByProviderID(ctx context.Context, taskID, providerID string) (task.ToolCall, error) {
+	if !validID(taskID) || providerID == "" {
+		return task.ToolCall{}, task.ErrNotFound
+	}
+	if len(providerID) > 1024 {
+		return task.ToolCall{}, task.ErrLimit
+	}
+	return getRecord[task.ToolCall](ctx, s.db, providerLookupSQL, taskID, providerID)
+}
+
 func (s *Store) ListTasks(ctx context.Context, workspace string, limit int) ([]task.Task, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 1000

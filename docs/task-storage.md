@@ -94,6 +94,11 @@ All execution mutations require the matching live Lease. Each state change and
 its event append share one SQLite transaction. Events are task-local monotonic
 sequences, queried by `after` cursor in pages of at most 1,000. The protocol
 includes schema version 1, event ID, Run/ToolCall association, status and reason.
+Provider-call replay lookup uses a task-scoped expression index and loads at
+most one bounded record; it does not decode the whole history for every tool.
+The index is rebuildable and added idempotently to existing schema 1 stores;
+older binaries can still read those stores. Empty provider IDs are not replay
+identities. The query-plan test prevents an accidental full-history scan.
 
 The application commits tool intent before starting the handler and commits
 the outcome after completion. SQLite cannot atomically commit an external
@@ -140,7 +145,8 @@ legacy import, corruption and limits, private paths, cross-store symlink aliases
 actual subprocess lock competition and SIGKILL lock release. The application
 tests own signal propagation, file reconciliation and command process groups.
 
-Store benchmarks measure task reads, event append/page, a complete tool
+Store benchmarks measure task reads, indexed replay lookup after 1,000 calls,
+event append/page, a complete tool
 lifecycle, recovery scanning, and large-log artifact deduplication. These are
 storage/latency metrics, not model quality or evidence that an unknown external
 command can be safely replayed.

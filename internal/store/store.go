@@ -126,6 +126,12 @@ PRAGMA user_version = 1;`)
 			return fmt.Errorf("migrate task database: %w", err)
 		}
 	}
+	// This rebuildable index is backward compatible with schema 1. Keeping
+	// provider identity indexed prevents replay lookup from decoding/scanning
+	// the complete history on every subsequent tool call.
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tools_provider_call ON tool_calls(task_id,json_extract(CAST(record AS TEXT),'$.provider_call_id'),planned,id)`); err != nil {
+		return fmt.Errorf("index tool identities: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
