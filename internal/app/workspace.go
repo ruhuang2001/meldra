@@ -1060,7 +1060,6 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	}) {
 		return "Declined; no files changed.", nil
 	}
-	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	if err := w.writeChanges(changes, false); err != nil {
 		return "", err
 	}
@@ -1178,6 +1177,9 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 			}
 			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
 		}
+		// Validation and path checks above have not changed the workspace.
+		// Only classify later failures as uncertain after entering mutation.
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 		if exists {
 			if !reverse {
 				created, e := makeDirectoryTreeDurableTracked(filepath.Dir(c.path), 0o755, w.syncDirectory)
@@ -1408,7 +1410,6 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	}) {
 		return "Declined; no files changed.", nil
 	}
-	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	if e := w.writeChanges(w.last, true); e != nil {
 		return "", e
 	}
