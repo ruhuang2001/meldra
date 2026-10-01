@@ -46,17 +46,29 @@ class CohortTests(unittest.TestCase):
                 runner.prepare(output)
 
     def test_budget_fails_closed_and_never_claims_enforcement(self):
-        result = runner.budget_plan("configured-model", "configured-provider", "2", "10", 10000, 1000, "5")
+        result = runner.budget_plan("configured-model", "https://provider.invalid/v1", "2", "10", 10000, 1000, "5", "0")
         self.assertEqual(result["conditional_cost_upper_bound_usd"], "0.5")
         self.assertFalse(result["budget_enforced"])
         self.assertFalse(result["live_execution_enabled"])
         for bad in ("unknown", "NaN", "Infinity", "0", "-1"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                runner.budget_plan("model", "provider", bad, "10", 10000, 1000, "5")
+                runner.budget_plan("model", "https://provider.invalid/v1", bad, "10", 10000, 1000, "5", "0")
         with self.assertRaises(ValueError):
-            runner.budget_plan("model", "provider", "2", "10", 1000000, 1000, "5")
+            runner.budget_plan("model", "https://provider.invalid/v1", "2", "10", 1000000, 1000, "5", "0")
         with self.assertRaises(ValueError):
-            runner.budget_plan("model", "provider", "2", "10", 100, 1000, "5")
+            runner.budget_plan("model", "https://provider.invalid/v1", "2", "10", 100, 1000, "5", "0")
+
+    def test_budget_includes_count_fee_and_requires_verified_provider(self):
+        planned=runner.budget_plan("model","https://api.example/v1","2","10",10000,1000,"5","0.001",20)
+        self.assertEqual(planned["conditional_cost_upper_bound_usd"],"0.600")
+        with self.assertRaises(ValueError):
+            runner.budget_plan("model","https://api.example/v1","2","10",10000,1000,"0.5","0.001",20)
+        for endpoint in ["http://localhost/v1","https://key:secret@api.example/v1","https://api.example/v1?key=secret","provider"]:
+            with self.subTest(endpoint=endpoint), self.assertRaises(ValueError):
+                runner.budget_plan("model",endpoint,"2","10",10000,1000,"5","0")
+        for price in ["unknown","-1","NaN"]:
+            with self.subTest(price=price), self.assertRaises(ValueError):
+                runner.budget_plan("model","https://api.example/v1","2","10",10000,1000,"5",price)
 
     def test_docker_grader_has_no_network_host_config_or_socket(self):
         args = runner.grader_argv("sha256:image", Path("/tmp/work"), Path("/tmp/grader"), "go", "grade-one")

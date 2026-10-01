@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Prepare and independently grade the fixed release cohort without model calls.
+"""Prepare, price and independently grade the fixed release cohort.
 
-Live execution is deliberately absent until the binary enforces token admission
-limits. A timeout or a post-response usage check cannot enforce a dollar budget.
+This CLI makes no model calls. Approved live execution uses execute.py and its
+separate count-before-generation budget gateway.
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import subprocess
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 MAX_LOG = 64 * 1024
@@ -69,27 +70,36 @@ def prepare(output: Path) -> dict:
 
 
 def budget_plan(model: str, provider: str, input_price: str, output_price: str, token_budget: int,
-                max_output_tokens: int, max_cost: str) -> dict:
+                max_output_tokens: int, max_cost: str, count_price_per_request: str, max_requests: int = 100) -> dict:
     try:
         prices = [Decimal(input_price), Decimal(output_price)]
         cost = Decimal(max_cost)
+        count_price = Decimal(count_price_per_request)
     except InvalidOperation as exc:
         raise ValueError("provide known numeric prices and cost limit") from exc
     if any(not value.is_finite() or value <= 0 for value in [*prices, cost]):
         raise ValueError("prices and cost limit must be positive, finite, and known")
-    if not model.strip() or not provider.strip() or token_budget < 1 or max_output_tokens < 1 or max_output_tokens > token_budget:
+    if not count_price.is_finite() or count_price < 0 or not isinstance(max_requests,int) or isinstance(max_requests,bool) or max_requests < 1:
+        raise ValueError("count endpoint price must be known and nonnegative; max_requests must be positive")
+    if not model.strip() or not provider.strip() or token_budget < 1 or max_output_tokens < 16 or max_output_tokens > token_budget:
         raise ValueError("provide a model/provider and positive per-task/per-response token caps")
+    endpoint = urlsplit(provider)
+    if endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
+        raise ValueError("provider must be an HTTPS API base without credentials, query or fragment")
     reserved = Decimal(len(cohort()["tasks"]) * token_budget) * max(prices) / 1_000_000
+    reserved += len(cohort()["tasks"]) * max_requests * count_price
     if reserved > cost:
         raise ValueError(f"worst-case reservation ${reserved} exceeds ${cost}; lower token caps")
-    return {"schema_version": 1, "suite": cohort()["suite"], "cohort_sha256": cohort_hash(),
+    return {"schema_version": 2, "suite": cohort()["suite"], "cohort_sha256": cohort_hash(),
             "model": model, "provider": provider, "tasks": len(cohort()["tasks"]), "attempts_per_task": 1,
             "input_price_per_million": str(prices[0]), "output_price_per_million": str(prices[1]),
+            "count_price_per_request": str(count_price), "max_requests": max_requests,
             "total_tokens_per_task": token_budget, "max_output_tokens_per_response": max_output_tokens,
             "max_cost_usd": str(cost), "conditional_cost_upper_bound_usd": str(reserved),
             "budget_enforced": False, "live_execution_enabled": False,
+            "execution_supported": True, "approval_recorded": False,
             "required_before_live": ["explicit approval of model, provider, cohort and prices",
-                                     "binary admission control for cumulative input and output token cap",
+                                     "gateway count-before-generation admission and retained reservations",
                                      "max_output_tokens on every model request, including reasoning",
                                      "Docker-only agent execution; no host --yes"]}
 
@@ -195,10 +205,11 @@ def main() -> int:
     prepare_parser = commands.add_parser("prepare")
     prepare_parser.add_argument("--output", type=Path, required=True)
     plan = commands.add_parser("plan")
-    for flag in ("model", "provider", "input-price", "output-price", "max-cost"):
+    for flag in ("model", "provider", "input-price", "output-price", "max-cost", "count-price-per-request"):
         plan.add_argument("--" + flag, required=True)
     plan.add_argument("--token-budget", type=int, required=True)
     plan.add_argument("--max-output-tokens", type=int, required=True)
+    plan.add_argument("--max-requests", type=int, default=100)
     grader = commands.add_parser("grade")
     grader.add_argument("--run-dir", type=Path, required=True)
     grader.add_argument("--image", required=True)
@@ -209,7 +220,7 @@ def main() -> int:
             result = prepare(args.output)
         elif args.command == "plan":
             result = budget_plan(args.model, args.provider, args.input_price, args.output_price,
-                                 args.token_budget, args.max_output_tokens, args.max_cost)
+                                 args.token_budget, args.max_output_tokens, args.max_cost, args.count_price_per_request, args.max_requests)
         else:
             result = grade(args.run_dir, args.image, args.output)
         print(json.dumps(result, indent=2))
