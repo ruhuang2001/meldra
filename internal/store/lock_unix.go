@@ -4,11 +4,29 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"syscall"
 
 	"meldra/internal/task"
 )
+
+// Device and inode identify the directory independently of case, symlink, or
+// mount-path spelling. Path hashes alone do not exclude aliases on APFS.
+func directoryIdentity(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("ownership path is not a directory: %s", path)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", errors.New("filesystem identity unavailable")
+	}
+	return fmt.Sprintf("%d:%d", stat.Dev, stat.Ino), nil
+}
 
 func lockFile(path string) (*os.File, error) {
 	// O_NOFOLLOW closes the final-component symlink race for lock inodes.

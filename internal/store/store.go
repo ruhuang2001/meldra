@@ -33,9 +33,10 @@ const (
 )
 
 type Store struct {
-	db      *sql.DB
-	dir     string
-	lockDir string
+	db          *sql.DB
+	dir         string
+	lockDir     string
+	dirIdentity string
 	// beforeCommit is used only by package fault-injection tests. Production
 	// commits always use the normal SQLite transaction path.
 	beforeCommit func() error
@@ -52,6 +53,10 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	dirIdentity, err := directoryIdentity(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +91,7 @@ func Open(dir string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	s := &Store{db: db, dir: dir, lockDir: filepath.Join(cache, "meldra", "locks")}
+	s := &Store{db: db, dir: dir, dirIdentity: dirIdentity, lockDir: filepath.Join(cache, "meldra", "locks")}
 	if err := s.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -153,6 +158,9 @@ PRAGMA user_version = 1;`)
 }
 
 func (s *Store) transact(ctx context.Context, fn func(*sql.Tx) error) error {
+	if identity, err := directoryIdentity(s.dir); err != nil || identity != s.dirIdentity {
+		return fmt.Errorf("%w: task storage directory changed", task.ErrLease)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err

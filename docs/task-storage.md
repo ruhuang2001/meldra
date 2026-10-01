@@ -75,9 +75,12 @@ authorize an operation by itself.
 ## Ownership and transaction boundaries
 
 `Acquire` takes two nonblocking OS advisory locks: task identity within this
-store, and canonical workspace identity across stores. Locks live under the
-user's OS cache `meldra/locks/`, so changing `MELDRA_HOME` does not allow a
-second writer. Canonicalization resolves workspace symlinks before hashing.
+store, and workspace identity across stores. Directory device/inode identities
+prevent case aliases on default macOS filesystems from bypassing ownership.
+Locks live under the user's OS cache `meldra/locks/`, so changing `MELDRA_HOME`
+does not allow a second writer. Canonicalization resolves workspace symlinks
+before reading filesystem identity. Mutations revalidate the store and workspace
+directory identities; renaming/replacing a leased directory fails closed.
 This serializes Meldra executions in the same workspace; it does not prevent
 an editor, Git, another program, or a process ignoring advisory locks from
 changing files. The application compares before/after evidence on recovery.
