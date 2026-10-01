@@ -1,0 +1,150 @@
+name: Prepare 0.2 prerelease
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full reviewed commit SHA to test and package
+        required: true
+        type: string
+      version:
+        description: Version without v (0.2.0-alpha.N or 0.2.0-rc.N)
+        required: true
+        type: string
+      create_draft:
+        description: Also create a draft GitHub prerelease for manual review
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+concurrency:
+  group: meldra-0.2-prerelease
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.input.outputs.version }}
+      commit_sha: ${{ steps.input.outputs.commit_sha }}
+    steps:
+      - name: Validate explicit inputs
+        id: input
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT_SHA: ${{ inputs.commit_sha }}
+        run: |
+          [[ "$VERSION" =~ ^0\.2\.0-(alpha|rc)\.[1-9][0-9]*$ ]]
+          [[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          printf 'version=%s\ncommit_sha=%s\n' "$VERSION" "$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.input.outputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate and version progression
+        env:
+          VERSION: ${{ steps.input.outputs.version }}
+          COMMIT_SHA: ${{ steps.input.outputs.commit_sha }}
+        run: python3 scripts/release.py candidate --version "$VERSION" --commit "$COMMIT_SHA"
+
+  build:
+    needs: candidate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.candidate.outputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Validate reports and release tooling
+        run: |
+          make benchmark-report-test
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          make benchmark-eval EVAL_OUTPUT=benchmarks/results/prerelease-scenarios.json
+      - name: Tag the checked commit locally for exact release metadata
+        env:
+          VERSION: ${{ needs.candidate.outputs.version }}
+          COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: |
+          python3 scripts/release.py candidate --version "$VERSION" --commit "$COMMIT_SHA"
+          git tag "v$VERSION" "$COMMIT_SHA"
+      - name: Run full checks and build all release archives without publishing
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.14.0
+          args: release --clean --skip=publish
+      - name: Verify archive checksums, metadata and binary source identities
+        env:
+          VERSION: ${{ needs.candidate.outputs.version }}
+          COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: python3 scripts/release.py artifacts --version "$VERSION" --commit "$COMMIT_SHA" --smoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: meldra-${{ needs.candidate.outputs.version }}-${{ needs.candidate.outputs.commit_sha }}
+          path: |
+            dist/*.tar.gz
+            dist/*checksums.txt
+            dist/metadata.json
+            dist/artifacts.json
+            docs/release-0.2.0.md
+            benchmarks/results/prerelease-scenarios.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  smoke:
+    needs: [candidate, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.candidate.outputs.commit_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          name: meldra-${{ needs.candidate.outputs.version }}-${{ needs.candidate.outputs.commit_sha }}
+          path: package
+      - name: Execute the packaged native binary and verify all archives
+        env:
+          VERSION: ${{ needs.candidate.outputs.version }}
+          COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: python3 scripts/release.py artifacts --dist package/dist --version "$VERSION" --commit "$COMMIT_SHA" --smoke
+
+  draft:
+    if: inputs.create_draft
+    needs: [candidate, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # No candidate code executes in this write-enabled job.
+      - uses: actions/download-artifact@v8
+        with:
+          name: meldra-${{ needs.candidate.outputs.version }}-${{ needs.candidate.outputs.commit_sha }}
+          path: package
+      - name: Create a draft for explicit human review and publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.candidate.outputs.version }}
+          COMMIT_SHA: ${{ needs.candidate.outputs.commit_sha }}
+        run: |
+          gh release create "v$VERSION" package/dist/*.tar.gz package/dist/meldra_checksums.txt \
+            --repo "$GITHUB_REPOSITORY" --target "$COMMIT_SHA" --draft --prerelease \
+            --title "Meldra $VERSION" --notes-file package/docs/release-0.2.0.md
