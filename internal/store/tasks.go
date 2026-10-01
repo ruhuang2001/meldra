@@ -119,6 +119,22 @@ func (s *Store) Events(ctx context.Context, id string, after int64, limit int) (
 	return queryRecords[task.Event](ctx, s.db, "SELECT record FROM events WHERE task_id=? AND seq>? ORDER BY seq LIMIT ?", id, after, limit)
 }
 
+// RequestEvents pages only durable user requests, avoiding full tool history
+// payloads while rebuilding a snapshot that lagged behind the execution log.
+func (s *Store) RequestEvents(ctx context.Context, id string, after int64, limit int) ([]task.Event, error) {
+	if after < 0 {
+		return nil, errors.New("request cursor must be nonnegative")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	return queryRecords[task.Event](ctx, s.db, `SELECT record FROM events WHERE task_id=? AND seq>? AND json_extract(CAST(record AS TEXT),'$.kind')='turn.started' ORDER BY seq LIMIT ?`, id, after, limit)
+}
+
+func (s *Store) LatestRequestEvent(ctx context.Context, id string) (task.Event, error) {
+	return getRecord[task.Event](ctx, s.db, `SELECT record FROM events WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.kind')='turn.started' ORDER BY seq DESC LIMIT 1`, id)
+}
+
 type rowsQueryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }

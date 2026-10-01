@@ -44,6 +44,7 @@ type Session struct {
 	CreatedAt            time.Time        `json:"created_at"`
 	UpdatedAt            time.Time        `json:"updated_at"`
 	PreviousResponseID   string           `json:"previous_response_id,omitempty"`
+	LastRequestSequence  int64            `json:"last_request_sequence,omitzero"`
 	Messages             []SessionMessage `json:"messages,omitempty"`
 	Plan                 []string         `json:"plan,omitempty"`
 	Summary              string           `json:"summary,omitempty"`
@@ -368,6 +369,9 @@ func validateSession(session *Session, expectedID string) error {
 	if session.ID != expectedID || len(session.ID) > maxSessionIDBytes || session.Workspace == "" || len(session.Workspace) > maxSessionPathBytes {
 		return fmt.Errorf("invalid identity or workspace")
 	}
+	if session.LastRequestSequence < 0 {
+		return fmt.Errorf("invalid request checkpoint")
+	}
 	if len(session.PreviousResponseID) > maxSessionProviderIDBytes || len(session.Summary) > maxSessionSummaryBytes {
 		return fmt.Errorf("oversized metadata")
 	}
@@ -426,6 +430,8 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 			err = decoder.Decode(&session.UpdatedAt)
 		case "previous_response_id":
 			err = decoder.Decode(&session.PreviousResponseID)
+		case "last_request_sequence":
+			err = decoder.Decode(&session.LastRequestSequence)
 		case "plan":
 			err = decoder.Decode(&session.Plan)
 		case "summary":

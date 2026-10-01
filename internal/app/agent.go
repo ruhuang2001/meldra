@@ -172,6 +172,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	if a.session != nil {
 		a.session.appendMessage("user", userInput)
+		if a.execution != nil {
+			a.session.LastRequestSequence = a.execution.requestSequence
+		}
 		if err := a.store.Save(a.session); err != nil {
 			return err
 		}

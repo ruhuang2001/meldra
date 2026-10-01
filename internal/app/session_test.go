@@ -292,10 +292,11 @@ func TestSessionStoreValidatesLoadedFieldLimits(t *testing.T) {
 		"message bytes": func(session *Session) {
 			session.Messages = []SessionMessage{{Role: "user", Content: strings.Repeat("x", maxSessionMessageBytes+1)}}
 		},
-		"plan count": func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
-		"plan step":  func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
-		"summary":    func(session *Session) { session.Summary = strings.Repeat("x", maxSessionSummaryBytes+1) },
-		"workspace":  func(session *Session) { session.Workspace = strings.Repeat("x", maxSessionPathBytes+1) },
+		"plan count":         func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
+		"plan step":          func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
+		"request checkpoint": func(session *Session) { session.LastRequestSequence = -1 },
+		"summary":            func(session *Session) { session.Summary = strings.Repeat("x", maxSessionSummaryBytes+1) },
+		"workspace":          func(session *Session) { session.Workspace = strings.Repeat("x", maxSessionPathBytes+1) },
 		"provider ID": func(session *Session) {
 			session.PreviousResponseID = strings.Repeat("x", maxSessionProviderIDBytes+1)
 		},

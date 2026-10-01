@@ -20,6 +20,7 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
+	requestSequence   int64
 	paused            bool
 	paths             ConfigPaths
 	workspace         *Workspace
@@ -106,6 +107,9 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		if err = e.reconcile(ctx); err != nil {
 			return err
 		}
+		if err = e.restoreRequests(ctx); err != nil {
+			return err
+		}
 		e.context, err = e.recoveryContext(ctx, record)
 		if err != nil {
 			return err
@@ -116,7 +120,15 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		return err
 	}
 	e.resume = false
-	return e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal)})
+	if err = e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal)}); err != nil {
+		return err
+	}
+	event, err := e.db.LatestRequestEvent(ctx, record.ID)
+	if err != nil {
+		return err
+	}
+	e.requestSequence = event.Sequence
+	return nil
 }
 func (e *taskExecution) close() error {
 	var err error
@@ -371,4 +383,40 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	}
 	b.WriteString("Do not repeat confirmed completed actions. Verify current files before new edits.\n")
 	return b.String(), nil
+}
+
+// restoreRequests closes the gap between a committed turn.started event and
+// its conversation snapshot. Persist replayed messages before starting another
+// Run, so repeated crashes cannot replace a lost request with "continue".
+func (e *taskExecution) restoreRequests(ctx context.Context) error {
+	snapshotTime := e.session.UpdatedAt
+	upgrading := e.session.LastRequestSequence == 0 && len(e.session.Messages) > 0
+	for {
+		events, err := e.db.RequestEvents(ctx, e.session.ID, e.session.LastRequestSequence, 100)
+		if err != nil {
+			return err
+		}
+		if len(events) == 0 {
+			return nil
+		}
+		for _, event := range events {
+			var input struct {
+				Request string `json:"request"`
+			}
+			if err := json.Unmarshal(event.Data, &input); err != nil {
+				return fmt.Errorf("decode recorded request: %w", err)
+			}
+			// Older snapshots have no explicit cursor. Requests predating that saved
+			// snapshot are already represented by its bounded conversation history.
+			if !upgrading || event.Time.After(snapshotTime) {
+				e.session.appendMessage("user", input.Request)
+				e.session.PreviousResponseID = ""
+				e.session.resumed = true
+			}
+			e.session.LastRequestSequence = event.Sequence
+		}
+		if err := newTaskSessionStore(e.paths).Save(e.session); err != nil {
+			return fmt.Errorf("save recovered requests: %w", err)
+		}
+	}
 }

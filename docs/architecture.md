@@ -221,6 +221,13 @@ a complete inventory of task execution: a ledger record can outlive a usable
 conversation snapshot. Import validates and retains original bytes, deduplicates
 the source ID/content digest, and marks missing historical tool records instead
 of inventing successes. New messages are written under `tasks/sessions/`.
+Task snapshots include an optional `last_request_sequence` watermark. Explicit
+resume pages durable `turn.started` requests after that watermark and saves the
+repaired snapshot before creating the next Run. This preserves user changes of
+intent across the event/snapshot crash gap without duplicating saved requests.
+Older task snapshots without a watermark use their saved timestamp to skip
+already represented requests on first upgrade. Cancelling an idle legacy resume
+does not create a task-era snapshot before the legacy source is imported.
 
 See [release preparation](release-0.2.0.md) for consistent backups, upgrade,
 downgrade and known limitations. Restoring a 0.1.x session cannot undo repository
