@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "suite": "meldra-release-quality-v1",
+  "attempts_per_task": 1,
+  "tasks": [
+    {
+      "id": "go-clamp",
+      "language": "go",
+      "prompt": "Fix Clamp(value, low, high) in clamp.go. For low <= high, return low below the range, high above the range, and value inside the inclusive range. Preserve the function signature. Use only the standard library. Do not change go.mod.",
+      "editable": ["clamp.go"]
+    },
+    {
+      "id": "go-chunks",
+      "language": "go",
+      "prompt": "Fix NormalizeChunkSize in size.go and Split in chunks.go. NormalizeChunkSize must map sizes below 1 to 1. Split must split every input element, in order, into chunks of that normalized size, including a final short chunk. Empty input returns nil. Do not mutate the input. Keep both public function signatures, use the standard library, and do not change go.mod.",
+      "editable": ["size.go", "chunks.go"]
+    },
+    {
+      "id": "python-slug",
+      "language": "python",
+      "prompt": "Fix slugify(text) in slug.py. Return lowercase ASCII letters and digits, with each consecutive run of all other characters replaced by one hyphen, and no leading or trailing hyphens. Empty or punctuation-only input returns an empty string. Non-ASCII characters are separators rather than transliterated. Use only Python's standard library.",
+      "editable": ["slug.py"]
+    },
+    {
+      "id": "python-ledger",
+      "language": "python",
+      "prompt": "Fix parse_cents(value) in money.py and total_cents(records) in ledger.py. parse_cents accepts strings with an optional + or - sign, one or more ASCII integer digits, and optionally a decimal point followed by exactly one or two ASCII digits. Return exact integer cents without floating point; reject other forms with ValueError. total_cents sums record['amount'] through parse_cents, skipping records whose 'void' field is true. Keep signatures and use only the standard library.",
+      "editable": ["money.py", "ledger.py"]
+    },
+    {
+      "id": "python-config",
+      "language": "python",
+      "prompt": "Implement merge_config(defaults, overrides) in config.py. Recursively merge dictionaries; an override replaces any non-dictionary value, including lists and None. Preserve keys present only in defaults or overrides. Return an independent deep copy so changing a nested list or dictionary in the result cannot change either input. Inputs contain only JSON-compatible values. Use only the standard library.",
+      "editable": ["config.py"]
+    }
+  ]
+}

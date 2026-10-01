@@ -1,0 +1,8 @@
+package chunks
+
+func Split(values []int, size int) [][]int {
+	if len(values) == 0 {
+		return nil
+	}
+	return [][]int{values[:min(len(values), max(1, size))]}
+}

@@ -1,0 +1,3 @@
+package chunks
+
+func NormalizeChunkSize(size int) int { return size }

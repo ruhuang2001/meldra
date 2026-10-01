@@ -1,0 +1,5 @@
+from money import parse_cents
+
+
+def total_cents(records):
+    return sum(parse_cents(record["amount"]) for record in records)
