@@ -209,7 +209,7 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch {
-		case argument == "--auto-approve" || argument == "--yes":
+		case argument == "--auto-approve":
 			options.AutoApprove = true
 		case argument == "--workspace":
 			index++

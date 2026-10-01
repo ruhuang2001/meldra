@@ -439,9 +439,9 @@ func TestResumeLatestWarnsAboutSkippedSessionFilesWithoutLeakingContents(t *test
 
 func TestParseChatOptionsRejectsAnotherFlagAsAnOptionValue(t *testing.T) {
 	for _, args := range [][]string{
-		{"--workspace", "--yes"},
-		{"--resume", "--yes"},
-		{"--prompt", "--yes"},
+		{"--workspace", "--auto-approve"},
+		{"--resume", "--auto-approve"},
+		{"--prompt", "--auto-approve"},
 	} {
 		if _, err := parseChatOptions(args); err == nil {
 			t.Fatalf("parseChatOptions(%#v) accepted a flag as a value", args)

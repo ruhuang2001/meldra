@@ -83,7 +83,7 @@ class CohortTests(unittest.TestCase):
         self.assertTrue(all(mount.endswith(",readonly") for mount in mounts))
         self.assertNotIn("docker.sock", " ".join(args))
         self.assertNotIn("OPENAI_API_KEY", " ".join(args))
-        self.assertNotIn("--yes", args)
+        self.assertNotIn("--auto-approve", args)
 
     def test_changed_support_files_and_symlinks_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
