@@ -1,0 +1,54 @@
+name: Platform smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.go'
+      - go.mod
+      - go.sum
+      - Makefile
+      - .github/workflows/platform-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: linux-amd64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: macos-15-intel
+            target: darwin-amd64
+          - runner: macos-15
+            target: darwin-arm64
+    name: Native ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.6"
+      - name: Build without CGO
+        env:
+          CGO_ENABLED: "0"
+        run: make build VERSION=0.2.0-candidate
+      - name: Verify executable and private task store
+        run: |
+          test "$(dist/meldra version)" = "0.2.0-candidate"
+          go test ./internal/task ./internal/store -count=1 -timeout=5m
+      - name: Verify process shutdown and task recovery
+        run: go test ./internal/app -run '^TestTask(Signals|SignalStops|TerminalClose|PromptEOF|RecoveryHardKill)' -count=1 -timeout=5m

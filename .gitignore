@@ -9,3 +9,5 @@ meldra
 
 /benchmarks/results/
 /benchmarks/__pycache__/
+
+/scripts/__pycache__/
