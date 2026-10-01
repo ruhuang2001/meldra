@@ -17,6 +17,8 @@
     "TestStorageLimitsRejectBeforeMutation",
     "TestInvalidRecordInputsAndCrossTaskReferences",
     "TestReadFailsOnCorruptRecordsAndDoesNotRepair",
-    "TestCancelledContextAndStoragePathGuards"
+    "TestCancelledContextAndStoragePathGuards",
+    "TestProviderCallLookupIsScopedBoundedAndIndexed",
+    "TestSchemaOneWithoutProviderIndexRemainsReadable"
   ]
 }

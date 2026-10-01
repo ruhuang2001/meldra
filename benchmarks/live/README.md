@@ -35,13 +35,17 @@ From the repository root:
 
 ```sh
 python3 -m unittest discover -s benchmarks/live -p test_run.py -v
+EVAL_WORKDIR=$(mktemp -d /tmp/meldra-release-quality-XXXXXX)
 python3 benchmarks/live/run.py prepare \
-  --output benchmarks/results/release-quality-candidate
+  --output "$EVAL_WORKDIR/candidate"
 ```
 
 `prepare` refuses an existing run directory. It copies only starter files into
 each task's `workspace`; the sibling `prompt.txt` contains its exact prompt.
 No hidden grader or previous submission is copied into Agent workspaces.
+Prepared workspaces must be outside the repository; generated Go sources must
+not enter Meldra's recursive formatting checks. Every Go workspace has its own
+module. JSON reports can remain under the ignored `benchmarks/results/` directory.
 
 ## Plan the approved budget
 
@@ -102,7 +106,7 @@ Build the toolchain-only image (this does not call a model):
 ```sh
 docker build -t meldra-release-eval:go1.26.6 benchmarks/live
 python3 benchmarks/live/run.py grade \
-  --run-dir benchmarks/results/release-quality-candidate \
+  --run-dir "$EVAL_WORKDIR/candidate" \
   --image meldra-release-eval:go1.26.6 \
   --output benchmarks/results/release-quality-candidate-grades.json
 ```

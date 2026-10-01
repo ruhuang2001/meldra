@@ -29,6 +29,8 @@ REFERENCE_FIXES = {
 
 class CohortTests(unittest.TestCase):
     def test_prepare_keeps_graders_separate_and_refuses_overwrite(self):
+        with self.assertRaisesRegex(ValueError, "outside the repository"):
+            runner.prepare(runner.ROOT.parents[1] / "benchmarks/results/must-not-create")
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "run"
             manifest = runner.prepare(output)
@@ -38,6 +40,8 @@ class CohortTests(unittest.TestCase):
                 workspace = output / task["id"] / "workspace"
                 self.assertFalse(list(workspace.glob("*test*")))
                 self.assertEqual(runner.validate_submission(workspace, task), [])
+                if task["language"] == "go":
+                    self.assertIn("module fixture/", (workspace / "go.mod").read_text())
             with self.assertRaises(FileExistsError):
                 runner.prepare(output)
 

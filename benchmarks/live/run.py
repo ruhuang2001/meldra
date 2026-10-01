@@ -45,6 +45,11 @@ def templates(task: dict, kind: str) -> dict[str, bytes]:
 
 
 def prepare(output: Path) -> dict:
+    # Generated/model-written Go sources must never enter this repository's
+    # recursive formatter or tests, even when an ignored results directory is
+    # used. Keep submitted workspaces external; JSON reports may stay local.
+    if output.resolve().is_relative_to(ROOT.parents[1]):
+        raise ValueError("prepare workspaces outside the repository; only reports belong in benchmarks/results")
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     manifest = {"schema_version": 1, "suite": cohort()["suite"],
                 "cohort_sha256": cohort_hash(), "created_at": datetime.now(timezone.utc).isoformat(),
