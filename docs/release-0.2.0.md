@@ -2,8 +2,41 @@
 
 Status: unreleased. This document is the release checklist and draft release notes;
 it does not claim that an alpha, release candidate, or stable version exists.
-The source implementation and release preparation are reviewed in a pull request.
-Creating or merging that source PR is separate from publishing a release.
+The source implementation and release preparation are being assembled for a
+pull request. Creating or merging that source PR is separate from publishing a
+release. The stable manifest still records the last published `0.1.0`.
+
+## Current implementation status
+
+The working branch now contains SQLite task/run/tool/approval/event records,
+cross-process ownership, structured tool outcomes, foreground signal handling,
+explicit recovery and resolution commands, and preserved legacy session imports.
+The application adapter wires these into the CLI and TUI; there is no daemon.
+Context compaction has been optimized, and the runtime/offline evaluation suite
+has been extended. Integration and final-candidate verification are still in
+progress, so the feature list is not a claim that every release gate has passed.
+
+Local release-validator tests, actionlint and GoReleaser configuration validation
+have passed during development. A disposable clean-source fixture exercised
+four-platform packaging and Darwin arm64 startup/version checks. Real-process
+signal, child-group, PTY-hangup and EOF tests have also passed locally, including
+repeated race-enabled runs. These are development evidence; rerun the gates on
+the exact final candidate and record the reports below before publication.
+
+Still required for release qualification:
+
+- A clean final candidate, its full test/coverage and versioned offline/performance
+  reports, and green remote CI for that commit.
+- Native startup/version smoke for all four packaged targets in the prerelease
+  workflow. Local cross-compilation alone does not prove the other three native
+  startup checks passed.
+- The fixed small live-model cohort, using the approved provider/model and an
+  enforceable cost budget, followed by independent grading and failure analysis.
+  The [live evaluation scaffold](../benchmarks/live/README.md) is preparation;
+  it is not a model success-rate result.
+- A reviewed prerelease/release decision, frozen CLI/schema and release notes.
+  No release tag, GitHub Release or publication is created by this implementation
+  work; the source PR is intended to remain unmerged for review.
 
 ## Scope
 
@@ -58,14 +91,28 @@ Before replacing a 0.1.x binary:
 
 Legacy `meldra resume SESSION_ID` remains the import/compatibility entry point.
 Import preserves the original JSON snapshot and records its source ID and content
-digest; repeating import must not create another task for the same snapshot.
+digest; repeating import does not create another task for the same snapshot.
 Old snapshots lack complete historical tool records. Missing records remain
 missing; they must not be interpreted as evidence that a tool succeeded.
 
-New task state lives under `MELDRA_HOME/tasks/`, with the SQLite database
-`tasks.db` and associated locks/artifacts. Unknown schema versions must be
-rejected instead of rewritten. See `task show` for recorded runs and unfinished
-operations. Resume creates another run and preserves previous run outcomes.
+New task state lives under `MELDRA_HOME/tasks/`: `tasks.db` stores the ledger,
+`sessions/` stores the current conversation snapshots, and `artifacts/` stores
+bounded retained output by digest. The original `MELDRA_HOME/sessions/` files
+remain available for downgrade. Execution lock files live separately in the
+user cache's `meldra/locks` directory; never remove held lock files.
+
+Unknown newer schema versions are rejected instead of rewritten. See `task show`
+for recorded runs and unfinished operations; `task show TASK_ID --json` includes
+structured outcomes and artifact references. Resume creates another run and
+preserves previous run outcomes.
+
+`tasks [--json]` lists up to 1000 most recently updated tasks across workspaces;
+there is currently no task-list pagination flag. Use a known ID for older records.
+`task events TASK_ID --json` emits at most 1000 JSONL events. Pass the last emitted
+`sequence` as `--after N` to read the next page, and repeat until empty. Listing
+is a snapshot, not a live subscription, and stale running states are only
+reconciled by explicit resume/resolution. `sessions` lists usable conversation
+snapshots, so it is not a complete inventory of durable tasks.
 
 For a command whose outcome cannot be established, inspect the workspace and
 external effects before recording an explicit resolution:
@@ -96,6 +143,15 @@ Task records are local, private execution history, not an encrypted secrets
 vault. Command output and tool parameters can contain sensitive user content;
 review them before sharing records or benchmark evidence. Configuration snapshots
 must omit API keys and raw provider reasoning.
+
+The store caps database pages at 256 MiB and aggregate artifact files at 256 MiB;
+an individual artifact may be at most 16 MiB. Commands retain a log of up to
+16 MiB separately from their 256 KiB model-facing excerpt; a trailing marker
+identifies truncation beyond the log cap. Other tool artifacts retain their
+bounded result text. Session snapshots are limited to 2 MiB and 100 messages.
+WAL/SHM, snapshots and temporary files are separate from the database page cap.
+There is no automatic pruning; hitting a limit stops further recording/execution.
+See [storage limits](architecture.md#storage-and-limits) before data maintenance.
 
 ## Downgrade to 0.1.x
 
@@ -166,6 +222,11 @@ publish a stable or prerelease version.
 Record the exact candidate SHA, command/environment, report paths or workflow
 URLs, and the outcome. Replace pending entries only with evidence from that
 candidate. Historical benchmark numbers and another commit's CI are not proof.
+
+**Final candidate evidence: pending.** The table specifies the proof still to
+attach to the reviewed candidate; it does not mark development tests as release
+qualification. Live-model results and remote/native workflow evidence remain
+pending until their corresponding runs have actually completed.
 
 | Gate | Evidence required before stable publication |
 | --- | --- |
