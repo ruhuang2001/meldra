@@ -270,6 +270,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			}
 		}
 		if requestedCalls == 0 {
+			if a.execution != nil {
+				if err := a.execution.event(ctx, "assistant.completed", "", map[string]string{"text": truncateSessionMessage(assistantText)}); err != nil {
+					return err
+				}
+			}
 			if a.session != nil {
 				a.session.PreviousResponseID = response.ID
 				if err := a.store.Save(a.session); err != nil {
@@ -343,6 +348,10 @@ func (a *Agent) customTurnInputLimit() int {
 }
 
 func (a *Agent) pauseTurn(message string) error {
+	if a.execution != nil {
+		a.execution.paused = true
+		a.execution.resume = true
+	}
 	a.emitAssistantMessage(message)
 	if a.session == nil {
 		return nil
@@ -419,12 +428,15 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 		}
 
 		var result string
+		outcome := ""
 		var err error
 		if a.execution != nil {
 			structured, callErr := a.execution.invoke(ctx, a.registry, call.CallID, call.Name, json.RawMessage(call.Arguments))
 			result, err = structured.Output, callErr
+			outcome = structured.Status
 			if a.execution.err != nil || structured.Status == tool.Unknown {
 				a.toolFailure = err
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: outcome + ": " + summarizeToolResult(result)})
 				return results
 			}
 		} else {
@@ -434,7 +446,11 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			result = "Error: " + err.Error()
 		}
 		if a.events != nil {
-			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: summarizeToolResult(result)})
+			detail := summarizeToolResult(result)
+			if outcome != "" {
+				detail = outcome + ": " + detail
+			}
+			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: detail})
 		}
 		results = append(results, provider.ToolOutput(call.CallID, result))
 	}

@@ -238,3 +238,68 @@ func TestTaskRecoveryRecognizesFilePostimages(t *testing.T) {
 		t.Fatalf("contents=%q %v", contents, err)
 	}
 }
+
+func TestTaskPendingApprovalIsVisibleBeforeDecision(t *testing.T) {
+	requests := 0
+	agent, paths := recordedAgent(t, inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		requests++
+		if requests == 1 {
+			return provider.Result{Response: callResponse("edit", "edit_file", `{"path":"new.txt","old_str":"","new_str":"content"}`)}, nil
+		}
+		return provider.Result{Response: finishResponse()}, nil
+	}), nil)
+	agent.execution.workspace.autoApprove = false
+	agent.execution.workspace.SetApprovalFunc(func(ctx context.Context, request ApprovalRequest) bool {
+		record, err := agent.execution.db.GetTask(ctx, agent.session.ID)
+		if err != nil || record.Status != task.WaitingApproval {
+			t.Fatalf("approval status=%+v err=%v", record, err)
+		}
+		approvals, err := agent.execution.db.Approvals(ctx, agent.session.ID)
+		if err != nil || len(approvals) != 1 || approvals[0].Decision != task.Pending {
+			t.Fatalf("pending=%+v err=%v", approvals, err)
+		}
+		return false
+	})
+	if err := agent.RunTurn(t.Context(), "decline file"); err != nil {
+		t.Fatal(err)
+	}
+	db := openTaskDB(t, paths)
+	calls, err := db.ToolCalls(t.Context(), agent.session.ID)
+	if err != nil || len(calls) != 1 || calls[0].Status != task.ToolDeclined {
+		t.Fatalf("calls=%+v err=%v", calls, err)
+	}
+	if _, err := os.Stat(filepath.Join(agent.execution.workspace.root, "new.txt")); !os.IsNotExist(err) {
+		t.Fatal("declined file written")
+	}
+}
+
+func TestTaskCommandArtifactRetainsOutputBeyondModelExcerpt(t *testing.T) {
+	requests := 0
+	agent, paths := recordedAgent(t, inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		requests++
+		if requests == 1 {
+			return provider.Result{Response: callResponse("print", "run_command", `{"command":"python3","args":["emit.py"]}`)}, nil
+		}
+		return provider.Result{Response: finishResponse()}, nil
+	}), nil)
+	script := "print('x' * (300 * 1024))\nprint('TAIL_MARKER')\n"
+	if err := os.WriteFile(filepath.Join(agent.execution.workspace.root, "emit.py"), []byte(script), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.RunTurn(t.Context(), "run program"); err != nil {
+		t.Fatal(err)
+	}
+	db := openTaskDB(t, paths)
+	calls, err := db.ToolCalls(t.Context(), agent.session.ID)
+	if err != nil || len(calls) != 1 {
+		t.Fatalf("calls=%v err=%v", calls, err)
+	}
+	result := calls[0].Result
+	if !result.Truncated || strings.Contains(result.Output, "TAIL_MARKER") || len(result.Artifacts) != 2 {
+		t.Fatalf("truncated=%t artifacts=%v", result.Truncated, result.Artifacts)
+	}
+	full, err := db.ReadArtifact(t.Context(), result.Artifacts[0])
+	if err != nil || !strings.Contains(string(full), "TAIL_MARKER") {
+		t.Fatalf("log length=%d err=%v", len(full), err)
+	}
+}

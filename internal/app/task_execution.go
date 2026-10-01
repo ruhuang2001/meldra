@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +20,7 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
+	paused            bool
 	paths             ConfigPaths
 	workspace         *Workspace
 	session           *Session
@@ -51,6 +53,7 @@ func providerIdentity(base string) string {
 
 func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.err = nil
+	e.paused = false
 	e.current = nil
 	e.context = ""
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
@@ -108,7 +111,7 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 			return err
 		}
 	}
-	e.run, err = e.db.StartRun(ctx, e.lease, task.Run{TaskID: record.ID, Config: e.config, Executor: "foreground"})
+	e.run, err = e.db.StartRun(ctx, e.lease, task.Run{TaskID: record.ID, Config: e.config, Executor: fmt.Sprintf("foreground:%d", os.Getpid())})
 	if err != nil {
 		return err
 	}
@@ -142,6 +145,10 @@ func (e *taskExecution) finish(ctx context.Context, runErr error) error {
 	} else if runErr != nil {
 		status = task.RunFailed
 		reason = runErr.Error()
+	}
+	if e.paused {
+		status = task.RunInterrupted
+		reason = "context_budget_exhausted"
 	}
 	if e.err != nil {
 		status = task.RunInterrupted
@@ -186,31 +193,30 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	}
 	// Provider call IDs are stable operation identities. Re-delivery of a known
 	// result supplies that result again without repeating the side effect.
-	previous, err := e.db.ToolCalls(ctx, e.session.ID)
-	if err != nil {
-		e.err = &persistenceError{err}
-		return tool.Result{}, e.err
-	}
-	for _, old := range previous {
-		if callID == "" || old.ProviderCallID != callID {
-			continue
-		}
-		if old.Name != name || old.ParameterHash != digest(input) {
-			e.err = fmt.Errorf("provider reused call ID %q with different arguments", callID)
+	if callID != "" {
+		old, err := e.db.GetToolCallByProviderID(ctx, e.session.ID, callID)
+		if err != nil && !errors.Is(err, task.ErrNotFound) {
+			e.err = &persistenceError{err}
 			return tool.Result{}, e.err
 		}
-		if old.Status == task.ToolUnknown || old.Status == task.ToolRunning || old.Status == task.ToolPlanned {
-			e.err = fmt.Errorf("provider call %q has unresolved execution", callID)
-			return tool.Result{}, e.err
+		if err == nil {
+			if old.Name != name || old.ParameterHash != digest(input) {
+				e.err = fmt.Errorf("provider reused call ID %q with different arguments", callID)
+				return tool.Result{}, e.err
+			}
+			if old.Status == task.ToolUnknown || old.Status == task.ToolRunning || old.Status == task.ToolPlanned {
+				e.err = fmt.Errorf("provider call %q has unresolved execution", callID)
+				return tool.Result{}, e.err
+			}
+			if err := e.event(ctx, "tool.reused", string(old.Status), map[string]string{"call_id": old.ID}); err != nil {
+				return tool.Result{}, err
+			}
+			result := tool.Result{Status: string(old.Result.Status), Output: old.Result.Output, Error: old.Result.Error, ExitCode: old.Result.ExitCode, Truncated: old.Result.Truncated}
+			if result.Error != "" {
+				return result, errors.New(result.Error)
+			}
+			return result, nil
 		}
-		if err := e.event(ctx, "tool.reused", string(old.Status), map[string]string{"call_id": old.ID}); err != nil {
-			return tool.Result{}, err
-		}
-		result := tool.Result{Status: string(old.Result.Status), Output: old.Result.Output, Error: old.Result.Error, ExitCode: old.Result.ExitCode, Truncated: old.Result.Truncated}
-		if result.Error != "" {
-			return result, errors.New(result.Error)
-		}
-		return result, nil
 	}
 	call, err := e.db.PlanTool(ctx, e.lease, task.ToolCall{TaskID: e.session.ID, RunID: e.run.ID, ProviderCallID: callID, Name: name, Arguments: input, ParameterHash: digest(input), Effect: toolEffect(name)})
 	if err != nil {
@@ -231,13 +237,24 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stored := task.Result{Status: task.ToolStatus(result.Status), Output: capText(result.Output), ExitCode: result.ExitCode, DurationMS: result.DurationMS, Truncated: result.Truncated || len(result.Output) > maxToolOutput, Retryable: result.Retryable, Error: truncateSessionMessage(result.Error)}
+	for _, attachment := range result.Attachments {
+		ref, artifactErr := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, attachment.Name, attachment.Content)
+		if artifactErr != nil {
+			e.err = &persistenceError{artifactErr}
+			return result, e.err
+		}
+		stored.Artifacts = append(stored.Artifacts, ref)
+		if attachment.Truncated {
+			stored.Truncated = true
+		}
+	}
 	if name == "run_command" || name == "verify" || name == "git_review" || name == "apply_patch" || name == "edit_file" || name == "undo_last_change" {
 		ref, artifactErr := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, name+".txt", []byte(stored.Output))
 		if artifactErr != nil {
 			e.err = &persistenceError{artifactErr}
 			return result, e.err
 		}
-		stored.Artifacts = []task.ArtifactRef{ref}
+		stored.Artifacts = append(stored.Artifacts, ref)
 	}
 	if err = e.db.FinishTool(saveCtx, e.lease, call.ID, stored); err != nil {
 		e.err = &persistenceError{err}

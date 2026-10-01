@@ -218,3 +218,39 @@ func TestLegacyImportRejectsChangedSourceAfterLoad(t *testing.T) {
 		t.Fatalf("import = %v", err)
 	}
 }
+
+func TestTaskResumeReconstructsMissingInitialSnapshot(t *testing.T) {
+	agent, paths := recordedAgent(t, inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		return provider.Result{Response: finishResponse()}, nil
+	}), nil)
+	if err := agent.execution.begin(t.Context(), "original unsaved request"); err != nil {
+		t.Fatal(err)
+	}
+	if err := agent.execution.close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadSessionForResume(paths, agent.session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ID != agent.session.ID || !loaded.resumed || !loaded.taskSnapshot {
+		t.Fatalf("reconstructed=%+v", loaded)
+	}
+	runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "test", BaseURL: defaultBaseURL}, ChatOptions{Resume: loaded.ID}, func(root string, approve bool) (*Workspace, error) {
+		return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, true)
+	}, nil, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.agent.backend = inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		return provider.Result{Response: finishResponse()}, nil
+	})
+	if err := runtime.agent.RunTurn(t.Context(), "continue"); err != nil {
+		t.Fatal(err)
+	}
+	db := openTaskDB(t, paths)
+	runs, err := db.Runs(t.Context(), loaded.ID)
+	if err != nil || len(runs) != 2 || runs[0].Status != task.RunInterrupted || runs[1].Status != task.RunSucceeded {
+		t.Fatalf("runs=%+v %v", runs, err)
+	}
+}

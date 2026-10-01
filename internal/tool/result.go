@@ -14,16 +14,24 @@ const (
 	Unknown   = "unknown"
 )
 
+// OutputArtifact retains bounded output separately from the model-facing excerpt.
+type OutputArtifact struct {
+	Name      string
+	Content   []byte
+	Truncated bool
+}
+
 // Result describes execution independently of the model-facing text. An unknown
 // effect must be reconciled, never retried automatically. DurationMS is wall time.
 type Result struct {
-	Status     string `json:"status"`
-	Output     string `json:"output"`
-	Error      string `json:"error,omitempty"`
-	ExitCode   *int   `json:"exit_code,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
-	Truncated  bool   `json:"truncated"`
-	Retryable  bool   `json:"retryable"`
+	Attachments []OutputArtifact `json:"-"`
+	Status      string           `json:"status"`
+	Output      string           `json:"output"`
+	Error       string           `json:"error,omitempty"`
+	ExitCode    *int             `json:"exit_code,omitempty"`
+	DurationMS  int64            `json:"duration_ms"`
+	Truncated   bool             `json:"truncated"`
+	Retryable   bool             `json:"retryable"`
 }
 
 // Observation lets composite built-in handlers report outcomes at the point of

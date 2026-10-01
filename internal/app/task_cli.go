@@ -216,3 +216,32 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		return fmt.Errorf("unknown task command %q", action)
 	}
 }
+
+// A crash after task creation but before the first JSON snapshot must remain
+// explicitly resumable. Missing snapshots can be reconstructed from the ledger;
+// corrupt or inaccessible snapshots are never silently replaced.
+func loadSessionForResume(paths ConfigPaths, id string) (*Session, error) {
+	legacy := NewSessionStore(paths)
+	session, err := legacy.Load(id)
+	if err == nil {
+		return session, nil
+	}
+	if !validSessionID(id) {
+		return nil, err
+	}
+	for _, path := range []string{legacy.path(id), newTaskSessionStore(paths).path(id)} {
+		if _, checkErr := os.Lstat(path); !errors.Is(checkErr, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	db, openErr := taskStoreForRead(paths)
+	if openErr != nil {
+		return nil, err
+	}
+	defer db.Close()
+	record, lookupErr := db.GetTask(context.Background(), id)
+	if lookupErr != nil {
+		return nil, err
+	}
+	return &Session{ID: record.SessionID, Workspace: record.Workspace, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, resumed: true, taskSnapshot: true}, nil
+}

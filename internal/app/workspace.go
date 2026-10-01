@@ -1965,8 +1965,11 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	cmd.Env = environment
 	var b limitedBuffer
 	b.limit = maxToolOutput
-	cmd.Stdout = &b
-	cmd.Stderr = &b
+	var log limitedBuffer
+	log.limit = 16 << 20
+	combined := io.MultiWriter(&b, &log)
+	cmd.Stdout = combined
+	cmd.Stderr = combined
 	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	e := runCommandProcess(ctx, cmd)
 	status := 0
@@ -1990,6 +1993,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 			o.Result.ExitCode = new(status)
 		}
 		o.Result.Truncated = o.Result.Truncated || b.truncated
+		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
 		if ctx.Err() != nil {
 			o.Result.Status = tool.Unknown
 		} else if status != 0 {

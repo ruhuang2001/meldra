@@ -579,7 +579,7 @@ func newChatRuntime(
 	var session *Session
 	var err error
 	if options.Resume != "" {
-		session, err = store.Load(options.Resume)
+		session, err = loadSessionForResume(paths, options.Resume)
 		if err != nil {
 			return nil, err
 		}
