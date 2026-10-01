@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"meldra/internal/tool"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,17 +73,19 @@ func validateChangeCount(count int) error {
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
-	toolMu      sync.Mutex
-	root        string
-	input       *bufio.Reader
-	output      io.Writer
-	autoApprove bool
-	approve     ApprovalFunc
-	present     ApprovalPresenter
-	ctx         context.Context
-	last        []fileChange
-	protected   []string
-	syncDir     func(string) error
+	toolMu          sync.Mutex
+	root            string
+	input           *bufio.Reader
+	output          io.Writer
+	autoApprove     bool
+	approve         ApprovalFunc
+	approvalRecord  func(context.Context, ApprovalRequest, bool) error
+	approvalPending func(context.Context, ApprovalRequest) error
+	present         ApprovalPresenter
+	ctx             context.Context
+	last            []fileChange
+	protected       []string
+	syncDir         func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -1049,13 +1052,15 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 		return "", err
 	}
 	if !w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalChanges,
-		Title:  "Review file changes",
-		Detail: diff,
-		Prompt: "Apply changes? [y/N] ",
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(changes, false),
+		Title:          "Review file changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
 	}
+	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	if err := w.writeChanges(changes, false); err != nil {
 		return "", err
 	}
@@ -1063,7 +1068,35 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	return "Applied successfully.\n" + diff, nil
 }
 
-func (w *Workspace) requestApproval(request ApprovalRequest) bool {
+func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
+	if w.approvalPending != nil && w.contextErr() == nil {
+		if err := w.approvalPending(w.ctx, request); err != nil {
+			tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			return false
+		}
+	}
+
+	defer func() {
+		if w.approvalRecord != nil {
+			if err := w.approvalRecord(w.ctx, request, approved); err != nil {
+				approved = false
+				tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			}
+		}
+	}()
+	defer func() {
+		if !approved {
+			tool.Observe(w.ctx, func(o *tool.Observation) {
+				if o.Result.Status == tool.Unknown {
+					return
+				}
+				o.Result.Status = tool.Declined
+				if w.contextErr() != nil {
+					o.Result.Status = tool.Cancelled
+				}
+			})
+		}
+	}()
 	// Approval data can include workspace content and command arguments.
 	request.Title = sanitizeTerminalText(request.Title)
 	request.Detail = sanitizeTerminalText(request.Detail)
@@ -1367,13 +1400,15 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalChanges,
-		Title:  "Review undo changes",
-		Detail: diff,
-		Prompt: "Apply changes? [y/N] ",
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(w.last, true),
+		Title:          "Review undo changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
 	}
+	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	if e := w.writeChanges(w.last, true); e != nil {
 		return "", e
 	}
@@ -1904,6 +1939,11 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		return "", fmt.Errorf("timeout must be 1..120 seconds")
 	}
 	if w.contextErr() != nil {
+		tool.Observe(w.ctx, func(o *tool.Observation) {
+			if o.Result.Status != tool.Unknown {
+				o.Result.Status = tool.Cancelled
+			}
+		})
 		return "Command cancelled before start.\n[cancelled]", nil
 	}
 	if requestApproval && commandRequiresApproval(command) && !w.confirmCommand(command, args) {
@@ -1927,6 +1967,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	b.limit = maxToolOutput
 	cmd.Stdout = &b
 	cmd.Stderr = &b
+	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	e := runCommandProcess(ctx, cmd)
 	status := 0
 	if e != nil {
@@ -1944,6 +1985,17 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	} else if errors.Is(ctx.Err(), context.Canceled) {
 		suffix = "\n[cancelled]"
 	}
+	tool.Observe(w.ctx, func(o *tool.Observation) {
+		if o.Result.ExitCode == nil || *o.Result.ExitCode == 0 {
+			o.Result.ExitCode = new(status)
+		}
+		o.Result.Truncated = o.Result.Truncated || b.truncated
+		if ctx.Err() != nil {
+			o.Result.Status = tool.Unknown
+		} else if status != 0 {
+			o.Result.Status = tool.Failed
+		}
+	})
 	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", command, strings.Join(args, " "), status, b.String()) + suffix, nil
 }
 
@@ -2111,6 +2163,11 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 		}
 		fmt.Fprintf(&output, "verification %d/%d\n", index+1, len(commands))
 		output.WriteString(result)
+		stop := false
+		tool.Observe(w.ctx, func(o *tool.Observation) { stop = o.Result.Status == tool.Unknown || o.Err != nil })
+		if stop {
+			return output.String(), nil
+		}
 	}
 	return output.String(), nil
 }

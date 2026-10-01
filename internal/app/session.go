@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ type Session struct {
 	Summary              string           `json:"summary,omitempty"`
 	WorkspaceUnavailable bool             `json:"-"`
 	resumed              bool
+	taskSnapshot         bool
 	savedRevision        [sha256.Size]byte
 	hasSavedRevision     bool
 }
@@ -57,8 +59,9 @@ type Session struct {
 type SessionSaver interface{ Save(*Session) error }
 
 type SessionStore struct {
-	paths ConfigPaths
-	dir   string
+	includeTaskSnapshots bool
+	paths                ConfigPaths
+	dir                  string
 }
 
 // SessionListDiagnostics describes files skipped while listing sessions.
@@ -69,7 +72,7 @@ type SessionListDiagnostics struct {
 }
 
 func NewSessionStore(paths ConfigPaths) *SessionStore {
-	return &SessionStore{paths: paths, dir: filepath.Join(paths.Home, sessionsDirName)}
+	return &SessionStore{paths: paths, dir: filepath.Join(paths.Home, sessionsDirName), includeTaskSnapshots: true}
 }
 
 func (s *SessionStore) Create(workspace string) (*Session, error) {
@@ -187,6 +190,18 @@ func (s *SessionStore) Load(id string) (*Session, error) {
 	if !validSessionID(id) {
 		return nil, fmt.Errorf("invalid session ID %q", id)
 	}
+	if s.includeTaskSnapshots {
+		active := newTaskSessionStore(s.paths)
+		if _, err := os.Lstat(active.path(id)); err == nil {
+			loaded, err := active.Load(id)
+			if loaded != nil {
+				loaded.taskSnapshot = true
+			}
+			return loaded, err
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
 	contents, err := readSessionFile(s.path(id))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("session %q not found", id)
@@ -239,7 +254,7 @@ func (s *SessionStore) List() ([]Session, error) {
 // ListWithDiagnostics returns saved sessions along with a safe aggregate
 // diagnostic for unreadable or invalid session files. Like List, it never
 // modifies session files.
-func (s *SessionStore) ListWithDiagnostics() ([]Session, SessionListDiagnostics, error) {
+func (s *SessionStore) listDirectory() ([]Session, SessionListDiagnostics, error) {
 	var diagnostics SessionListDiagnostics
 	entries, err := os.ReadDir(s.dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -623,4 +638,42 @@ func (s *SessionTools) status(ctx context.Context, raw json.RawMessage) (string,
 		"summary":   s.session.Summary,
 	}, "", "  ")
 	return string(contents), err
+}
+
+func newTaskSessionStore(paths ConfigPaths) *SessionStore {
+	return &SessionStore{paths: paths, dir: filepath.Join(taskDirectory(paths), "sessions")}
+}
+
+func (s *SessionStore) ListWithDiagnostics() ([]Session, SessionListDiagnostics, error) {
+	sessions, diagnostics, err := s.listDirectory()
+	if err != nil || !s.includeTaskSnapshots {
+		return sessions, diagnostics, err
+	}
+	active, more, err := newTaskSessionStore(s.paths).listDirectory()
+	if err != nil {
+		return nil, diagnostics, err
+	}
+	diagnostics.SkippedFiles += more.SkippedFiles
+	seen := map[string]bool{}
+	// A corrupt task snapshot still shadows its legacy source. Falling back in
+	// listing would advertise a session that Load correctly refuses to restore.
+	entries, readErr := os.ReadDir(newTaskSessionStore(s.paths).dir)
+	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
+		return nil, diagnostics, readErr
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".json" {
+			seen[strings.TrimSuffix(entry.Name(), ".json")] = true
+		}
+	}
+	for _, session := range active {
+		seen[session.ID] = true
+	}
+	for _, session := range sessions {
+		if !seen[session.ID] {
+			active = append(active, session)
+		}
+	}
+	slices.SortFunc(active, func(a, b Session) int { return b.UpdatedAt.Compare(a.UpdatedAt) })
+	return active, diagnostics, nil
 }

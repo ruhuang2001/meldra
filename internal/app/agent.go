@@ -53,6 +53,8 @@ func NewAgent(backend provider.Inference, getUserMessage func() (string, bool), 
 }
 
 type Agent struct {
+	execution          *taskExecution
+	toolFailure        error
 	turnMu             sync.Mutex
 	previousResponseID string
 	registry           *tool.Registry
@@ -142,6 +144,13 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		a.registry = registry
 	}
+	a.toolFailure = nil
+	if a.execution != nil {
+		if err = a.execution.begin(ctx, userInput); err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, a.execution.finish(ctx, err)) }()
+	}
 	previousResponseID := a.previousResponseID
 	if a.session != nil {
 		previousResponseID = a.session.PreviousResponseID
@@ -155,6 +164,10 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		a.session.resumed = false
 	} else if a.customProvider && a.session != nil && len(a.session.Messages) > 0 {
 		modelInput = a.session.resumeContext() + "\nNew user request:\n" + userInput
+		previousResponseID = ""
+	}
+	if a.execution != nil && a.execution.context != "" {
+		modelInput = a.execution.context + "\n" + modelInput
 		previousResponseID = ""
 	}
 	if a.session != nil {
@@ -181,6 +194,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
+		if a.execution != nil {
+			if err := a.execution.event(ctx, "model.requested", "", nil); err != nil {
+				return err
+			}
+		}
 		result, err := a.runInference(ctx, input, previousResponseID)
 		if err != nil {
 			if result.StreamedTextShown {
@@ -194,6 +212,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				return a.handleInterruption(!partialSaved)
 			}
 			return err
+		}
+		if a.execution != nil && result.Response != nil {
+			if err := a.execution.event(ctx, "model.completed", "", map[string]any{"response_id": result.Response.ID, "input_tokens": result.Response.InputTokens, "output_tokens": result.Response.OutputTokens}); err != nil {
+				return err
+			}
 		}
 		response := result.Response
 		if response != nil {
@@ -256,6 +279,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			break
 		}
 		toolResults := a.executeToolCallsContext(ctx, response.Output)
+		if a.toolFailure != nil {
+			return a.toolFailure
+		}
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
@@ -392,7 +418,18 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			a.emit(UIEvent{Kind: UIEventToolStarted, Name: call.Name})
 		}
 
-		result, err := a.executeTool(ctx, call.Name, json.RawMessage(call.Arguments))
+		var result string
+		var err error
+		if a.execution != nil {
+			structured, callErr := a.execution.invoke(ctx, a.registry, call.CallID, call.Name, json.RawMessage(call.Arguments))
+			result, err = structured.Output, callErr
+			if a.execution.err != nil || structured.Status == tool.Unknown {
+				a.toolFailure = err
+				return results
+			}
+		} else {
+			result, err = a.executeTool(ctx, call.Name, json.RawMessage(call.Arguments))
+		}
 		if err != nil {
 			result = "Error: " + err.Error()
 		}

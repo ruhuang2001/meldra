@@ -1,6 +1,9 @@
 package app
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // UIEvent is a presentation-safe update emitted by the agent while it works.
 // It deliberately excludes raw requests, model reasoning, and credentials.
@@ -54,10 +57,11 @@ const (
 // ApprovalRequest contains the complete user-visible operation before it is
 // applied. UI implementations must default to rejection when unavailable.
 type ApprovalRequest struct {
-	Kind   ApprovalKind
-	Title  string
-	Detail string
-	Prompt string
+	WorkspaceState json.RawMessage `json:"workspace_state,omitempty"`
+	Kind           ApprovalKind
+	Title          string
+	Detail         string
+	Prompt         string
 }
 
 type ApprovalFunc func(context.Context, ApprovalRequest) bool

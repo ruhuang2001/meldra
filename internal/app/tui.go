@@ -940,7 +940,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		sessionID: runtime.session.ID,
 		model:     settings.Model,
 		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
-		notices:   []string{providerWarning},
+		notices:   []string{providerWarning, "Task: " + runtime.session.ID},
 	}, func() {
 		started = true
 		go func() {
