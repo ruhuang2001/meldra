@@ -64,6 +64,9 @@
     "TestTaskRecoveryHardKillPreservesUserEdits",
     "TestTaskRecoverySessionMutationRemainsUnknown/update_plan",
     "TestTaskRecoverySessionMutationRemainsUnknown/save_summary",
-    "TestTaskRecoveryFailedCallIsNeverAutomaticallyRetried"
+    "TestTaskRecoveryFailedCallIsNeverAutomaticallyRetried",
+    "TestTaskCancellationStopsGitPreflight",
+    "TestTaskVerificationPreservesFailureAndStopsUnknown/failure",
+    "TestTaskVerificationPreservesFailureAndStopsUnknown/cancel"
   ]
 }

@@ -19,6 +19,11 @@
     "TestReadFailsOnCorruptRecordsAndDoesNotRepair",
     "TestCancelledContextAndStoragePathGuards",
     "TestProviderCallLookupIsScopedBoundedAndIndexed",
-    "TestSchemaOneWithoutProviderIndexRemainsReadable"
+    "TestSchemaOneWithoutProviderIndexRemainsReadable",
+    "TestWorkspaceOwnershipUsesFilesystemIdentity",
+    "TestTaskOwnershipUsesStoreFilesystemIdentity",
+    "TestLeaseRejectsReplacedWorkspaceDirectory",
+    "TestStoreRejectsReplacedDirectory",
+    "TestTaskCanResumeThroughSameDirectoryAlias"
   ]
 }
