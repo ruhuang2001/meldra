@@ -1875,7 +1875,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		return "", err
 	}
 	if command == "git" {
-		topLevel, err := gitTopLevel(w.root, executable)
+		topLevel, err := gitTopLevel(w.ctx, w.root, executable)
 		if err != nil {
 			return "", err
 		}
@@ -2363,7 +2363,7 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	topLevel, err := gitTopLevel(w.root, gitExecutable)
+	topLevel, err := gitTopLevel(w.ctx, w.root, gitExecutable)
 	if err != nil {
 		return "", err
 	}
@@ -2382,20 +2382,35 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	return capText(out.String()), nil
 }
 
-func gitTopLevel(workspace, gitExecutable string) (string, error) {
+func gitTopLevel(parent context.Context, workspace, gitExecutable string) (string, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
 	environment, cleanupEnvironment, err := newCommandEnvironment()
 	if err != nil {
 		return "", err
 	}
 	defer cleanupEnvironment()
-	check := exec.Command(gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
+	check := exec.CommandContext(ctx, gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
 	check.Dir = workspace
 	check.Env = environment
-	output, err := check.Output()
-	if err != nil {
+	var output limitedBuffer
+	output.limit = maxToolOutput
+	check.Stdout = &output
+	check.Stderr = io.Discard
+	tool.Observe(parent, func(o *tool.Observation) { o.Started = true })
+	if err := runCommandProcess(ctx, check); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("Git workspace lookup cancelled: %w", ctx.Err())
+		}
 		return "", fmt.Errorf("workspace is not a git repository")
 	}
-	topLevel, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+	if output.truncated {
+		return "", fmt.Errorf("Git workspace path exceeds output limit")
+	}
+	topLevel, err := filepath.EvalSymlinks(strings.TrimSpace(output.String()))
 	if err != nil {
 		return "", fmt.Errorf("resolve Git repository root: %w", err)
 	}
