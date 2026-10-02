@@ -6,8 +6,3 @@
 meldra
 *.swp
 .DS_Store
-
-/benchmarks/results/
-/benchmarks/__pycache__/
-
-/scripts/__pycache__/

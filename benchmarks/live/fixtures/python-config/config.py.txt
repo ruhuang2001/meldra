@@ -1,2 +1,0 @@
-def merge_config(defaults, overrides):
-    return overrides

@@ -612,47 +612,6 @@ func TestTUIControllerRendersFirstDeltaAndBatchesTheRest(t *testing.T) {
 	}
 }
 
-// BenchmarkTUIStreamingTimeline measures the full per-frame refresh cost for
-// a long-lived chat while an assistant reply is being streamed. This is the
-// current rendering path, so it provides a baseline before considering an
-// incremental rendering cache.
-func BenchmarkTUIStreamingTimeline(b *testing.B) {
-	for _, replyBytes := range []int{64 << 10, 256 << 10} {
-		b.Run(fmt.Sprintf("active_reply_%dKiB", replyBytes>>10), func(b *testing.B) {
-			model := newTUIModel(newTUIController(nil), tuiInitialState{
-				workspace: "/tmp/project",
-				model:     "gpt-test",
-			})
-			model.width = 120
-			model.height = 42
-			for index := range 100 {
-				kind := tuiEntryUser
-				if index%2 != 0 {
-					kind = tuiEntryAssistant
-				}
-				model.entries = append(model.entries, tuiEntry{
-					kind: kind,
-					text: fmt.Sprintf("history entry %03d: %s", index, strings.Repeat("context ", 24)),
-				})
-			}
-			model.entries = append(model.entries, tuiEntry{
-				kind:   tuiEntryAssistant,
-				text:   strings.Repeat("streamed response ", replyBytes/len("streamed response ")+1)[:replyBytes],
-				active: true,
-			})
-			model.activeAssistant = len(model.entries) - 1
-			model.resize()
-
-			b.SetBytes(int64(replyBytes))
-			b.ReportAllocs()
-			b.ResetTimer()
-			for b.Loop() {
-				model.refreshViewport()
-			}
-		})
-	}
-}
-
 func TestTUIControllerStartsAndStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

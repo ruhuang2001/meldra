@@ -2,7 +2,6 @@ package store
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -92,20 +91,5 @@ func TestSchemaOneWithoutProviderIndexRemainsReadable(t *testing.T) {
 	var version int
 	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 1 {
 		t.Fatal("index upgrade changed semantic schema")
-	}
-}
-
-func BenchmarkTaskStoreProviderCallLookup(b *testing.B) {
-	f := setup(b)
-	for i := range 1000 {
-		if _, err := f.s.PlanTool(b.Context(), f.l, task.ToolCall{TaskID: f.task.ID, RunID: f.run.ID, Name: "read_file", Effect: task.Read, ProviderCallID: fmt.Sprintf("provider-%d", i)}); err != nil {
-			b.Fatal(err)
-		}
-	}
-	b.ReportAllocs()
-	for b.Loop() {
-		if _, err := f.s.GetToolCallByProviderID(b.Context(), f.task.ID, "provider-999"); err != nil {
-			b.Fatal(err)
-		}
 	}
 }

@@ -1,3 +1,0 @@
-module fixture/chunks
-
-go 1.26.6

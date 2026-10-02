@@ -2,7 +2,7 @@
 
 Meldra is a local, serial foreground coding agent. The 0.2.0 implementation adds
 versioned execution history, task/workspace ownership, structured tool outcomes,
-and explicit recovery. It is under integration and release validation; this
+and explicit recovery. It is under integration; this
 branch is not a declaration that 0.2.0 has been released.
 
 Closing the terminal ends the current execution. There is no daemon, scheduler,
@@ -71,8 +71,7 @@ workspace.
 
 Custom-provider replay compaction preserves ordering and protected protocol
 fields. Incremental size accounting removes repeated full-input JSON encoding
-from the older compaction loop. Runtime benchmark reports measure this cost;
-they are independent of model task-success evaluations.
+from the older compaction loop.
 
 ## Tools, approvals and execution records
 
@@ -229,9 +228,8 @@ Older task snapshots without a watermark use their saved timestamp to skip
 already represented requests on first upgrade. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
-See [release preparation](release-0.2.0.md) for consistent backups, upgrade,
-downgrade and known limitations. Restoring a 0.1.x session cannot undo repository
-changes or read the 0.2 execution ledger.
+See the [upgrade and downgrade guide](../README.md#upgrade-and-downgrade) for
+whole-store backups and legacy snapshot limits.
 
 ## Verification and next increments
 
@@ -240,13 +238,11 @@ continues to identify binaries. `make check` covers formatting, vet, module
 consistency, race tests, aggregate coverage and build. Store tests cover state
 transitions, ownership, crash boundaries, schema rejection and imports. App tests
 cover real tools, persistence failures, recovery, legacy compatibility, signals,
-owned subprocesses and actual PTY closure. Report tooling distinguishes runtime
-performance, offline correctness and live model quality.
+owned subprocesses and actual PTY closure.
 
-The release gates remain in [the 0.2.0 roadmap](roadmap-0.2.0.md). Implemented tests
-must be run on the exact reviewed candidate; their existence alone is not release
-evidence. Native four-platform packaging and the separately budgeted live quality
-cohort remain publication gates.
+Run these tests on the reviewed candidate before merging. The [0.2.0 scope](roadmap-0.2.0.md)
+records M1–M4 acceptance and a command for retaining repeatable JSONL test logs.
+Real-model quality evaluations are outside this release scope.
 
 After this runtime is validated, independent child workspaces, parent/child
 contracts, inherited budgets and serial result integration can build on these

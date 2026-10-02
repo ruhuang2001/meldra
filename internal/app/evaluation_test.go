@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"meldra/internal/provider"
 )
@@ -31,7 +30,7 @@ type evaluationScenario struct {
 	summary       string
 }
 
-// This is an offline runtime contract suite, not a model-quality benchmark.
+// Runtime contract coverage uses a scripted provider without network requests.
 // A scripted provider proposes operations, while real tools, approvals, file
 // writes and session persistence run and are graded by independent assertions.
 func TestOfflineEvaluation(t *testing.T) {
@@ -137,11 +136,9 @@ func runEvaluationScenario(t *testing.T, scenario evaluationScenario) {
 	agent.output = io.Discard
 	agent.session = session
 	agent.store = store
-	started := time.Now()
 	if err := agent.RunTurn(t.Context(), "offline scenario: "+scenario.name); err != nil {
 		t.Fatal(err)
 	}
-	elapsed := time.Since(started)
 	if len(results) != len(scenario.steps) {
 		t.Fatalf("results = %d, want %d", len(results), len(scenario.steps))
 	}
@@ -171,6 +168,4 @@ func runEvaluationScenario(t *testing.T, scenario evaluationScenario) {
 	if loaded.Summary != scenario.summary {
 		t.Fatalf("summary = %q, want %q", loaded.Summary, scenario.summary)
 	}
-	metrics, _ := json.Marshal(map[string]any{"duration_ms": float64(elapsed) / float64(time.Millisecond), "model_requests": requests, "tool_calls": len(results)})
-	t.Logf("EVAL_METRICS %s", metrics)
 }

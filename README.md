@@ -7,9 +7,8 @@ Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-
 > **Early stage:** Meldra is experimental. Review every change it makes and avoid running it in directories with sensitive or irreplaceable files.
 
 This branch implements the upcoming **0.2.0 foreground task runtime**. It is
-under integration and release validation; the latest published binary may not
-include the task commands below. See [release preparation](docs/release-0.2.0.md)
-for the remaining gates and upgrade instructions.
+under integration; the latest published binary may not include the task
+commands below.
 
 ## Requirements
 
@@ -161,27 +160,37 @@ can have execution records even when its conversation snapshot is unavailable.
 
 Resuming a legacy session imports its source ID and content digest without
 rewriting the original JSON. New messages go to `tasks/sessions/`. Historical
-tool outcomes that 0.1.x never recorded remain missing. See the
-[backup and downgrade guide](docs/release-0.2.0.md#upgrade-and-recovery) before
-upgrading; 0.1.x can read the preserved old snapshot, not the new execution ledger.
+tool outcomes that 0.1.x never recorded remain missing.
+
+## Upgrade and downgrade
+
+Stop all Meldra processes before upgrading or copying data. Back up the entire
+`MELDRA_HOME` directory (default `~/.meldra`) with private permissions, including
+credentials, legacy snapshots, `tasks/` and any SQLite WAL/SHM files. Copying only
+`tasks.db` from a running process is not a supported backup. Keep the previous
+binary alongside the backup. Execution locks in the user cache must not be
+removed while held.
+
+After installing the selected version, check `meldra version`, inspect `tasks`
+and `task show`, then resume explicitly. Downgrading to 0.1.x can read only the
+preserved legacy snapshots; it cannot read new task history or undo repository
+changes. Prefer a separate data directory when downgrading, and keep the 0.2 data
+backup. Unknown newer database schemas are rejected, not rewritten.
 
 ## Development
 
-Requires Go 1.26.6. Python 3 is required for release/report tooling and the
-real-terminal integration tests; building the binary itself requires only Go.
+Requires Go 1.26.6. Python 3 is required for the real-terminal integration
+tests; building the binary itself requires only Go.
 
 ```bash
 make check       # formatting, vet, modules, race tests, coverage, and build
-make benchmark   # repeated runtime microbenchmarks; not a noisy CI gate
 ```
 
 The test suite must maintain at least 75% statement coverage.
 
-See [Benchmarks](benchmarks/README.md) for JSON performance reports, the offline
-workflow suite, and comparable SanityHarness/SWE-bench evaluations.
-
-See [Architecture](docs/architecture.md) for package boundaries, the headless
-turn API, durable execution records and future multi-agent work.
+See [Architecture](docs/architecture.md) for runtime boundaries,
+[Task storage](docs/task-storage.md) for persistence contracts, and the
+[0.2.0 scope](docs/roadmap-0.2.0.md) for M1–M4 acceptance and repeatable test logs.
 
 ## PR test binaries
 
@@ -197,12 +206,7 @@ The workflow must first be present on the default `main` branch before either
 trigger is available.
 
 Meldra follows Semantic Versioning. Release Please prepares a stable release PR
-against `main`; merging that separate release PR triggers release creation and
-artifact publication. Review its version, manifest and CHANGELOG before merging.
-The manual **Prepare 0.2 prerelease** workflow tests an explicit reviewed SHA and
-produces exact-version archives; optionally it creates a draft prerelease for
-manual review. Source PRs do not themselves publish 0.2.0. Details and release
-gates are in [release preparation](docs/release-0.2.0.md).
+against `main`; review its version, manifest and CHANGELOG before merging.
 
 ## License
 

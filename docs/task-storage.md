@@ -147,9 +147,3 @@ at the intent/start/result/Run boundaries, unknown-outcome gates, idempotent
 legacy import, corruption and limits, private paths, cross-store symlink aliases,
 actual subprocess lock competition and SIGKILL lock release. The application
 tests own signal propagation, file reconciliation and command process groups.
-
-Store benchmarks measure task reads, indexed replay lookup after 1,000 calls,
-event append/page, a complete tool
-lifecycle, recovery scanning, and large-log artifact deduplication. These are
-storage/latency metrics, not model quality or evidence that an unknown external
-command can be safely replayed.

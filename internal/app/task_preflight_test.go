@@ -53,8 +53,28 @@ func TestTaskVerificationPreservesFailureAndStopsUnknown(t *testing.T) {
 			ctx := t.Context()
 			if mode == "cancel" {
 				var cancel context.CancelFunc
-				ctx, cancel = context.WithTimeout(ctx, 300*time.Millisecond)
-				defer cancel()
+				ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+				stopped := make(chan struct{})
+				go func() {
+					defer close(stopped)
+					poll := time.Tick(5 * time.Millisecond)
+					for {
+						select {
+						case <-ctx.Done():
+							return
+						case <-poll:
+							// Cancel only after the child has performed its recorded effect.
+							if calls, err := os.ReadFile(marker); err == nil && string(calls) == "vet\n" {
+								cancel()
+								return
+							}
+						}
+					}
+				}()
+				defer func() {
+					cancel()
+					<-stopped
+				}()
 			}
 			registry, err := tool.New(workspace.ToolDefinitions())
 			if err != nil {
@@ -69,6 +89,9 @@ func TestTaskVerificationPreservesFailureAndStopsUnknown(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode == "cancel" {
+				if !errors.Is(ctx.Err(), context.Canceled) {
+					t.Fatalf("child did not reach cancellation handshake: %v", ctx.Err())
+				}
 				if result.Status != tool.Unknown || string(calls) != "vet\n" {
 					t.Fatalf("result=%+v calls=%q", result, calls)
 				}
