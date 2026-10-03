@@ -1,0 +1,2463 @@
+package app
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"meldra/internal/tool"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode/utf8"
+)
+
+const (
+	maxReadLines            = 1000
+	maxSearchHits           = 500
+	maxToolOutput           = 256 << 10
+	maxLineBytes            = 1 << 20
+	maxSearchBytes          = 8 << 20
+	maxSearchFiles          = 5000
+	maxListEntries          = 10000
+	maxWalkEntries          = 20000
+	maxPatchBytes           = 1 << 20
+	maxChangeFiles          = 32
+	maxEditableFileBytes    = 4 << 20
+	maxChangeContentBytes   = 8 << 20
+	maxApprovalPreviewBytes = 1 << 20
+	defaultTimeout          = 60
+)
+
+var errWalkBounded = errors.New("workspace walk bounded")
+
+var ErrWorkspaceBusy = errors.New("workspace already has an active tool call")
+
+// changeBudget bounds the complete before/after state retained for one
+// operation. The full state is needed for the approval preview and rollback.
+type changeBudget struct {
+	total int64
+}
+
+func (b *changeBudget) add(before, after int) error {
+	if before < 0 || after < 0 || before > maxEditableFileBytes || after > maxEditableFileBytes {
+		return fmt.Errorf("a changed file exceeds the %d byte editable-file limit", maxEditableFileBytes)
+	}
+	added := int64(before) + int64(after)
+	if b.total+added > maxChangeContentBytes {
+		return fmt.Errorf("changes exceed the %d byte combined before/after limit", maxChangeContentBytes)
+	}
+	b.total += added
+	return nil
+}
+
+func validateChangeCount(count int) error {
+	if count == 0 {
+		return fmt.Errorf("at least one file change is required")
+	}
+	if count > maxChangeFiles {
+		return fmt.Errorf("changes affect %d files, exceeding the %d file limit", count, maxChangeFiles)
+	}
+	return nil
+}
+
+// Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
+type Workspace struct {
+	toolMu          sync.Mutex
+	root            string
+	input           *bufio.Reader
+	output          io.Writer
+	autoApprove     bool
+	approve         ApprovalFunc
+	approvalRecord  func(context.Context, ApprovalRequest, bool) error
+	approvalPending func(context.Context, ApprovalRequest) error
+	present         ApprovalPresenter
+	ctx             context.Context
+	last            []fileChange
+	protected       []string
+	syncDir         func(string) error
+}
+
+func (w *Workspace) SetContext(ctx context.Context) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	w.ctx = ctx
+}
+
+// SetApprovalFunc replaces line-based confirmation with an interaction owned by
+// the caller. A nil approval function preserves the line-based terminal prompt.
+func (w *Workspace) SetApprovalFunc(approve ApprovalFunc) {
+	w.approve = approve
+}
+
+// SetApprovalPresenter shows automatically approved operations without
+// changing their approval decision.
+func (w *Workspace) SetApprovalPresenter(present ApprovalPresenter) {
+	w.present = present
+}
+
+func (w *Workspace) contextErr() error {
+	if w.ctx == nil {
+		return nil
+	}
+	return w.ctx.Err()
+}
+
+func (w *Workspace) syncDirectory(path string) error {
+	if w.syncDir != nil {
+		return w.syncDir(path)
+	}
+	return syncDirectory(path)
+}
+
+func (w *Workspace) ProtectPath(path string) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if os.IsNotExist(err) {
+		canonical = filepath.Clean(abs)
+	} else if err != nil {
+		return err
+	}
+	canonical = filepath.Clean(canonical)
+	if canonical == w.root {
+		return fmt.Errorf("workspace must not be the Meldra configuration directory")
+	}
+	w.protected = append(w.protected, canonical)
+	return nil
+}
+
+type fileChange struct {
+	path                 string
+	before, after        []byte
+	existed, afterExists bool
+	mode                 fs.FileMode
+	createdDirs          []string
+}
+
+func readEditableFile(path string) ([]byte, bool, fs.FileMode, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, 0o644, nil
+	}
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, 0, fmt.Errorf("target is not a regular file")
+	}
+	if info.Size() > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
+
+	file, openedInfo, err := openCheckedRegularFile(path, info)
+	if err != nil {
+		return nil, false, 0, err
+	}
+	defer file.Close()
+	if openedInfo.Size() > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, int64(maxEditableFileBytes)+1))
+	if err != nil {
+		return nil, false, 0, err
+	}
+	if len(contents) > maxEditableFileBytes {
+		return nil, false, 0, fmt.Errorf("refusing to edit %s: file exceeds the %d byte editable-file limit", filepath.Base(path), maxEditableFileBytes)
+	}
+	return contents, true, openedInfo.Mode().Perm(), nil
+}
+
+func openCheckedRegularFile(path string, expected fs.FileInfo) (*os.File, fs.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, err
+	}
+	if !opened.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("target is not a regular file")
+	}
+	if expected == nil || !os.SameFile(expected, opened) {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("file changed while it was being opened")
+	}
+	return file, opened, nil
+}
+
+func validateChangeInput(in changeInput) error {
+	if len(in.OldStr) > maxEditableFileBytes {
+		return fmt.Errorf("old_str for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+	}
+	if len(in.NewStr) > maxEditableFileBytes {
+		return fmt.Errorf("new_str for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+	}
+	return nil
+}
+
+func NewWorkspace(root string, input *bufio.Reader, output io.Writer, autoApprove bool) (*Workspace, error) {
+	if input == nil || output == nil {
+		return nil, fmt.Errorf("input and output are required")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("workspace root: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace root is not a directory")
+	}
+	canonical, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace root: %w", err)
+	}
+	if strings.EqualFold(filepath.Base(canonical), ".git") {
+		return nil, fmt.Errorf("workspace root must not be .git")
+	}
+	return &Workspace{root: filepath.Clean(canonical), input: input, output: output, autoApprove: autoApprove, ctx: context.Background()}, nil
+}
+
+func (w *Workspace) ToolDefinitions() []ToolDefinition {
+	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	nullableString := func(desc string) map[string]any {
+		return map[string]any{"type": []string{"string", "null"}, "description": desc}
+	}
+	nullableInteger := func(desc string) map[string]any {
+		return map[string]any{"type": []string{"integer", "null"}, "description": desc}
+	}
+	return []ToolDefinition{
+		{Name: "read_file", Description: "Read a file inside the workspace (never .git), with numbered, bounded line chunks.", Parameters: objectSchema(map[string]any{"path": str("Workspace-relative path, or an absolute path inside the workspace."), "offset": nullableInteger("Optional 1-based starting line; use null for 1."), "limit": nullableInteger("Optional line count; use null for 200 and values are capped.")}, []string{"path", "offset", "limit"}), Function: w.bindTool(w.readFile)},
+		{Name: "list_files", Description: "Recursively list relative paths inside the workspace without following symlink directories or entering .git.", Parameters: objectSchema(map[string]any{"path": nullableString("Directory inside the workspace; use null for workspace root.")}, []string{"path"}), Function: w.bindTool(w.listFiles)},
+		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text to find."), "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results"}), Function: w.bindTool(w.searchFiles)},
+		{Name: "edit_file", Description: "Replace exact text once, or create a missing file with empty old_str. Prints a unified diff and requires [y/N] confirmation unless auto-approved. Paths must stay in the workspace and outside .git.", Parameters: objectSchema(map[string]any{"path": str("Target path inside workspace."), "old_str": str("Exact text occurring once; empty only to create."), "new_str": str("Replacement or new file contents.")}, []string{"path", "old_str", "new_str"}), Function: w.bindTool(w.editFile)},
+		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.bindTool(w.applyPatch)},
+		{Name: "undo_last_change", Description: "Undo the last successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
+		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout is capped at 120 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; use null for 60, maximum 120.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
+		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.bindTool(w.verify)},
+		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
+	}
+}
+
+func (w *Workspace) resolve(name string, write bool) (string, error) {
+	if name == "" {
+		name = "."
+	}
+	p := name
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(w.root, p)
+	}
+	p = filepath.Clean(p)
+	if !within(w.root, p) {
+		return "", fmt.Errorf("path escapes workspace")
+	}
+	for _, protected := range w.protected {
+		if withinFold(protected, p) {
+			return "", fmt.Errorf("access to Meldra configuration and sessions is forbidden")
+		}
+	}
+	rel, _ := filepath.Rel(w.root, p)
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.EqualFold(part, ".git") {
+			return "", fmt.Errorf("access to .git is forbidden")
+		}
+	}
+	current := w.root
+	parts := strings.Split(rel, string(filepath.Separator))
+	for index, part := range parts {
+		if part == "." || part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) && write {
+			return p, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("symbolic links are not allowed in workspace tool paths")
+		}
+		if index < len(parts)-1 && !info.IsDir() {
+			return "", fmt.Errorf("path component is not a directory")
+		}
+	}
+	return p, nil
+}
+
+func within(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func withinFold(root, path string) bool {
+	rootParts := strings.Split(filepath.Clean(root), string(filepath.Separator))
+	pathParts := strings.Split(filepath.Clean(path), string(filepath.Separator))
+	if len(pathParts) < len(rootParts) {
+		return false
+	}
+	for index := range rootParts {
+		if !strings.EqualFold(rootParts[index], pathParts[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
+	var in struct {
+		Path   string `json:"path"`
+		Offset int    `json:"offset"`
+		Limit  int    `json:"limit"`
+	}
+	if err := decodeToolInput(raw, &in, "path"); err != nil {
+		return "", err
+	}
+	if err := w.contextErr(); err != nil {
+		return "", fmt.Errorf("read file cancelled: %w", err)
+	}
+	p, err := w.resolve(in.Path, false)
+	if err != nil {
+		return "", err
+	}
+	pathInfo, err := os.Lstat(p)
+	if err != nil {
+		return "", err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return "", fmt.Errorf("read_file only supports regular files")
+	}
+	file, _, err := openCheckedRegularFile(p, pathInfo)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	// Do not feed binary or invalidly encoded bytes through Scanner: converting
+	// them to strings would produce replacement characters (�) in the TUI and
+	// make the result misleading. Return a compact, useful description instead.
+	var probe [8192]byte
+	probeN, probeErr := file.Read(probe[:])
+	if probeErr != nil && !errors.Is(probeErr, io.EOF) {
+		return "", fmt.Errorf("read file: %w", probeErr)
+	}
+	if binarySample(probe[:probeN]) {
+		return fmt.Sprintf("[binary file; %d bytes; use a binary-aware tool to inspect it]", pathInfo.Size()), nil
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", fmt.Errorf("rewind file: %w", err)
+	}
+	off := in.Offset
+	if off == 0 {
+		off = 1
+	}
+	if off < 1 {
+		return "", fmt.Errorf("offset must be at least 1")
+	}
+	limit := in.Limit
+	if limit == 0 {
+		limit = 200
+	}
+	if limit < 1 {
+		return "", fmt.Errorf("limit must be positive")
+	}
+	if limit > maxReadLines {
+		limit = maxReadLines
+	}
+	var out strings.Builder
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64<<10), maxLineBytes)
+	lineNumber, shown, scannedBytes := 0, 0, 0
+	more := false
+	for scanner.Scan() {
+		if err := w.contextErr(); err != nil {
+			return "", fmt.Errorf("read file cancelled: %w", err)
+		}
+		if binarySample(scanner.Bytes()) {
+			return fmt.Sprintf("[binary file; %d bytes; use a binary-aware tool to inspect it]", pathInfo.Size()), nil
+		}
+		lineNumber++
+		scannedBytes += len(scanner.Bytes()) + 1
+		if scannedBytes > maxSearchBytes {
+			more = true
+			break
+		}
+		if lineNumber > off+limit-1 {
+			more = true
+			break
+		}
+		if lineNumber >= off {
+			line := fmt.Sprintf("%6d\t%s\n", lineNumber, scanner.Text())
+			if out.Len()+len(line) > maxToolOutput {
+				more = true
+				break
+			}
+			out.WriteString(line)
+			shown++
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("read file lines: %w", err)
+	}
+	start, end := 0, 0
+	if shown > 0 {
+		start, end = off, off+shown-1
+	}
+	fmt.Fprintf(&out, "[lines %d-%d; truncated=%t]", start, end, more)
+	return out.String(), nil
+}
+
+func binarySample(sample []byte) bool {
+	if bytes.IndexByte(sample, 0) >= 0 {
+		return true
+	}
+	if utf8.Valid(sample) {
+		return false
+	}
+	// A bounded probe can end in the middle of a valid UTF-8 sequence. Ignore
+	// only that incomplete suffix; invalid bytes elsewhere still identify a
+	// binary file, and the full scanner pass validates subsequent lines.
+	lastRune := len(sample) - 1
+	for lastRune >= 0 && !utf8.RuneStart(sample[lastRune]) {
+		lastRune--
+	}
+	return lastRune < 0 || utf8.FullRune(sample[lastRune:]) || !utf8.Valid(sample[:lastRune])
+}
+
+func (w *Workspace) walk(start string, fn fs.WalkDirFunc) error {
+	if err := w.contextErr(); err != nil {
+		return err
+	}
+	entry, err := os.Lstat(start)
+	if err != nil {
+		return err
+	}
+	rootEntry := fs.FileInfoToDirEntry(entry)
+	if err := fn(start, rootEntry, nil); err != nil {
+		return err
+	}
+	if !rootEntry.IsDir() {
+		return nil
+	}
+	visited := 0
+	var visit func(string) error
+	visit = func(directory string) error {
+		if err := w.contextErr(); err != nil {
+			return err
+		}
+		handle, err := os.Open(directory)
+		if err != nil {
+			return err
+		}
+		defer handle.Close()
+		for {
+			if err := w.contextErr(); err != nil {
+				return err
+			}
+			entries, readErr := handle.ReadDir(128)
+			for _, entry := range entries {
+				if err := w.contextErr(); err != nil {
+					return err
+				}
+				visited++
+				if visited > maxWalkEntries {
+					return errWalkBounded
+				}
+				path := filepath.Join(directory, entry.Name())
+				if entry.IsDir() && strings.EqualFold(entry.Name(), ".git") {
+					continue
+				}
+				protected := false
+				for _, protectedPath := range w.protected {
+					if entry.IsDir() && withinFold(protectedPath, path) {
+						protected = true
+						break
+					}
+				}
+				if protected || entry.Type()&os.ModeSymlink != 0 {
+					continue
+				}
+				if err := fn(path, entry, nil); err != nil {
+					return err
+				}
+				if entry.IsDir() {
+					if err := visit(path); err != nil {
+						return err
+					}
+				}
+			}
+			if errors.Is(readErr, io.EOF) {
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+		}
+	}
+	return visit(start)
+}
+
+func (w *Workspace) listFiles(raw json.RawMessage) (string, error) {
+	var in struct {
+		Path string `json:"path"`
+	}
+	if err := decodeToolInput(raw, &in); err != nil {
+		return "", err
+	}
+	p, err := w.resolve(in.Path, false)
+	if err != nil {
+		return "", err
+	}
+	var items []string
+	truncated := false
+	errListStop := errors.New("list bounded")
+	err = w.walk(p, func(path string, d fs.DirEntry, _ error) error {
+		if path == p {
+			return nil
+		}
+		rel, _ := filepath.Rel(w.root, path)
+		if d.IsDir() {
+			rel += "/"
+		}
+		items = append(items, filepath.ToSlash(rel))
+		if len(items) >= maxListEntries {
+			truncated = true
+			return errListStop
+		}
+		return nil
+	})
+	if errors.Is(err, errWalkBounded) {
+		truncated = true
+	} else if err != nil && !errors.Is(err, errListStop) {
+		return "", err
+	}
+	if truncated {
+		items = append(items, "[truncated]")
+	}
+	b, _ := json.Marshal(items)
+	return capText(string(b)), nil
+}
+
+func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
+	var in struct {
+		Query, Path, Glob string
+		MaxResults        int `json:"max_results"`
+	}
+	if err := decodeToolInput(raw, &in, "query"); err != nil {
+		return "", err
+	}
+	if in.Query == "" {
+		return "", fmt.Errorf("query must not be empty")
+	}
+	p, err := w.resolve(in.Path, false)
+	if err != nil {
+		return "", err
+	}
+	max := in.MaxResults
+	if max == 0 {
+		max = 100
+	}
+	if max < 1 {
+		return "", fmt.Errorf("max_results must be positive")
+	}
+	if max > maxSearchHits {
+		max = maxSearchHits
+	}
+	var out strings.Builder
+	hits := 0
+	filesScanned := 0
+	bytesScanned := int64(0)
+	bounded := false
+	errStop := errors.New("bounded")
+	err = w.walk(p, func(path string, d fs.DirEntry, _ error) error {
+		if err := w.contextErr(); err != nil {
+			return err
+		}
+		if d.IsDir() || d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		rel, _ := filepath.Rel(w.root, path)
+		rel = filepath.ToSlash(rel)
+		if in.Glob != "" {
+			ok, e := filepath.Match(in.Glob, rel)
+			if e == nil && !ok && !strings.Contains(in.Glob, "/") {
+				ok, e = filepath.Match(in.Glob, filepath.Base(rel))
+			}
+			if e != nil {
+				return e
+			}
+			if !ok {
+				return nil
+			}
+		}
+		info, e := d.Info()
+		if e != nil {
+			return e
+		}
+		if info.Size() > maxSearchBytes {
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		filesScanned++
+		if filesScanned > maxSearchFiles {
+			bounded = true
+			return errStop
+		}
+		file, openedInfo, e := openCheckedRegularFile(path, info)
+		if e != nil {
+			return e
+		}
+		if openedInfo.Size() > maxSearchBytes {
+			_ = file.Close()
+			return nil
+		}
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64<<10), maxLineBytes)
+		lineNumber := 0
+		stop := false
+		binary := false
+		for scanner.Scan() {
+			if err := w.contextErr(); err != nil {
+				_ = file.Close()
+				return err
+			}
+			lineNumber++
+			line := scanner.Text()
+			bytesScanned += int64(len(scanner.Bytes()) + 1)
+			if bytesScanned > maxSearchBytes*4 {
+				bounded = true
+				stop = true
+				break
+			}
+			if strings.ContainsRune(line, '\x00') {
+				binary = true
+				break
+			}
+			if strings.Contains(line, in.Query) {
+				fmt.Fprintf(&out, "%s:%d:%s\n", rel, lineNumber, line)
+				hits++
+				if hits >= max || out.Len() >= maxToolOutput {
+					bounded = true
+					stop = true
+					break
+				}
+			}
+		}
+		scanErr := scanner.Err()
+		closeErr := file.Close()
+		if scanErr != nil {
+			return scanErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if binary {
+			return nil
+		}
+		if stop {
+			return errStop
+		}
+		return nil
+	})
+	if errors.Is(err, errWalkBounded) {
+		bounded = true
+	} else if err != nil && !errors.Is(err, errStop) {
+		return "", err
+	}
+	if bounded {
+		fmt.Fprintf(&out, "[truncated after %d results]\n", hits)
+	}
+	return capText(out.String()), nil
+}
+
+type changeInput struct {
+	Path   string `json:"path"`
+	OldStr string `json:"old_str"`
+	NewStr string `json:"new_str"`
+}
+
+func (w *Workspace) editFile(raw json.RawMessage) (string, error) {
+	var in struct {
+		Path   string `json:"path"`
+		OldStr string `json:"old_str"`
+		NewStr string `json:"new_str"`
+	}
+	if err := decodeToolInput(raw, &in, "path", "old_str", "new_str"); err != nil {
+		return "", err
+	}
+	return w.applyInputs([]changeInput{{in.Path, in.OldStr, in.NewStr}})
+}
+
+func (w *Workspace) applyPatch(raw json.RawMessage) (string, error) {
+	var in struct {
+		Patch   string        `json:"patch"`
+		Changes []changeInput `json:"changes"`
+	}
+	if err := decodeToolInput(raw, &in); err != nil {
+		return "", err
+	}
+	if len(in.Patch) > maxPatchBytes {
+		return "", fmt.Errorf("patch exceeds the %d byte limit", maxPatchBytes)
+	}
+	if (strings.TrimSpace(in.Patch) == "") == (len(in.Changes) == 0) {
+		return "", fmt.Errorf("set exactly one of patch or changes")
+	}
+	if in.Patch != "" {
+		changes, err := w.prepareUnifiedPatch(in.Patch)
+		if err != nil {
+			return "", err
+		}
+		return w.applyChanges(changes)
+	}
+	if err := validateChangeCount(len(in.Changes)); err != nil {
+		return "", err
+	}
+	return w.applyInputs(in.Changes)
+}
+
+type patchHunk struct {
+	oldStart, oldCount int
+	newStart, newCount int
+	lines              []string
+}
+
+type filePatch struct {
+	oldPath, newPath string
+	hunks            []patchHunk
+}
+
+var hunkHeaderPattern = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+
+func parseUnifiedPatch(patch string) ([]filePatch, error) {
+	lines := strings.Split(strings.ReplaceAll(patch, "\r\n", "\n"), "\n")
+	var files []filePatch
+	for index := 0; index < len(lines); {
+		if lines[index] == "" {
+			index++
+			continue
+		}
+		if !strings.HasPrefix(lines[index], "--- ") || index+1 >= len(lines) || !strings.HasPrefix(lines[index+1], "+++ ") {
+			return nil, fmt.Errorf("invalid unified diff near line %d: expected --- and +++ headers", index+1)
+		}
+		file := filePatch{oldPath: patchHeaderPath(lines[index][4:]), newPath: patchHeaderPath(lines[index+1][4:])}
+		if file.oldPath == "" || file.newPath == "" || (file.oldPath == "/dev/null" && file.newPath == "/dev/null") {
+			return nil, fmt.Errorf("invalid patch paths near line %d", index+1)
+		}
+		if file.oldPath != "/dev/null" && file.newPath != "/dev/null" && file.oldPath != file.newPath {
+			return nil, fmt.Errorf("patch renames are not supported: %s -> %s", file.oldPath, file.newPath)
+		}
+		index += 2
+		for index < len(lines) && !strings.HasPrefix(lines[index], "--- ") {
+			if lines[index] == "" {
+				index++
+				continue
+			}
+			match := hunkHeaderPattern.FindStringSubmatch(lines[index])
+			if match == nil {
+				return nil, fmt.Errorf("invalid unified diff near line %d: expected hunk header", index+1)
+			}
+			hunk := patchHunk{
+				oldStart: patchNumber(match[1]),
+				oldCount: patchCount(match[2]),
+				newStart: patchNumber(match[3]),
+				newCount: patchCount(match[4]),
+			}
+			index++
+			for index < len(lines) && !strings.HasPrefix(lines[index], "@@ ") && !strings.HasPrefix(lines[index], "--- ") {
+				line := lines[index]
+				if line == "" && index == len(lines)-1 {
+					index++
+					break
+				}
+				if strings.HasPrefix(line, `\ No newline at end of file`) {
+					return nil, fmt.Errorf("patches that change a missing final newline are not supported")
+				}
+				if line == "" || !strings.Contains(" +-", line[:1]) {
+					return nil, fmt.Errorf("invalid hunk line %d", index+1)
+				}
+				hunk.lines = append(hunk.lines, line)
+				index++
+			}
+			file.hunks = append(file.hunks, hunk)
+		}
+		if len(file.hunks) == 0 {
+			return nil, fmt.Errorf("patch for %s has no hunks", file.newPath)
+		}
+		files = append(files, file)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("patch must not be empty")
+	}
+	return files, nil
+}
+
+func patchHeaderPath(header string) string {
+	fields := strings.Fields(header)
+	if len(fields) == 0 {
+		return ""
+	}
+	path := fields[0]
+	if path != "/dev/null" && (strings.HasPrefix(path, "a/") || strings.HasPrefix(path, "b/")) {
+		path = path[2:]
+	}
+	return path
+}
+
+func patchNumber(value string) int {
+	number, _ := strconv.Atoi(value)
+	return number
+}
+
+func patchCount(value string) int {
+	if value == "" {
+		return 1
+	}
+	return patchNumber(value)
+}
+
+func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
+	if len(patch) > maxPatchBytes {
+		return nil, fmt.Errorf("patch exceeds the %d byte limit", maxPatchBytes)
+	}
+	files, err := parseUnifiedPatch(patch)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateChangeCount(len(files)); err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool)
+	changes := make([]fileChange, 0, len(files))
+	var budget changeBudget
+	for _, file := range files {
+		path := file.newPath
+		if path == "/dev/null" {
+			path = file.oldPath
+		}
+		resolved, err := w.resolve(path, true)
+		if err != nil {
+			return nil, err
+		}
+		if seen[resolved] {
+			return nil, fmt.Errorf("duplicate patch target %q", path)
+		}
+		seen[resolved] = true
+		before, existed, mode, readErr := readEditableFile(resolved)
+		if readErr != nil {
+			return nil, readErr
+		}
+		if file.oldPath == "/dev/null" && existed {
+			return nil, fmt.Errorf("cannot create existing file %q", path)
+		}
+		if file.oldPath != "/dev/null" && !existed {
+			return nil, fmt.Errorf("cannot patch missing file %q", path)
+		}
+		after, err := applyHunks(before, file.hunks)
+		if err != nil {
+			return nil, fmt.Errorf("apply patch to %s: %w", path, err)
+		}
+		if file.oldPath == "/dev/null" && len(after) > 0 {
+			after = append(after, '\n')
+		}
+		if file.newPath == "/dev/null" && len(after) != 0 {
+			return nil, fmt.Errorf("deletion patch for %s does not remove the entire file", path)
+		}
+		if err := budget.add(len(before), len(after)); err != nil {
+			return nil, err
+		}
+		changes = append(changes, fileChange{
+			path:        resolved,
+			before:      before,
+			after:       after,
+			existed:     existed,
+			afterExists: file.newPath != "/dev/null",
+			mode:        mode,
+		})
+	}
+	return changes, nil
+}
+
+func applyHunks(contents []byte, hunks []patchHunk) ([]byte, error) {
+	source := splitPatchLines(contents)
+	result := make([]string, 0, len(source))
+	cursor := 0
+	for _, hunk := range hunks {
+		start := hunk.oldStart - 1
+		if hunk.oldStart == 0 {
+			start = 0
+		}
+		if start < cursor || start > len(source) {
+			return nil, fmt.Errorf("hunk starts outside file at old line %d", hunk.oldStart)
+		}
+		result = append(result, source[cursor:start]...)
+		cursor = start
+		oldSeen, newSeen := 0, 0
+		for _, line := range hunk.lines {
+			text := line[1:]
+			switch line[0] {
+			case ' ':
+				if cursor >= len(source) || source[cursor] != text {
+					return nil, fmt.Errorf("context mismatch at old line %d", cursor+1)
+				}
+				result = append(result, text)
+				cursor++
+				oldSeen++
+				newSeen++
+			case '-':
+				if cursor >= len(source) || source[cursor] != text {
+					return nil, fmt.Errorf("deletion mismatch at old line %d", cursor+1)
+				}
+				cursor++
+				oldSeen++
+			case '+':
+				result = append(result, text)
+				newSeen++
+			}
+		}
+		if oldSeen != hunk.oldCount || newSeen != hunk.newCount {
+			return nil, fmt.Errorf("hunk count mismatch: expected -%d +%d, got -%d +%d", hunk.oldCount, hunk.newCount, oldSeen, newSeen)
+		}
+	}
+	result = append(result, source[cursor:]...)
+	return []byte(strings.Join(result, "\n")), nil
+}
+
+func splitPatchLines(contents []byte) []string {
+	if len(contents) == 0 {
+		return nil
+	}
+	return strings.Split(string(contents), "\n")
+}
+
+func (w *Workspace) prepare(inputs []changeInput) ([]fileChange, error) {
+	if err := validateChangeCount(len(inputs)); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	changes := make([]fileChange, 0, len(inputs))
+	var budget changeBudget
+	for _, in := range inputs {
+		if err := validateChangeInput(in); err != nil {
+			return nil, err
+		}
+		p, e := w.resolve(in.Path, true)
+		if e != nil {
+			return nil, e
+		}
+		if seen[p] {
+			return nil, fmt.Errorf("duplicate target path %q", in.Path)
+		}
+		seen[p] = true
+		b, exists, mode, e := readEditableFile(p)
+		if e != nil {
+			return nil, e
+		}
+		if in.OldStr == in.NewStr {
+			return nil, fmt.Errorf("old_str and new_str must differ")
+		}
+		if !exists {
+			if in.OldStr != "" {
+				return nil, fmt.Errorf("cannot replace text in missing file")
+			}
+		} else {
+			if in.OldStr == "" {
+				return nil, fmt.Errorf("empty old_str is only for creation")
+			}
+			contents := string(b)
+			n := strings.Count(contents, in.OldStr)
+			if n != 1 {
+				return nil, fmt.Errorf("old_str must occur exactly once (found %d)", n)
+			}
+			if len(b)-len(in.OldStr)+len(in.NewStr) > maxEditableFileBytes {
+				return nil, fmt.Errorf("replacement for %q exceeds the %d byte editable-file limit", in.Path, maxEditableFileBytes)
+			}
+			after := []byte(strings.Replace(contents, in.OldStr, in.NewStr, 1))
+			if err := budget.add(len(b), len(after)); err != nil {
+				return nil, err
+			}
+			changes = append(changes, fileChange{
+				path:        p,
+				before:      b,
+				after:       after,
+				existed:     true,
+				afterExists: true,
+				mode:        mode,
+			})
+			continue
+		}
+		after := []byte(in.NewStr)
+		if err := budget.add(0, len(after)); err != nil {
+			return nil, err
+		}
+		changes = append(changes, fileChange{
+			path:        p,
+			before:      nil,
+			after:       after,
+			existed:     false,
+			afterExists: true,
+			mode:        mode,
+		})
+	}
+	return changes, nil
+}
+
+func (w *Workspace) applyInputs(inputs []changeInput) (string, error) {
+	changes, e := w.prepare(inputs)
+	if e != nil {
+		return "", e
+	}
+	return w.applyChanges(changes)
+}
+
+func validatePreparedChanges(changes []fileChange) error {
+	if err := validateChangeCount(len(changes)); err != nil {
+		return err
+	}
+	var budget changeBudget
+	for _, change := range changes {
+		if err := budget.add(len(change.before), len(change.after)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
+	if err := validatePreparedChanges(changes); err != nil {
+		return "", err
+	}
+	diff, err := w.diff(changes, false)
+	if err != nil {
+		return "", err
+	}
+	if !w.requestApproval(ApprovalRequest{
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(changes, false),
+		Title:          "Review file changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
+	}) {
+		return "Declined; no files changed.", nil
+	}
+	if err := w.writeChanges(changes, false); err != nil {
+		return "", err
+	}
+	w.last = cloneChanges(changes)
+	return "Applied successfully.\n" + diff, nil
+}
+
+func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
+	if w.approvalPending != nil && w.contextErr() == nil {
+		if err := w.approvalPending(w.ctx, request); err != nil {
+			tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			return false
+		}
+	}
+
+	defer func() {
+		if w.approvalRecord != nil {
+			if err := w.approvalRecord(w.ctx, request, approved); err != nil {
+				approved = false
+				tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			}
+		}
+	}()
+	defer func() {
+		if !approved {
+			tool.Observe(w.ctx, func(o *tool.Observation) {
+				if o.Result.Status == tool.Unknown {
+					return
+				}
+				o.Result.Status = tool.Declined
+				if w.contextErr() != nil {
+					o.Result.Status = tool.Cancelled
+				}
+			})
+		}
+	}()
+	// Approval data can include workspace content and command arguments.
+	request.Title = sanitizeTerminalText(request.Title)
+	request.Detail = sanitizeTerminalText(request.Detail)
+	request.Prompt = sanitizeTerminalText(request.Prompt)
+	if w.contextErr() != nil {
+		return false
+	}
+	if w.autoApprove {
+		w.presentApproval(request)
+		return true
+	}
+	if w.approve != nil {
+		return w.approve(w.ctx, request)
+	}
+	w.presentApproval(request)
+	return w.confirmPrompt(request.Prompt)
+}
+
+func (w *Workspace) presentApproval(request ApprovalRequest) {
+	if w.present != nil {
+		w.present(request)
+		return
+	}
+	if request.Kind == ApprovalChanges && request.Detail != "" {
+		_, _ = fmt.Fprint(w.output, request.Detail)
+	}
+}
+
+func (w *Workspace) confirmPrompt(prompt string) bool {
+	if w.contextErr() != nil {
+		return false
+	}
+	if w.autoApprove {
+		return true
+	}
+	fmt.Fprint(w.output, prompt)
+	for {
+		answer, err := w.input.ReadString('\n')
+		answer = strings.TrimSpace(answer)
+		answer = strings.TrimPrefix(answer, "\x1b[200~")
+		answer = strings.TrimSuffix(answer, "\x1b[201~")
+		answer = strings.ToLower(strings.TrimSpace(answer))
+		switch answer {
+		case "y", "yes":
+			return true
+		case "", "n", "no":
+			return false
+		}
+		if err != nil {
+			return false
+		}
+		fmt.Fprint(w.output, "Please enter y or n: ")
+	}
+}
+
+func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
+	if err := w.validateChangePreimages(changes, reverse); err != nil {
+		return err
+	}
+	done := []fileChange{}
+	createdDirs := []string{}
+	for index := range changes {
+		c := &changes[index]
+		if err := w.contextErr(); err != nil {
+			return combineRollbackError(fmt.Errorf("write cancelled: %w", err), w.rollback(done, reverse, createdDirs))
+		}
+		data := c.after
+		exists := c.afterExists
+		mode := c.mode
+		if reverse {
+			data = c.before
+			exists = c.existed
+		}
+		resolved, err := w.resolve(c.path, true)
+		if err != nil || resolved != c.path {
+			rollbackErr := w.rollback(done, reverse, createdDirs)
+			if err != nil {
+				return combineRollbackError(err, rollbackErr)
+			}
+			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
+		}
+		// Validation and path checks above have not changed the workspace.
+		// Only classify later failures as uncertain after entering mutation.
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
+		if exists {
+			if !reverse {
+				created, e := makeDirectoryTreeDurableTracked(filepath.Dir(c.path), 0o755, w.syncDirectory)
+				createdDirs = append(createdDirs, created...)
+				c.createdDirs = append(c.createdDirs, created...)
+				if e != nil {
+					return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+				}
+			}
+			if e := atomicWriteFile(c.path, data, mode); e != nil {
+				return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+			}
+		} else {
+			if e := os.Remove(c.path); e != nil && !os.IsNotExist(e) {
+				return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+			}
+		}
+		done = append(done, *c)
+		if e := w.syncDirectory(filepath.Dir(c.path)); e != nil {
+			return combineRollbackError(e, w.rollback(done, reverse, createdDirs))
+		}
+	}
+	if reverse {
+		removed, err := w.removeCreatedDirectories(recordedChangeDirectories(changes))
+		if err != nil {
+			restoreErr := w.restoreCreatedDirectories(removed)
+			rollbackErr := w.rollback(done, reverse, createdDirs)
+			return combineRollbackError(err, errors.Join(restoreErr, rollbackErr))
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) validateChangePreimages(changes []fileChange, reverse bool) error {
+	for _, change := range changes {
+		resolved, err := w.resolve(change.path, !change.existed)
+		if err != nil && !(reverse && !change.afterExists && os.IsNotExist(err)) {
+			return err
+		}
+		if resolved != "" && resolved != change.path {
+			return fmt.Errorf("target path changed since diff was prepared")
+		}
+		expected, exists := change.before, change.existed
+		if reverse {
+			expected, exists = change.after, change.afterExists
+		}
+		contents, currentExists, mode, readErr := readEditableFile(change.path)
+		if exists && (readErr != nil || !currentExists || !bytes.Equal(contents, expected)) {
+			return fmt.Errorf("refusing to overwrite %s: file changed since diff was prepared", filepath.Base(change.path))
+		}
+		if exists {
+			if mode != change.mode {
+				return fmt.Errorf("refusing to overwrite %s: file metadata changed since diff was prepared", filepath.Base(change.path))
+			}
+		}
+		if !exists && readErr != nil {
+			return fmt.Errorf("refusing to overwrite %s: %w", filepath.Base(change.path), readErr)
+		}
+		if !exists && currentExists {
+			return fmt.Errorf("refusing to overwrite %s: path now exists", filepath.Base(change.path))
+		}
+	}
+	return nil
+}
+
+func atomicWriteFile(path string, contents []byte, mode fs.FileMode) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".meldra-write-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(contents); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Workspace) rollback(done []fileChange, reverse bool, createdDirs []string) error {
+	var rollbackErrors []string
+	for i := len(done) - 1; i >= 0; i-- {
+		c := done[i]
+		data, exists := c.before, c.existed
+		if reverse {
+			data, exists = c.after, c.afterExists
+		}
+		if exists {
+			if err := atomicWriteFile(c.path, data, c.mode); err != nil {
+				rollbackErrors = append(rollbackErrors, err.Error())
+				continue
+			}
+			if err := w.syncDirectory(filepath.Dir(c.path)); err != nil {
+				rollbackErrors = append(rollbackErrors, err.Error())
+			}
+		} else {
+			if err := os.Remove(c.path); err != nil && !os.IsNotExist(err) {
+				rollbackErrors = append(rollbackErrors, err.Error())
+				continue
+			}
+			if err := w.syncDirectory(filepath.Dir(c.path)); err != nil {
+				rollbackErrors = append(rollbackErrors, err.Error())
+			}
+		}
+	}
+	if _, err := w.removeCreatedDirectories(createdDirs); err != nil {
+		rollbackErrors = append(rollbackErrors, err.Error())
+	}
+	if len(rollbackErrors) > 0 {
+		return fmt.Errorf("%s", strings.Join(rollbackErrors, "; "))
+	}
+	return nil
+}
+
+// removeCreatedDirectories removes only directories created by this change.
+// os.Remove refuses non-empty directories, so cleanup never deletes a file
+// created concurrently or by the user.
+func (w *Workspace) removeCreatedDirectories(directories []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(directories))
+	removed := make([]string, 0, len(directories))
+	var removalErrors []string
+	for index := len(directories) - 1; index >= 0; index-- {
+		directory := directories[index]
+		if _, ok := seen[directory]; ok {
+			continue
+		}
+		seen[directory] = struct{}{}
+		if err := os.Remove(directory); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			removalErrors = append(removalErrors, fmt.Sprintf("remove directory %s: %v", directory, err))
+			continue
+		}
+		removed = append(removed, directory)
+		if err := w.syncDirectory(filepath.Dir(directory)); err != nil {
+			removalErrors = append(removalErrors, err.Error())
+		}
+	}
+	if len(removalErrors) > 0 {
+		return removed, fmt.Errorf("%s", strings.Join(removalErrors, "; "))
+	}
+	return removed, nil
+}
+
+func (w *Workspace) restoreCreatedDirectories(directories []string) error {
+	var restoreErrors []string
+	// removeCreatedDirectories records paths from deepest to shallowest, so
+	// recreate them in the opposite order before restoring any files.
+	for index := len(directories) - 1; index >= 0; index-- {
+		directory := directories[index]
+		if err := os.Mkdir(directory, 0o755); err != nil && !os.IsExist(err) {
+			restoreErrors = append(restoreErrors, fmt.Sprintf("restore directory %s: %v", directory, err))
+			continue
+		}
+		if err := w.syncDirectory(filepath.Dir(directory)); err != nil {
+			restoreErrors = append(restoreErrors, err.Error())
+		}
+	}
+	if len(restoreErrors) > 0 {
+		return fmt.Errorf("%s", strings.Join(restoreErrors, "; "))
+	}
+	return nil
+}
+
+func combineRollbackError(operationErr, rollbackErr error) error {
+	if rollbackErr == nil {
+		return operationErr
+	}
+	return fmt.Errorf("%w; rollback incomplete: %v", operationErr, rollbackErr)
+}
+func cloneChanges(in []fileChange) []fileChange {
+	out := make([]fileChange, len(in))
+	copy(out, in)
+	for i := range out {
+		out[i].before = bytes.Clone(out[i].before)
+		out[i].after = bytes.Clone(out[i].after)
+		out[i].createdDirs = slices.Clone(out[i].createdDirs)
+	}
+	return out
+}
+
+func (w *Workspace) undo(raw json.RawMessage) (string, error) {
+	var in struct{}
+	if e := decodeToolInput(raw, &in); e != nil {
+		return "", e
+	}
+	if len(w.last) == 0 {
+		return "", fmt.Errorf("no successful change to undo")
+	}
+	for _, c := range w.last {
+		b, exists, _, err := readEditableFile(c.path)
+		matches := c.afterExists && err == nil && exists && bytes.Equal(b, c.after)
+		if !c.afterExists {
+			matches = err == nil && !exists
+		}
+		if !matches {
+			return "", fmt.Errorf("cannot undo: %s changed since it was written", filepath.Base(c.path))
+		}
+	}
+	if err := validatePreparedChanges(w.last); err != nil {
+		return "", err
+	}
+	diff, err := w.diff(w.last, true)
+	if err != nil {
+		return "", err
+	}
+	if !w.requestApproval(ApprovalRequest{
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(w.last, true),
+		Title:          "Review undo changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
+	}) {
+		return "Declined; no files changed.", nil
+	}
+	if e := w.writeChanges(w.last, true); e != nil {
+		return "", e
+	}
+	w.last = nil
+	return "Undo successful.\n" + diff, nil
+}
+
+func recordedChangeDirectories(changes []fileChange) []string {
+	var directories []string
+	for _, change := range changes {
+		directories = append(directories, change.createdDirs...)
+	}
+	return directories
+}
+
+const noFinalNewlineMarker = "\\ No newline at end of file\n"
+
+func diffLineSize(contents []byte) int64 {
+	if len(contents) == 0 {
+		return 0
+	}
+	size := int64(len(contents)) + int64(lineCount(contents))
+	if contents[len(contents)-1] != '\n' {
+		size += 1 + int64(len(noFinalNewlineMarker))
+	}
+	return size
+}
+
+func (w *Workspace) diffSize(changes []fileChange, reverse bool) (int64, error) {
+	var size int64
+	for _, c := range changes {
+		rel, err := filepath.Rel(w.root, c.path)
+		if err != nil {
+			return 0, err
+		}
+		a, b := c.before, c.after
+		aExists, bExists := c.existed, c.afterExists
+		if reverse {
+			a, b = b, a
+			aExists, bExists = bExists, aExists
+		}
+		oldPath, newPath := "a/"+filepath.ToSlash(rel), "b/"+filepath.ToSlash(rel)
+		if !aExists {
+			oldPath = "/dev/null"
+		}
+		if !bExists {
+			newPath = "/dev/null"
+		}
+		size += int64(len("--- ") + len(oldPath) + 1)
+		size += int64(len("+++ ") + len(newPath) + 1)
+		size += int64(len("@@ -1,") + len(strconv.Itoa(lineCount(a))) + len(" +1,") + len(strconv.Itoa(lineCount(b))) + len(" @@\n"))
+		size += diffLineSize(a) + diffLineSize(b)
+	}
+	return size, nil
+}
+
+func (w *Workspace) diff(changes []fileChange, reverse bool) (string, error) {
+	size, err := w.diffSize(changes, reverse)
+	if err != nil {
+		return "", err
+	}
+	if size > maxApprovalPreviewBytes {
+		return "", fmt.Errorf("approval preview is %d bytes, exceeding the %d byte limit; refusing to apply changes because the full diff cannot be shown", size, maxApprovalPreviewBytes)
+	}
+	var out strings.Builder
+	out.Grow(int(size))
+	for _, c := range changes {
+		rel, err := filepath.Rel(w.root, c.path)
+		if err != nil {
+			return "", err
+		}
+		a, b := c.before, c.after
+		aExists, bExists := c.existed, c.afterExists
+		if reverse {
+			a, b = b, a
+			aExists, bExists = bExists, aExists
+		}
+		oldPath, newPath := "a/"+filepath.ToSlash(rel), "b/"+filepath.ToSlash(rel)
+		if !aExists {
+			oldPath = "/dev/null"
+		}
+		if !bExists {
+			newPath = "/dev/null"
+		}
+		fmt.Fprintf(&out, "--- %s\n+++ %s\n", oldPath, newPath)
+		fmt.Fprintf(&out, "@@ -1,%d +1,%d @@\n", lineCount(a), lineCount(b))
+		writeDiffLines(&out, '-', a)
+		writeDiffLines(&out, '+', b)
+	}
+	return out.String(), nil
+}
+
+func writeDiffLines(out *strings.Builder, prefix byte, contents []byte) {
+	if len(contents) == 0 {
+		return
+	}
+	hasFinalNewline := contents[len(contents)-1] == '\n'
+	text := string(contents)
+	if hasFinalNewline {
+		text = strings.TrimSuffix(text, "\n")
+	}
+	for line := range strings.SplitSeq(text, "\n") {
+		fmt.Fprintf(out, "%c%s\n", prefix, line)
+	}
+	if !hasFinalNewline {
+		out.WriteString(noFinalNewlineMarker)
+	}
+}
+
+func lineCount(b []byte) int {
+	if len(b) == 0 {
+		return 0
+	}
+	count := bytes.Count(b, []byte{'\n'})
+	if b[len(b)-1] != '\n' {
+		count++
+	}
+	return count
+}
+
+func (w *Workspace) runCommand(raw json.RawMessage) (string, error) {
+	var in struct {
+		Command string   `json:"command"`
+		Args    []string `json:"args"`
+		Timeout int      `json:"timeout"`
+	}
+	if e := decodeToolInput(raw, &in, "command"); e != nil {
+		return "", e
+	}
+	return w.execute(in.Command, in.Args, in.Timeout)
+}
+func allowed(command string, args []string) bool {
+	if command != filepath.Base(command) || !allSafeArgs(args) {
+		return false
+	}
+	switch command {
+	case "python3":
+		return allowedPython3(args)
+	case "go":
+		return allowedGo(args)
+	case "npm", "pnpm":
+		return allowedNodePackageManager(args)
+	case "cargo":
+		return allowedCargo(args)
+	case "gofmt":
+		if len(args) <= 1 || args[0] != "-d" {
+			return false
+		}
+		for _, argument := range args[1:] {
+			if strings.HasPrefix(argument, "-") {
+				return false
+			}
+		}
+		return true
+	case "make":
+		return len(args) > 0 && allIn(args, []string{"check", "test"})
+	case "git":
+		return allowedGit(args)
+	}
+	return false
+}
+
+func allowedNodePackageManager(args []string) bool {
+	if len(args) == 1 && args[0] == "test" {
+		return true
+	}
+	return len(args) == 2 && args[0] == "run" && allIn(args[1:], []string{"test", "check", "build", "format:check", "fmt:check"})
+}
+
+func allowedCargo(args []string) bool {
+	if len(args) == 1 {
+		return allIn(args, []string{"test", "check", "build"})
+	}
+	return len(args) == 3 && args[0] == "fmt" && args[1] == "--" && args[2] == "--check"
+}
+
+func allowedPython3(args []string) bool {
+	if len(args) == 1 && strings.HasSuffix(strings.ToLower(args[0]), ".py") {
+		return true
+	}
+	// Support running pytest: python3 -m pytest [options...] [paths...]
+	if len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
+		return allowedPytestArgs(args[2:])
+	}
+	return false
+}
+
+func allowedPytestArgs(args []string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if !allowedPytestFlag(arg) {
+				return false
+			}
+			continue
+		}
+		// A pytest node ID is a workspace path followed by one or more :: selectors.
+		// Only the path portion is resolved at execution time.
+		if !allowedPytestNodeID(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+func allowedPytestNodeID(nodeID string) bool {
+	// Pytest expands a positional argument beginning with @ as an argument
+	// file after Meldra has validated the command line. That would allow the
+	// file contents to bypass this allowlist.
+	if strings.HasPrefix(nodeID, "@") {
+		return false
+	}
+	path, _, _ := strings.Cut(nodeID, "::")
+	return path != "" && allSafeArgs([]string{nodeID, path})
+}
+
+func allowedPytestFlag(arg string) bool {
+	allowedFlags := []string{
+		"-v", "-vv", "-q", "-s", "-x", "-rf", "-rE", "-rP", "-rN",
+		"--no-header", "--disable-warnings", "--capture=no", "--tb=short", "--tb=line", "--tb=no",
+	}
+	for _, f := range allowedFlags {
+		if arg == f {
+			return true
+		}
+	}
+	allowedPrefixes := []string{
+		"--tb=", "--maxfail=", "-k=", "-m=", "-p=", "-W=", "--ignore=",
+		"--durations=", "--rootdir=", "--config-file=", "--override-ini=",
+		"--pythonpath=", "--junitxml=", "--log-file=", "--log-format=",
+	}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(arg, prefix) {
+			value := strings.TrimPrefix(arg, prefix)
+			if prefix == "--override-ini=" {
+				return allowedPytestOverrideINI(value)
+			}
+			return allSafeArgs([]string{value})
+		}
+	}
+	return false
+}
+
+// allowedPytestOverrideINI accepts a single pytest name=value override. The
+// addopts setting is deliberately excluded because it is parsed as another
+// command line and could bypass the command allowlist.
+func allowedPytestOverrideINI(override string) bool {
+	key, value, ok := strings.Cut(override, "=")
+	if !ok || !safePytestINIKey(key) || value == "" || key == "addopts" {
+		return false
+	}
+	return allSafeArgs([]string{value})
+}
+
+func safePytestINIKey(key string) bool {
+	for _, char := range key {
+		if (char < 'a' || char > 'z') && (char < 'A' || char > 'Z') && (char < '0' || char > '9') && char != '_' && char != '-' && char != '.' {
+			return false
+		}
+	}
+	return key != ""
+}
+
+func (w *Workspace) validatePytestArgs(args []string) error {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if err := w.validatePytestFlag(arg); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := w.validatePytestNodeID(arg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestNodeID(nodeID string) error {
+	if !allowedPytestNodeID(nodeID) {
+		return fmt.Errorf("pytest node ID is not allowlisted")
+	}
+	path, _, _ := strings.Cut(nodeID, "::")
+	if _, err := w.resolve(path, false); err != nil {
+		return fmt.Errorf("pytest node ID %q: %w", nodeID, err)
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestFlag(arg string) error {
+	if !allowedPytestFlag(arg) {
+		return fmt.Errorf("pytest option is not allowlisted")
+	}
+	for _, flag := range []struct {
+		prefix string
+		write  bool
+	}{
+		{"--ignore=", false},
+		{"--rootdir=", false},
+		{"--config-file=", false},
+		{"--pythonpath=", false},
+		{"--junitxml=", true},
+		{"--log-file=", true},
+	} {
+		if strings.HasPrefix(arg, flag.prefix) {
+			return w.validatePytestPath(strings.TrimPrefix(arg, flag.prefix), flag.write)
+		}
+	}
+	if strings.HasPrefix(arg, "--override-ini=") {
+		return w.validatePytestOverrideINI(strings.TrimPrefix(arg, "--override-ini="))
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestOverrideINI(override string) error {
+	key, value, _ := strings.Cut(override, "=")
+	switch key {
+	case "cache_dir", "log_file":
+		return w.validatePytestPath(value, true)
+	case "pythonpath", "testpaths":
+		return w.validatePytestPathList(value)
+	default:
+		return nil
+	}
+}
+
+func (w *Workspace) validatePytestPathList(value string) error {
+	paths := strings.Fields(value)
+	if len(paths) == 0 {
+		return fmt.Errorf("pytest path list must not be empty")
+	}
+	for _, path := range paths {
+		if err := w.validatePytestPath(path, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *Workspace) validatePytestPath(path string, write bool) error {
+	if path == "" {
+		return fmt.Errorf("pytest path must not be empty")
+	}
+	if pytestPathUsesExpansion(path) {
+		return fmt.Errorf("pytest paths must not use home or environment expansion")
+	}
+	if _, err := w.resolve(path, write); err != nil {
+		return fmt.Errorf("pytest path %q: %w", path, err)
+	}
+	return nil
+}
+
+// pytest expands ~ and environment-variable syntax in some path options after
+// command validation. Reject them so the path passed to pytest is the same path
+// that resolve verifies remains inside the workspace. Percent syntax matters on
+// Windows, where os.path.expandvars supports %NAME%.
+func pytestPathUsesExpansion(path string) bool {
+	return strings.HasPrefix(path, "~") || strings.ContainsAny(path, "$%")
+}
+
+func allowedGo(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch args[0] {
+	case "run":
+		if len(args) != 2 || !allSafeArgs(args[1:]) || strings.ContainsAny(args[1], "*?[]") || strings.Contains(args[1], "...") {
+			return false
+		}
+		if args[1] != "." && !strings.HasPrefix(args[1], "."+string(filepath.Separator)) {
+			return false
+		}
+		target := filepath.Clean(args[1])
+		return target != ".." && !strings.HasPrefix(target, ".."+string(filepath.Separator))
+	case "build":
+		hasPackage := false
+		for _, argument := range args[1:] {
+			if argument == "./..." {
+				hasPackage = true
+				continue
+			}
+			if argument != "-trimpath" {
+				return false
+			}
+		}
+		return hasPackage
+	case "vet":
+		return len(args) == 1 || (len(args) == 2 && args[1] == "./...")
+	case "test":
+		for _, argument := range args[1:] {
+			if argument == "." || argument == "./..." || argument == "-race" || argument == "-short" || argument == "-v" || strings.HasPrefix(argument, "-run=") || strings.HasPrefix(argument, "-count=") {
+				continue
+			}
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func allowedGit(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	for _, argument := range args[1:] {
+		if !allSafeArgs([]string{argument}) {
+			return false
+		}
+	}
+	switch args[0] {
+	case "status":
+		return allIn(args[1:], []string{"--short", "--porcelain"})
+	case "diff":
+		return allIn(args[1:], []string{"--", "--cached", "--stat", "--name-only", "--name-status"})
+	case "log":
+		for _, argument := range args[1:] {
+			if argument == "--oneline" || argument == "--stat" || argument == "--" || regexp.MustCompile(`^-[1-9][0-9]*$`).MatchString(argument) {
+				continue
+			}
+			return false
+		}
+		return true
+	default:
+		return false
+	}
+}
+func allIn(xs, ok []string) bool {
+	for _, x := range xs {
+		found := false
+		for _, y := range ok {
+			if x == y {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+func allSafeArgs(args []string) bool {
+	for _, a := range args {
+		if strings.ContainsAny(a, "\x00\n\r") || filepath.IsAbs(a) || a == ".." || strings.HasPrefix(a, ".."+string(filepath.Separator)) || a == "-C" || strings.HasPrefix(a, "-C=") || strings.HasPrefix(a, "--git-dir") || strings.HasPrefix(a, "--work-tree") || strings.HasPrefix(a, "--output") || a == "--ext-diff" || a == "--textconv" || strings.HasPrefix(a, "--open-files-in-pager") || strings.HasPrefix(a, "-exec") || strings.HasPrefix(a, "-toolexec") || strings.HasPrefix(a, "-vettool") || a == "-o" || strings.HasPrefix(a, "-o=") || strings.HasPrefix(a, "-coverprofile") {
+			return false
+		}
+	}
+	return true
+}
+func (w *Workspace) execute(command string, args []string, seconds int) (string, error) {
+	return w.executeWithApproval(command, args, seconds, true)
+}
+
+func (w *Workspace) executeWithApproval(command string, args []string, seconds int, requestApproval bool) (string, error) {
+	if !allowed(command, args) {
+		return "", fmt.Errorf("command is not allowlisted")
+	}
+	if command == "python3" && len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
+		if err := w.validatePytestArgs(args[2:]); err != nil {
+			return "", err
+		}
+	}
+	executable, err := w.trustedExecutable(command)
+	if err != nil {
+		return "", err
+	}
+	if command == "git" {
+		topLevel, err := gitTopLevel(w.ctx, w.root, executable)
+		if err != nil {
+			return "", err
+		}
+		if topLevel != w.root {
+			return "", fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
+		}
+		gitArgs := []string{"-c", "core.fsmonitor=false"}
+		if len(args) > 0 && (args[0] == "diff" || args[0] == "show" || args[0] == "log") {
+			gitArgs = append(gitArgs, args[0], "--no-ext-diff", "--no-textconv")
+			args = append(gitArgs, args[1:]...)
+		} else {
+			args = append(gitArgs, args...)
+		}
+	}
+	if command == "gofmt" {
+		for _, argument := range args[1:] {
+			path, err := w.resolve(argument, false)
+			if err != nil {
+				return "", err
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				return "", err
+			}
+			if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" {
+				return "", fmt.Errorf("gofmt paths must be Go files inside the workspace")
+			}
+		}
+		args = append([]string{"-d", "--"}, args[1:]...)
+	}
+	if command == "go" && len(args) == 2 && args[0] == "run" {
+		path, err := w.resolve(args[1], false)
+		if err != nil {
+			return "", err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if !info.IsDir() && (!info.Mode().IsRegular() || filepath.Ext(path) != ".go") {
+			return "", fmt.Errorf("go run target must be a workspace directory or Go file")
+		}
+	}
+	if command == "python3" && !(len(args) >= 2 && args[0] == "-m" && args[1] == "pytest") {
+		path, err := w.resolve(args[0], false)
+		if err != nil {
+			return "", err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
+			return "", fmt.Errorf("python3 target must be a workspace Python file")
+		}
+	}
+	if seconds == 0 {
+		seconds = defaultTimeout
+	}
+	if seconds < 1 || seconds > 120 {
+		return "", fmt.Errorf("timeout must be 1..120 seconds")
+	}
+	if w.contextErr() != nil {
+		tool.Observe(w.ctx, func(o *tool.Observation) {
+			if o.Result.Status != tool.Unknown {
+				o.Result.Status = tool.Cancelled
+			}
+		})
+		return "Command cancelled before start.\n[cancelled]", nil
+	}
+	if requestApproval && commandRequiresApproval(command) && !w.confirmCommand(command, args) {
+		return "Declined; command not run.", nil
+	}
+	parent := w.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, time.Duration(seconds)*time.Second)
+	defer cancel()
+	environment, cleanupEnvironment, err := newCommandEnvironment()
+	if err != nil {
+		return "", err
+	}
+	defer cleanupEnvironment()
+	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd.Dir = w.root
+	cmd.Env = environment
+	var b limitedBuffer
+	b.limit = maxToolOutput
+	var log limitedBuffer
+	log.limit = 16 << 20
+	combined := io.MultiWriter(&b, &log)
+	cmd.Stdout = combined
+	cmd.Stderr = combined
+	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
+	e := runCommandProcess(ctx, cmd)
+	status := 0
+	if e != nil {
+		if ee, ok := errors.AsType[*exec.ExitError](e); ok {
+			status = ee.ExitCode()
+		} else if ctx.Err() != nil {
+			status = -1
+		} else {
+			return "", e
+		}
+	}
+	suffix := ""
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		suffix = "\n[timed out]"
+	} else if errors.Is(ctx.Err(), context.Canceled) {
+		suffix = "\n[cancelled]"
+	}
+	tool.Observe(w.ctx, func(o *tool.Observation) {
+		if o.Result.ExitCode == nil || *o.Result.ExitCode == 0 {
+			o.Result.ExitCode = new(status)
+		}
+		o.Result.Truncated = o.Result.Truncated || b.truncated
+		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
+		if ctx.Err() != nil {
+			o.Result.Status = tool.Unknown
+		} else if status != 0 {
+			o.Result.Status = tool.Failed
+		}
+	})
+	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", command, strings.Join(args, " "), status, b.String()) + suffix, nil
+}
+
+func (w *Workspace) trustedExecutable(command string) (string, error) {
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return "", fmt.Errorf("find executable %s: %w", command, err)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable %s: %w", command, err)
+	}
+	canonical, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve executable %s: %w", command, err)
+	}
+	canonical = filepath.Clean(canonical)
+	if withinFold(w.root, canonical) {
+		return "", fmt.Errorf("refusing to execute %s from inside the workspace", command)
+	}
+	for _, protected := range w.protected {
+		if withinFold(protected, canonical) {
+			return "", fmt.Errorf("refusing to execute %s from Meldra configuration storage", command)
+		}
+	}
+	return canonical, nil
+}
+
+func commandRequiresApproval(command string) bool {
+	return command == "python3" || command == "go" || command == "npm" || command == "pnpm" || command == "cargo" || command == "make"
+}
+
+func (w *Workspace) confirmCommand(command string, args []string) bool {
+	text := renderCommand(command, args)
+	return w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalCommand,
+		Title:  "Run command with OS user privileges",
+		Detail: text + "\n\nThis command runs repository code with your OS user privileges and may access the filesystem and network.",
+		Prompt: fmt.Sprintf("Run command with OS-user privileges? %s [y/N] ", text),
+	})
+}
+
+func renderCommand(command string, args []string) string {
+	var rendered strings.Builder
+	rendered.WriteString(command)
+	for _, argument := range args {
+		rendered.WriteByte(' ')
+		rendered.WriteString(strconv.Quote(argument))
+	}
+	return rendered.String()
+}
+
+func newCommandEnvironment() ([]string, func(), error) {
+	directory, err := os.MkdirTemp("", "meldra-command-*")
+	if err != nil {
+		return nil, nil, fmt.Errorf("create command environment: %w", err)
+	}
+	home := filepath.Join(directory, "home")
+	temporary := filepath.Join(directory, "tmp")
+	if err := os.Mkdir(home, 0o700); err != nil {
+		_ = os.RemoveAll(directory)
+		return nil, nil, fmt.Errorf("create command home: %w", err)
+	}
+	if err := os.Mkdir(temporary, 0o700); err != nil {
+		_ = os.RemoveAll(directory)
+		return nil, nil, fmt.Errorf("create command temporary directory: %w", err)
+	}
+	return safeCommandEnvironment(home, temporary), func() { _ = os.RemoveAll(directory) }, nil
+}
+
+// safeCommandEnvironment deliberately starts from an empty environment. A
+// temporary HOME keeps repository commands from loading user shell or tool
+// configuration, while the narrow allowlist retains normal command runtime.
+func safeCommandEnvironment(home, temporary string) []string {
+	environment := []string{
+		"HOME=" + home,
+		"TMPDIR=" + temporary,
+		"TMP=" + temporary,
+		"TEMP=" + temporary,
+		"GOFLAGS=",
+		"GIT_PAGER=cat",
+		"PAGER=cat",
+		"GIT_CONFIG_NOSYSTEM=1",
+	}
+	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ"} {
+		if value, ok := os.LookupEnv(name); ok {
+			environment = append(environment, name+"="+value)
+		}
+	}
+	return environment
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	room := b.limit - b.Len()
+	if room > 0 {
+		if len(p) > room {
+			b.Buffer.Write(p[:room])
+			b.truncated = true
+		} else {
+			b.Buffer.Write(p)
+		}
+	} else {
+		b.truncated = true
+	}
+	return n, nil
+}
+func (b *limitedBuffer) String() string {
+	return truncateUTF8Text(b.Buffer.String(), b.limit, b.truncated)
+}
+
+type verificationCommand struct {
+	command string
+	args    []string
+}
+
+func (w *Workspace) verify(raw json.RawMessage) (string, error) {
+	var in struct {
+		Preset string `json:"preset"`
+	}
+	if e := decodeToolInput(raw, &in, "preset"); e != nil {
+		return "", e
+	}
+	if in.Preset == "diff" {
+		return w.execute("git", []string{"diff", "--"}, 60)
+	}
+	commands, err := w.verificationCommands(in.Preset)
+	if err != nil {
+		return "", err
+	}
+	needsApproval := false
+	var plan strings.Builder
+	for _, command := range commands {
+		if commandRequiresApproval(command.command) {
+			needsApproval = true
+		}
+		if plan.Len() > 0 {
+			plan.WriteByte('\n')
+		}
+		plan.WriteString(renderCommand(command.command, command.args))
+	}
+	if needsApproval && !w.requestApproval(ApprovalRequest{
+		Kind:   ApprovalCommand,
+		Title:  "Run verification plan with OS user privileges",
+		Detail: plan.String() + "\n\nThese commands run repository code with your OS user privileges and may access the filesystem and network.",
+		Prompt: fmt.Sprintf("Run verification plan with OS-user privileges?\n%s\nApprove %d command(s)? [y/N] ", plan.String(), len(commands)),
+	}) {
+		return "Declined; verification not run.", nil
+	}
+
+	var output strings.Builder
+	for index, command := range commands {
+		result, err := w.executeWithApproval(command.command, command.args, 120, false)
+		if err != nil {
+			return "", err
+		}
+		if index > 0 {
+			output.WriteString("\n\n")
+		}
+		fmt.Fprintf(&output, "verification %d/%d\n", index+1, len(commands))
+		output.WriteString(result)
+		stop := false
+		tool.Observe(w.ctx, func(o *tool.Observation) { stop = o.Result.Status == tool.Unknown || o.Err != nil })
+		if stop {
+			return output.String(), nil
+		}
+	}
+	return output.String(), nil
+}
+
+func (w *Workspace) verificationCommands(preset string) ([]verificationCommand, error) {
+	if !allIn([]string{preset}, []string{"test", "check", "build", "format"}) {
+		return nil, fmt.Errorf("unknown preset")
+	}
+	if (preset == "test" || preset == "check") && w.makeTargetExists(preset) {
+		return []verificationCommand{{command: "make", args: []string{preset}}}, nil
+	}
+
+	var commands []verificationCommand
+	if w.hasRootFile("go.mod") {
+		switch preset {
+		case "test":
+			commands = append(commands, verificationCommand{command: "go", args: []string{"test", "./..."}})
+		case "check":
+			commands = append(commands,
+				verificationCommand{command: "go", args: []string{"vet", "./..."}},
+				verificationCommand{command: "go", args: []string{"test", "./..."}},
+			)
+		case "build":
+			commands = append(commands, verificationCommand{command: "go", args: []string{"build", "./..."}})
+		case "format":
+			args, err := w.goFormatArgs()
+			if err != nil {
+				return nil, err
+			}
+			if len(args) > 1 {
+				commands = append(commands, verificationCommand{command: "gofmt", args: args})
+			}
+		}
+	}
+
+	if w.hasRootFile("pyproject.toml") || w.hasRootFile("pytest.ini") {
+		if preset == "test" || preset == "check" {
+			commands = append(commands, verificationCommand{command: "python3", args: []string{"-m", "pytest"}})
+		}
+	}
+
+	if scripts, packageManager, ok, err := w.nodeProject(); err != nil {
+		return nil, err
+	} else if ok {
+		script := nodeVerificationScript(preset, scripts)
+		if script != "" {
+			args := []string{"run", script}
+			if script == "test" {
+				args = []string{"test"}
+			}
+			commands = append(commands, verificationCommand{command: packageManager, args: args})
+		}
+	}
+
+	if w.hasRootFile("Cargo.toml") {
+		switch preset {
+		case "test", "check", "build":
+			commands = append(commands, verificationCommand{command: "cargo", args: []string{preset}})
+		case "format":
+			commands = append(commands, verificationCommand{command: "cargo", args: []string{"fmt", "--", "--check"}})
+		}
+	}
+
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("no supported %s verification found from root project files", preset)
+	}
+	return commands, nil
+}
+
+func (w *Workspace) hasRootFile(name string) bool {
+	info, err := os.Lstat(filepath.Join(w.root, name))
+	return err == nil && info.Mode().IsRegular()
+}
+
+func (w *Workspace) makeTargetExists(target string) bool {
+	contents, ok, err := w.readRootFile("Makefile")
+	if err != nil || !ok {
+		return false
+	}
+	for _, rawLine := range strings.Split(string(contents), "\n") {
+		if rawLine == "" || rawLine[0] == '\t' {
+			continue
+		}
+		line, _, _ := strings.Cut(rawLine, "#")
+		left, _, found := strings.Cut(line, ":")
+		if !found || strings.Contains(left, "=") {
+			continue
+		}
+		for _, candidate := range strings.Fields(left) {
+			if candidate == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (w *Workspace) readRootFile(name string) ([]byte, bool, error) {
+	path := filepath.Join(w.root, name)
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, nil
+	}
+	if info.Size() > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	file, openedInfo, err := openCheckedRegularFile(path, info)
+	if err != nil {
+		return nil, false, err
+	}
+	defer file.Close()
+	if openedInfo.Size() > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	contents, err := io.ReadAll(io.LimitReader(file, int64(maxEditableFileBytes)+1))
+	if err != nil {
+		return nil, false, err
+	}
+	if len(contents) > maxEditableFileBytes {
+		return nil, false, fmt.Errorf("project marker %s exceeds the %d byte limit", name, maxEditableFileBytes)
+	}
+	return contents, true, nil
+}
+
+func (w *Workspace) nodeProject() (map[string]string, string, bool, error) {
+	contents, ok, err := w.readRootFile("package.json")
+	if err != nil || !ok {
+		return nil, "", ok, err
+	}
+	var manifest struct {
+		PackageManager string            `json:"packageManager"`
+		Scripts        map[string]string `json:"scripts"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(contents))
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, "", false, fmt.Errorf("parse package.json: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, "", false, fmt.Errorf("parse package.json: trailing data")
+		}
+		return nil, "", false, fmt.Errorf("parse package.json: trailing data: %w", err)
+	}
+	packageManager := "npm"
+	if w.hasRootFile("pnpm-lock.yaml") || strings.HasPrefix(strings.ToLower(manifest.PackageManager), "pnpm@") {
+		packageManager = "pnpm"
+	}
+	return manifest.Scripts, packageManager, true, nil
+}
+
+func nodeVerificationScript(preset string, scripts map[string]string) string {
+	candidates := map[string][]string{
+		"test":   {"test"},
+		"check":  {"check", "test"},
+		"build":  {"build"},
+		"format": {"format:check", "fmt:check"},
+	}
+	for _, candidate := range candidates[preset] {
+		if value := strings.TrimSpace(scripts[candidate]); value != "" {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func (w *Workspace) goFormatArgs() ([]string, error) {
+	args := []string{"-d"}
+	err := w.walk(w.root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && d.Type()&os.ModeSymlink == 0 && strings.HasSuffix(path, ".go") {
+			rel, _ := filepath.Rel(w.root, path)
+			args = append(args, rel)
+		}
+		return err
+	})
+	return args, err
+}
+func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
+	var in struct{}
+	if e := decodeToolInput(raw, &in); e != nil {
+		return "", e
+	}
+	gitExecutable, err := w.trustedExecutable("git")
+	if err != nil {
+		return "", err
+	}
+	topLevel, err := gitTopLevel(w.ctx, w.root, gitExecutable)
+	if err != nil {
+		return "", err
+	}
+	if topLevel != w.root {
+		return "", fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
+	}
+	var out strings.Builder
+	for _, x := range [][]string{{"status", "--short"}, {"diff", "--cached", "--"}, {"diff", "--"}, {"log", "-5", "--oneline"}} {
+		r, e := w.execute("git", x, 60)
+		if e != nil {
+			return "", e
+		}
+		out.WriteString(r)
+		out.WriteString("\n")
+	}
+	return capText(out.String()), nil
+}
+
+func gitTopLevel(parent context.Context, workspace, gitExecutable string) (string, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	environment, cleanupEnvironment, err := newCommandEnvironment()
+	if err != nil {
+		return "", err
+	}
+	defer cleanupEnvironment()
+	check := exec.CommandContext(ctx, gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
+	check.Dir = workspace
+	check.Env = environment
+	var output limitedBuffer
+	output.limit = maxToolOutput
+	check.Stdout = &output
+	check.Stderr = io.Discard
+	tool.Observe(parent, func(o *tool.Observation) { o.Started = true })
+	if err := runCommandProcess(ctx, check); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("Git workspace lookup cancelled: %w", ctx.Err())
+		}
+		return "", fmt.Errorf("workspace is not a git repository")
+	}
+	if output.truncated {
+		return "", fmt.Errorf("Git workspace path exceeds output limit")
+	}
+	topLevel, err := filepath.EvalSymlinks(strings.TrimSpace(output.String()))
+	if err != nil {
+		return "", fmt.Errorf("resolve Git repository root: %w", err)
+	}
+	return filepath.Clean(topLevel), nil
+}
+func capText(s string) string {
+	return truncateUTF8Text(s, maxToolOutput, false)
+}
+
+const outputTruncationSuffix = "\n[output truncated]"
+
+// truncateUTF8Text keeps terminal and JSON-facing output valid UTF-8. When a
+// suffix is required, it is included in the stated byte budget.
+func truncateUTF8Text(text string, limit int, forceSuffix bool) string {
+	if limit <= 0 {
+		return ""
+	}
+	if !forceSuffix && len(text) <= limit {
+		return truncateUTF8(text, limit, outputTruncationSuffix)
+	}
+	suffix := outputTruncationSuffix
+	if len(suffix) > limit {
+		if limit >= 3 {
+			suffix = "..."
+		} else {
+			suffix = strings.Repeat(".", limit)
+		}
+	}
+	return truncateUTF8WithSuffix(text, limit, suffix)
+}
+
+// bindTool serializes access to a workspace's mutable edit/undo state and
+// installs only the current invocation's context. Direct helpers remain useful
+// inside the workspace; callers execute registered tools through this boundary.
+func (w *Workspace) bindTool(handler func(json.RawMessage) (string, error)) func(context.Context, json.RawMessage) (string, error) {
+	return func(ctx context.Context, input json.RawMessage) (string, error) {
+		if !w.toolMu.TryLock() {
+			return "", ErrWorkspaceBusy
+		}
+		defer w.toolMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		previous := w.ctx
+		w.ctx = ctx
+		defer func() { w.ctx = previous }()
+		return handler(input)
+	}
+}
