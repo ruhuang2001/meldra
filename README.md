@@ -189,8 +189,9 @@ make check       # formatting, vet, modules, race tests, coverage, and build
 The test suite must maintain at least 75% statement coverage.
 
 See [Architecture](docs/architecture.md) for runtime boundaries,
-[Task storage](docs/task-storage.md) for persistence contracts, and the
-[0.2.0 scope](docs/roadmap-0.2.0.md) for M1–M4 acceptance and repeatable test logs.
+[Task storage](docs/task-storage.md) for persistence contracts. The M1–M4
+acceptance check is the same `make check` command above; for a repeatable JSONL
+record, use `go test -race -json -count=3 -timeout=5m ./...`.
 
 ## PR test binaries
 

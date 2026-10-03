@@ -240,9 +240,10 @@ transitions, ownership, crash boundaries, schema rejection and imports. App test
 cover real tools, persistence failures, recovery, legacy compatibility, signals,
 owned subprocesses and actual PTY closure.
 
-Run these tests on the reviewed candidate before merging. The [0.2.0 scope](roadmap-0.2.0.md)
-records M1–M4 acceptance and a command for retaining repeatable JSONL test logs.
-Real-model quality evaluations are outside this release scope.
+Run these tests on the reviewed candidate before merging. M1–M4 acceptance is
+covered by `make check`; repeatable JSONL logs can be retained with
+`go test -race -json -count=3 -timeout=5m ./...`. Real-model quality evaluations
+are outside this release scope.
 
 After this runtime is validated, independent child workspaces, parent/child
 contracts, inherited budgets and serial result integration can build on these

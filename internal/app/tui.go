@@ -494,11 +494,11 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 	case tuiApprovalPreviewMsg:
-		m.addEntry(tuiEntry{
-			kind: tuiEntryNotice,
-			text: "Auto-approved: " + msg.request.Title + "\n" + msg.request.Detail,
-		})
-		m.viewport.GotoBottom()
+		// Keep the diff visible, but omit confirmation boilerplate for
+		// operations that do not require a decision from the user.
+		if msg.request.Kind == ApprovalChanges && msg.request.Detail != "" {
+			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: msg.request.Detail})
+		}
 		return m, nil
 	case tuiAgentStoppedMsg:
 		m.stopped = true
@@ -850,7 +850,7 @@ func (m *tuiModel) View() tea.View {
 	if m.width == 0 || m.height == 0 {
 		view := tea.NewView("Starting Meldra...")
 		view.AltScreen = true
-		view.MouseMode = tea.MouseModeNone
+		view.MouseMode = tea.MouseModeCellMotion
 		return view
 	}
 
@@ -887,9 +887,9 @@ func (m *tuiModel) View() tea.View {
 		}
 	}
 	view.AltScreen = true
-	// Leave mouse tracking disabled so the terminal can natively select and
-	// copy rendered output. Keyboard PgUp/PgDn remains available for scroll.
-	view.MouseMode = tea.MouseModeNone
+	// The alternate screen has no native scrollback. Request mouse events
+	// so wheel/trackpad scrolling reaches the conversation viewport.
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
 
