@@ -57,7 +57,7 @@ func resultFor(ctx context.Context, started time.Time, observation *Observation,
 	result := observation.Result
 	result.Output = output
 	result.DurationMS = time.Since(started).Milliseconds()
-	if result.Status == "" {
+	if result.Status == "" || (err != nil && result.Status == Succeeded) {
 		result.Status = Succeeded
 		if err != nil {
 			result.Status = Failed

@@ -41,20 +41,21 @@ type SessionMessage struct {
 }
 
 type Session struct {
-	ID                   string           `json:"id"`
-	Workspace            string           `json:"workspace"`
-	CreatedAt            time.Time        `json:"created_at"`
-	UpdatedAt            time.Time        `json:"updated_at"`
-	PreviousResponseID   string           `json:"previous_response_id,omitempty"`
-	LastRequestSequence  int64            `json:"last_request_sequence,omitzero"`
-	Messages             []SessionMessage `json:"messages,omitempty"`
-	Plan                 []string         `json:"plan,omitempty"`
-	Summary              string           `json:"summary,omitempty"`
-	WorkspaceUnavailable bool             `json:"-"`
-	resumed              bool
-	taskSnapshot         bool
-	savedRevision        [sha256.Size]byte
-	hasSavedRevision     bool
+	ID                                string           `json:"id"`
+	Workspace                         string           `json:"workspace"`
+	CreatedAt                         time.Time        `json:"created_at"`
+	UpdatedAt                         time.Time        `json:"updated_at"`
+	PreviousResponseID                string           `json:"previous_response_id,omitempty"`
+	LastRequestSequence               int64            `json:"last_request_sequence,omitzero"`
+	RequestsReplayedWithoutCheckpoint bool             `json:"requests_replayed_without_checkpoint,omitzero"`
+	Messages                          []SessionMessage `json:"messages,omitempty"`
+	Plan                              []string         `json:"plan,omitempty"`
+	Summary                           string           `json:"summary,omitempty"`
+	WorkspaceUnavailable              bool             `json:"-"`
+	resumed                           bool
+	taskSnapshot                      bool
+	savedRevision                     [sha256.Size]byte
+	hasSavedRevision                  bool
 }
 
 // SessionSaver is the persistence boundary used by the runner and session tools.
@@ -457,6 +458,8 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 			err = decoder.Decode(&session.PreviousResponseID)
 		case "last_request_sequence":
 			err = decoder.Decode(&session.LastRequestSequence)
+		case "requests_replayed_without_checkpoint":
+			err = decoder.Decode(&session.RequestsReplayedWithoutCheckpoint)
 		case "plan":
 			err = decoder.Decode(&session.Plan)
 		case "summary":

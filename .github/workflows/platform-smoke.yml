@@ -51,4 +51,8 @@ jobs:
           test "$(dist/meldra version)" = "0.2.0-candidate"
           go test ./internal/task ./internal/store -count=1 -timeout=5m
       - name: Verify process shutdown and task recovery
-        run: go test ./internal/app -run '^TestTask(Signals|SignalStops|TerminalClose|PromptEOF|RecoveryHardKill)' -count=1 -timeout=5m
+        run: |
+          pattern='^TestTask(Signals|SignalStops|TerminalClose|PromptEOF|RecoveryHardKill|ResumeUsesRealTerminalTUI)'
+          tests="$(go test ./internal/app -list "$pattern")"
+          printf '%s\n' "$tests" | grep -q '^TestTask'
+          go test ./internal/app -run "$pattern" -count=1 -timeout=5m

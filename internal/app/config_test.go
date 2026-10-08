@@ -295,7 +295,7 @@ func TestFileSettingsReachChatRequest(t *testing.T) {
 
 	workspace := t.TempDir()
 	var output bytes.Buffer
-	if err := runChat(context.Background(), strings.NewReader("hello\n"), &output, ChatOptions{Workspace: workspace, workspaceExplicit: true}); err != nil {
+	if err := runChat(context.Background(), strings.NewReader("\n \t\nhello\n\n"), &output, ChatOptions{Workspace: workspace, workspaceExplicit: true}); err != nil {
 		t.Fatal(err)
 	}
 	if request.Model != configuredModel || !request.Stream {

@@ -146,6 +146,26 @@ func TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint(t *testing.T) {
 	if strings.Join(users, "|") != "original|original|newer request|continue" {
 		t.Fatalf("upgraded user history=%v", users)
 	}
+	if !agent.session.RequestsReplayedWithoutCheckpoint {
+		t.Fatal("replay explanation was not recorded")
+	}
+	reloaded, err := loadSessionForResume(paths, agent.session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reloaded.RequestsReplayedWithoutCheckpoint {
+		t.Fatal("replay marker lost after restart")
+	}
+	recovered := recoveryExecution(t, paths, agent.execution.workspace.root, agent.session.ID)
+	if err := recovered.begin(t.Context(), "continue after restart"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(recovered.context, "some previously saved requests may appear twice") {
+		t.Fatal("replay explanation missing after restart")
+	}
+	if err := recovered.finish(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
 	// The lightweight list decoder must understand the new optional field too.
 	sessions, diagnostics, err := NewSessionStore(paths).ListWithDiagnostics()
 	if err != nil || diagnostics.SkippedFiles != 0 || len(sessions) != 1 {

@@ -10,6 +10,12 @@ func TestRunClearsInheritedConfigAndKeepsChildFixtures(t *testing.T) {
 	external := t.TempDir()
 	t.Setenv("MELDRA_HOME", external)
 	t.Setenv("MELDRA_TEST_HOME", "")
+	keys := []string{"HOME", "XDG_CACHE_HOME", "MELDRA_TEST_HOME", "MELDRA_HOME"}
+	original := make(map[string]string)
+	present := make(map[string]bool)
+	for _, key := range keys {
+		original[key], present[key] = os.LookupEnv(key)
+	}
 	var isolated string
 	code := Run(func() int {
 		isolated = os.Getenv("HOME")
@@ -32,6 +38,11 @@ func TestRunClearsInheritedConfigAndKeepsChildFixtures(t *testing.T) {
 	})
 	if code != 7 || os.Getenv("MELDRA_HOME") != external {
 		t.Fatal("test environment not restored")
+	}
+	for _, key := range keys {
+		if value, ok := os.LookupEnv(key); ok != present[key] || ok && value != original[key] {
+			t.Fatalf("%s leaked: %q", key, value)
+		}
 	}
 	if _, err := os.Stat(isolated); !os.IsNotExist(err) {
 		t.Fatal("test home leaked")

@@ -75,6 +75,7 @@ func (w *Workspace) reconcileFiles(raw json.RawMessage) (string, error) {
 		return "", fmt.Errorf("no file evidence")
 	}
 	before, after := true, true
+	checkedParents := make(map[string]bool)
 	for _, record := range records {
 		// Older evidence cannot prove that auxiliary effects are absent.
 		if record.AuxiliaryVersion != 1 {
@@ -109,12 +110,16 @@ func (w *Workspace) reconcileFiles(raw json.RawMessage) (string, error) {
 		}
 		// Unowned leftovers are evidence of uncertainty, never permission to
 		// delete workspace files. Scan in bounded batches, including legacy temps.
-		leftover, err := hasWriteTemporary(filepath.Dir(path))
-		if err != nil {
-			return "", err
-		}
-		if leftover {
-			return "changed", nil
+		parent := filepath.Dir(path)
+		if !checkedParents[parent] {
+			leftover, err := hasWriteTemporary(parent)
+			if err != nil {
+				return "", err
+			}
+			if leftover {
+				return "changed", nil
+			}
+			checkedParents[parent] = true
 		}
 	}
 	if after {
@@ -138,7 +143,7 @@ func hasWriteTemporary(dir string) (bool, error) {
 	for {
 		entries, err := f.ReadDir(128)
 		for _, entry := range entries {
-			if strings.HasPrefix(entry.Name(), ".meldra-write-") {
+			if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".meldra-write-") && strings.HasSuffix(entry.Name(), ".tmp") {
 				return true, nil
 			}
 		}

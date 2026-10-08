@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -39,6 +40,50 @@ func TestLargeWALWriterHelper(t *testing.T) {
 		} // Leave the committed WAL without closing/checkpointing.
 	}
 	t.Fatal("fixture did not create an oversized WAL")
+}
+
+func TestFailedArtifactTransactionCleansOnlyUnreferencedContent(t *testing.T) {
+	f := setup(t)
+	retained, err := f.s.PutArtifact(t.Context(), f.l, f.task.ID, "retained", []byte("keep"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fault := errors.New("failed artifact commit")
+	f.s.beforeCommit = func() error { return fault }
+	if _, err := f.s.PutArtifact(t.Context(), f.l, f.task.ID, "same", []byte("keep")); !errors.Is(err, fault) {
+		t.Fatal(err)
+	}
+	if data, err := f.s.ReadArtifact(t.Context(), retained); err != nil || string(data) != "keep" {
+		t.Fatalf("committed artifact removed: %q %v", data, err)
+	}
+	if _, err := f.s.PutArtifact(t.Context(), f.l, f.task.ID, "new", []byte("uncommitted")); !errors.Is(err, fault) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(f.s.dir, "artifacts", Hash([]byte("uncommitted")))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("rollback orphan retained: %v", err)
+	}
+	f.s.beforeCommit = nil
+	// Crash leftovers without metadata are reclaimed when capacity is needed.
+	dir := filepath.Join(f.s.dir, "artifacts")
+	orphan := filepath.Join(dir, strings.Repeat("a", 64))
+	file, err := os.Create(orphan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = file.Truncate(MaxArtifactTotalBytes)
+	file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.PutArtifact(t.Context(), f.l, f.task.ID, "next", []byte("next")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("crash orphan not reclaimed")
+	}
+	if _, err := f.s.ReadArtifact(context.Background(), retained); err != nil {
+		t.Fatal("committed save event ignored", err)
+	}
 }
 
 func TestOpenRecoversWALLargerThanDatabaseLimit(t *testing.T) {

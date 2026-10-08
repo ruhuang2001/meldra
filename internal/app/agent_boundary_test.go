@@ -169,6 +169,21 @@ func TestHeadlessTurnDoesNotInferAfterPersistenceFailure(t *testing.T) {
 	}
 }
 
+func TestInteractiveRunSkipsBlankLine(t *testing.T) {
+	requests := 0
+	agent := NewAgent(inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		requests++
+		return provider.Result{Response: &provider.Response{Status: "completed", Text: "done"}}, nil
+	}), userMessages("", "  \t", "reply"), nil)
+	agent.output = io.Discard
+	if err := agent.Run(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("blank input triggered model request: %d", requests)
+	}
+}
+
 func TestWorkspaceRejectsOverlappingRegisteredTools(t *testing.T) {
 	workspace, _ := testWorkspace(t, t.TempDir(), "", true)
 	entered := make(chan struct{})
