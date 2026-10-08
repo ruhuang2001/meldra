@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"meldra/internal/task"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 const (
@@ -117,6 +117,28 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version > task.SchemaVersion {
 		return fmt.Errorf("task database schema %d is newer than supported schema %d", version, task.SchemaVersion)
 	}
+	// Check schema first, then cap all schema/index writes before they can grow
+	// the file. SQLite may otherwise accept an oversized effective page limit.
+	var pageSize, pageCount int64
+	if err := tx.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
+		return err
+	}
+	if pageSize <= 0 {
+		return errors.New("invalid SQLite page size")
+	}
+	if err := tx.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
+		return err
+	}
+	if pageCount > MaxDatabaseBytes/pageSize {
+		return task.ErrLimit
+	}
+	var effective int64
+	if err := tx.QueryRowContext(ctx, fmt.Sprintf("PRAGMA max_page_count=%d", MaxDatabaseBytes/pageSize)).Scan(&effective); err != nil {
+		return err
+	}
+	if effective > MaxDatabaseBytes/pageSize {
+		return task.ErrLimit
+	}
 	if version == 0 {
 		_, err = tx.ExecContext(ctx, `
 CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, status TEXT NOT NULL, updated TEXT NOT NULL, record BLOB NOT NULL);
@@ -133,30 +155,26 @@ PRAGMA user_version = 1;`)
 			return fmt.Errorf("migrate task database: %w", err)
 		}
 	}
-	// This rebuildable index is backward compatible with schema 1. Keeping
-	// provider identity indexed prevents replay lookup from decoding/scanning
-	// the complete history on every subsequent tool call.
-	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tools_provider_call ON tool_calls(task_id,json_extract(CAST(record AS TEXT),'$.provider_call_id'),planned,id)`); err != nil {
-		return fmt.Errorf("index tool identities: %w", err)
-	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tools_recovery ON tool_calls(task_id,status,id); CREATE INDEX IF NOT EXISTS approvals_call ON approvals(call_id)`); err != nil {
-		return err
-	}
-	// Do not change newer databases at all. WAL is enabled only after checking
-	// their version, and FULL sync protects committed state across process exit.
-	var pageSize int
-	if err := s.db.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
-		return err
-	}
-	if pageSize <= 0 {
-		return errors.New("invalid SQLite page size")
-	}
-	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA wal_autocheckpoint=256", "PRAGMA journal_size_limit=4194304", fmt.Sprintf("PRAGMA max_page_count=%d", MaxDatabaseBytes/pageSize)} {
+	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA wal_autocheckpoint=256", "PRAGMA journal_size_limit=4194304"} {
 		if _, err := s.db.ExecContext(ctx, pragma); err != nil {
 			return err
+		}
+	}
+	// Rebuildable indexes are optimizations, not a requirement to read existing
+	// history. Each statement rolls back independently on SQLITE_FULL (13).
+	for _, statement := range []string{
+		`CREATE INDEX IF NOT EXISTS tools_provider_call ON tool_calls(task_id,json_extract(CAST(record AS TEXT),'$.provider_call_id'),planned,id)`,
+		`CREATE INDEX IF NOT EXISTS tools_recovery ON tool_calls(task_id,status,id)`,
+		`CREATE INDEX IF NOT EXISTS approvals_call ON approvals(call_id)`,
+	} {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if dbErr, ok := errors.AsType[*sqlite.Error](err); ok && dbErr.Code() == 13 {
+				continue
+			}
+			return fmt.Errorf("index task history: %w", err)
 		}
 	}
 	return nil

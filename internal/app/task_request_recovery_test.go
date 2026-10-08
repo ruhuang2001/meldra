@@ -142,7 +142,8 @@ func TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint(t *testing.T) {
 			users = append(users, message.Content)
 		}
 	}
-	if strings.Join(users, "|") != "original|newer request|continue" {
+	// Without a watermark, preserve durable requests once instead of guessing.
+	if strings.Join(users, "|") != "original|original|newer request|continue" {
 		t.Fatalf("upgraded user history=%v", users)
 	}
 	// The lightweight list decoder must understand the new optional field too.

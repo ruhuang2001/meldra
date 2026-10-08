@@ -46,7 +46,7 @@ type shutdownProcess struct {
 	err    error
 }
 
-func startShutdownProcess(t *testing.T, paths ConfigPaths, args []string, terminal bool) (*shutdownProcess, io.WriteCloser) {
+func startShutdownProcess(t *testing.T, paths ConfigPaths, args []string, terminal bool, terminalReady ...string) (*shutdownProcess, io.WriteCloser) {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -66,12 +66,15 @@ func startShutdownProcess(t *testing.T, paths ConfigPaths, args []string, termin
 	}
 	for _, variable := range os.Environ() {
 		key, _, _ := strings.Cut(variable, "=")
-		if strings.HasPrefix(key, "OPENAI_") || strings.HasPrefix(key, "MELDRA_") || key == "TERM" {
+		if strings.HasPrefix(key, "OPENAI_") || (strings.HasPrefix(key, "MELDRA_") && key != "MELDRA_TEST_HOME") || key == "TERM" {
 			continue
 		}
 		command.Env = append(command.Env, variable)
 	}
 	command.Env = append(command.Env, "MELDRA_HOME="+paths.Home, "MELDRA_SHUTDOWN_HELPER=1", "MELDRA_SHUTDOWN_ARGS="+string(encoded), "TERM=xterm-256color")
+	if len(terminalReady) > 0 {
+		command.Env = append(command.Env, "MELDRA_TEST_TUI_READY="+terminalReady[0])
+	}
 	process := &shutdownProcess{cmd: command, done: make(chan struct{})}
 	command.Stdout = &process.output
 	command.Stderr = &process.output
@@ -376,6 +379,70 @@ func TestTaskPromptEOFCompletesWithoutFalseHangup(t *testing.T) {
 	}
 }
 
+func TestTaskResumeUsesRealTerminalTUI(t *testing.T) {
+	active := make(chan struct{})
+	var once sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"working\"}\n\n")
+		w.(http.Flusher).Flush()
+		once.Do(func() { close(active) })
+		select {
+		case <-r.Context().Done():
+		case <-t.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+	paths := shutdownPaths(t, server.URL)
+	db, err := taskstore.Open(taskDirectory(paths))
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := db.EnsureTask(t.Context(), task.Task{ID: "resume-terminal", Goal: "resume in TUI", Workspace: t.TempDir()})
+	_ = db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := filepath.Join(t.TempDir(), "tui-ready")
+	process, input := startShutdownProcess(t, paths, []string{"task", "resume", record.ID}, true, ready)
+	select {
+	case <-active:
+	case <-process.done:
+		t.Fatalf("resume exited before inference: %s", process.output.String())
+	case <-time.After(20 * time.Second):
+		t.Fatal("resume never called local fixture")
+	}
+	ticks := time.Tick(5 * time.Millisecond)
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for {
+		if _, err := os.Stat(ready); err == nil {
+			break
+		}
+		select {
+		case <-ticks:
+		case <-process.done:
+			t.Fatalf("TUI exited before rendering: %s", process.output.String())
+		case <-deadline.C:
+			t.Fatal("task resume never rendered the terminal TUI")
+		}
+	}
+	if _, err := io.WriteString(input, "close\n"); err != nil {
+		t.Fatal(err)
+	}
+	process.wait(t)
+	var result struct {
+		Output string `json:"output"`
+	}
+	if err := json.Unmarshal(process.output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Output, "\x1b[?1049h") {
+		t.Fatalf("resume did not enter alternate-screen TUI: %q", result.Output)
+	}
+}
+
 // Python's standard library provides a real controlling terminal on both target
 // operating systems. Closing the master delivers the OS terminal-hangup event;
 // the controller never sends SIGHUP itself and never uses a paid model endpoint.
@@ -404,6 +471,10 @@ try:
                 if not data:
                     break
                 output.extend(data)
+                marker = os.environ.get("MELDRA_TEST_TUI_READY")
+                if marker and b"\x1b[?1049h" in output:
+                    with open(marker, "w") as ready:
+                        ready.write("rendered")
             except OSError:
                 break
     os.close(master)

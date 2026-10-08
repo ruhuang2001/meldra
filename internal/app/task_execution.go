@@ -20,21 +20,22 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
-	requestSequence   int64
-	paused            bool
-	paths             ConfigPaths
-	workspace         *Workspace
-	session           *Session
-	config            task.Config
-	db                *taskstore.Store
-	lease             *taskstore.Lease
-	run               task.Run
-	current           *task.ToolCall
-	pendingApprovalID string
-	err               error
-	resume            bool
-	context           string
-	replayScope       string
+	requestSequence     int64
+	paused              bool
+	paths               ConfigPaths
+	workspace           *Workspace
+	session             *Session
+	config              task.Config
+	db                  *taskstore.Store
+	lease               *taskstore.Lease
+	run                 task.Run
+	current             *task.ToolCall
+	pendingApprovalID   string
+	err                 error
+	resume              bool
+	context             string
+	replayScope         string
+	legacyRequestReplay bool
 }
 
 type executionContextKey struct{}
@@ -58,6 +59,7 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.paused = false
 	e.current = nil
 	e.context = ""
+	e.legacyRequestReplay = false
 	started := false
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
@@ -420,6 +422,9 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	if record.LegacyHistoryMissing {
 		b.WriteString("Imported legacy session: prior tool history was not recorded. Inspect the workspace before acting.\n")
 	}
+	if e.legacyRequestReplay {
+		b.WriteString("The snapshot had no request checkpoint. Durable requests were replayed in sequence without guessing from wall-clock timestamps; some previously saved requests may appear twice.\n")
+	}
 	// A bounded excerpt retains the most recent tool evidence; the full ledger
 	// remains queryable through the task CLI without sending it all to the model.
 	for _, call := range calls {
@@ -433,7 +438,6 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 // its conversation snapshot. Persist replayed messages before starting another
 // Run, so repeated crashes cannot replace a lost request with "continue".
 func (e *taskExecution) restoreRequests(ctx context.Context) error {
-	snapshotTime := e.session.UpdatedAt
 	upgrading := e.session.LastRequestSequence == 0 && len(e.session.Messages) > 0
 	for {
 		events, err := e.db.RequestEvents(ctx, e.session.ID, e.session.LastRequestSequence, 100)
@@ -450,13 +454,12 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			if err := json.Unmarshal(event.Data, &input); err != nil {
 				return fmt.Errorf("decode recorded request: %w", err)
 			}
-			// Older snapshots have no explicit cursor. Requests predating that saved
-			// snapshot are already represented by its bounded conversation history.
-			if !upgrading || event.Time.After(snapshotTime) {
-				e.session.appendMessage("user", input.Request)
-				e.session.PreviousResponseID = ""
-				e.session.resumed = true
-			}
+			// Without a checkpoint, neither timestamps nor repeated message text
+			// prove which requests were saved. Replay once rather than drop intent.
+			e.legacyRequestReplay = upgrading
+			e.session.appendMessage("user", input.Request)
+			e.session.PreviousResponseID = ""
+			e.session.resumed = true
 			e.session.LastRequestSequence = event.Sequence
 		}
 		if err := newTaskSessionStore(e.paths).Save(e.session); err != nil {

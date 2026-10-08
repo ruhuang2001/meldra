@@ -400,7 +400,12 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 			}
 		case "response.completed", "response.failed", "response.incomplete":
 			response := event.Response
-			response.Output = mergeCompletedStreamOutput(response.Output, completedOutput)
+			merged, err := mergeCompletedStreamOutput(response.Output, completedOutput)
+			if err != nil {
+				result.StreamedText = text.String()
+				return result, err
+			}
+			response.Output = merged
 			// Some compatible gateways only deliver assistant text as stream events.
 			// Preserve it in the response used for custom-provider replay as well.
 			if OutputText(&response) == "" && text.Len() > 0 {
@@ -440,12 +445,12 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 // mergeCompletedStreamOutput fills in output items which some compatible
 // gateways omit from their terminal response. A matching streamed item is more
 // complete than its terminal counterpart, while terminal-only items are kept.
-func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion) []responses.ResponseOutputItemUnion {
+func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion) ([]responses.ResponseOutputItemUnion, error) {
 	if len(completed) == 0 {
-		return output
+		return output, nil
 	}
 	if len(output) == 0 {
-		return append([]responses.ResponseOutputItemUnion(nil), completed...)
+		return append([]responses.ResponseOutputItemUnion(nil), completed...), nil
 	}
 
 	merged := append([]responses.ResponseOutputItemUnion(nil), output...)
@@ -463,6 +468,17 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 			}
 		}
 		if match >= 0 {
+			if merged[match].Type != completedItem.Type {
+				return nil, errors.New("conflicting response item types")
+			}
+			if completedItem.Type == "function_call" {
+				item, err := mergeFunctionCall(merged[match], completedItem)
+				if err != nil {
+					return nil, err
+				}
+				merged[match] = item
+				continue
+			}
 			merged[match] = completedItem
 			continue
 		}
@@ -473,7 +489,50 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 		}
 		merged = append(merged, completedItem)
 	}
-	return merged
+	return merged, nil
+}
+
+// Identity must agree when present. Missing streamed fields never erase valid
+// terminal fields; re-decode the combined JSON so SDK union accessors agree.
+func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (responses.ResponseOutputItemUnion, error) {
+	for _, pair := range [][2]string{{terminal.ID, streamed.ID}, {terminal.CallID, streamed.CallID}, {terminal.Name, streamed.Name}, {terminal.Arguments.OfString, streamed.Arguments.OfString}} {
+		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
+			return terminal, errors.New("conflicting streamed and terminal tool call")
+		}
+	}
+	fields := func(item responses.ResponseOutputItemUnion) (map[string]json.RawMessage, error) {
+		raw := []byte(item.RawJSON())
+		if len(raw) == 0 {
+			var err error
+			raw, err = json.Marshal(item)
+			if err != nil {
+				return nil, err
+			}
+		}
+		var result map[string]json.RawMessage
+		err := json.Unmarshal(raw, &result)
+		return result, err
+	}
+	left, err := fields(terminal)
+	if err != nil {
+		return terminal, err
+	}
+	right, err := fields(streamed)
+	if err != nil {
+		return terminal, err
+	}
+	for key, value := range left {
+		if old := right[key]; len(old) == 0 || string(old) == `""` || string(old) == "null" {
+			right[key] = value
+		}
+	}
+	raw, err := json.Marshal(right)
+	if err != nil {
+		return terminal, err
+	}
+	var merged responses.ResponseOutputItemUnion
+	err = json.Unmarshal(raw, &merged)
+	return merged, err
 }
 
 // fallbackFromUnsupportedStream only retries compatible providers before text

@@ -140,6 +140,9 @@ when necessary; deleting only the WAL while a database is live is unsafe.
 `PRAGMA user_version` is checked before migration or enabling WAL. Schema 0
 (an empty pre-ledger database) migrates transactionally to schema 1; repeated
 opens leave the schema unchanged. Versions newer than this binary are rejected.
+The database page limit is applied before schema or index writes. Each rebuildable
+index is attempted in its own transaction; an index that cannot fit is deferred
+on SQLITE_FULL so existing records remain readable and the store can reopen.
 Corrupt JSON records and digest mismatches are reported, not silently repaired.
 
 Legacy JSON sessions are validated by the app and imported transactionally by
