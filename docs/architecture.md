@@ -159,9 +159,11 @@ recovery, and inspection says so.
 `task resume ID` reacquires ownership and marks abandoned attempts interrupted.
 Previously planned operations are cancelled; operations that had started but
 lack a saved result become unknown. Supported file operations are reconciled
-against all recorded hashes, existence and modes. Complete postimages confirm a
-completed change; complete preimages indicate no net change; mixed states or user
-edits remain unresolved. This reconciliation does not overwrite current files.
+against recorded hashes, existence, modes and auxiliary directory states.
+Complete postimages confirm a completed change; complete preimages indicate no
+net change. Residual write-temporary files, mixed states, external edits and
+older evidence without auxiliary metadata remain unresolved. Recovery never
+deletes unowned temporary files or overwrites current workspace files.
 
 Unknown external commands require inspection and an explicit
 `task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT`. Resolution
@@ -245,8 +247,10 @@ Task snapshots include an optional `last_request_sequence` watermark. Explicit
 resume pages durable `turn.started` requests after that watermark and saves the
 repaired snapshot before creating the next Run. This preserves user changes of
 intent across the event/snapshot crash gap without duplicating saved requests.
-Older task snapshots without a watermark use their saved timestamp to skip
-already represented requests on first upgrade. Cancelling an idle legacy resume
+Older task snapshots without a watermark replay all durable requests once in
+sequence, then save a watermark. Previously saved requests may appear twice on
+that first upgrade; a recovery note explains this. Wall-clock timestamps and
+repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
 See the [upgrade and downgrade guide](../README.md#upgrade-and-downgrade) for

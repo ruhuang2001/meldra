@@ -1971,8 +1971,9 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	combined := io.MultiWriter(&b, &log)
 	cmd.Stdout = combined
 	cmd.Stderr = combined
-	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
-	e := runCommandProcess(ctx, cmd)
+	e := runCommandProcess(ctx, cmd, func() {
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
+	})
 	status := 0
 	if e != nil {
 		if ee, ok := errors.AsType[*exec.ExitError](e); ok {
@@ -1996,7 +1997,11 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		o.Result.Truncated = o.Result.Truncated || b.truncated
 		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
 		if ctx.Err() != nil {
-			o.Result.Status = tool.Unknown
+			if o.Started {
+				o.Result.Status = tool.Unknown
+			} else {
+				o.Result.Status = tool.Cancelled
+			}
 		} else if status != 0 {
 			o.Result.Status = tool.Failed
 		}

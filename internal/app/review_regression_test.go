@@ -112,6 +112,9 @@ func TestNarrowHeaderKeepsCursorOnComposer(t *testing.T) {
 	if view.Cursor == nil {
 		t.Fatal("missing focused cursor")
 	}
+	if view.Cursor.Y < tuiHeaderHeight+m.viewport.Height() {
+		t.Fatalf("cursor above composer: %+v", view.Cursor)
+	}
 }
 
 func TestTaskTextOutputFailureIsReturned(t *testing.T) {

@@ -62,6 +62,7 @@ func runTasksCommand(ctx context.Context, args []string, out io.Writer) error {
 }
 
 func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) (err error) {
+	chatOutput := out
 	checked := &taskOutput{Writer: out}
 	out = checked
 	defer func() { err = errors.Join(err, checked.err) }()
@@ -185,7 +186,7 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		if options.Prompt == "" {
 			options.Prompt = "Continue the original task from its recorded execution state. Inspect any unresolved work before acting."
 		}
-		return runChat(ctx, in, out, options)
+		return runChat(ctx, in, chatOutput, options)
 	case "resolve":
 		if len(args) != 7 || args[3] != "--outcome" || args[5] != "--reason" || strings.TrimSpace(args[6]) == "" {
 			return fmt.Errorf("usage: meldra task resolve TASK_ID CALL_ID --outcome succeeded|failed --reason TEXT")
@@ -269,12 +270,18 @@ func loadSessionForResume(paths ConfigPaths, id string) (*Session, error) {
 	}
 	db, openErr := taskStoreForRead(paths)
 	if openErr != nil {
-		return nil, err
+		if errors.Is(openErr, os.ErrNotExist) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("reconstruct session: open task store: %w", openErr)
 	}
 	defer db.Close()
 	record, lookupErr := db.GetTask(context.Background(), id)
 	if lookupErr != nil {
-		return nil, err
+		if errors.Is(lookupErr, task.ErrNotFound) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("reconstruct session: read task: %w", lookupErr)
 	}
 	return &Session{ID: record.SessionID, Workspace: record.Workspace, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt, resumed: true, taskSnapshot: true}, nil
 }

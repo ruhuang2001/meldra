@@ -246,6 +246,12 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		requestedCalls := countToolCalls(response.Output)
 		if a.customProvider && requestedCalls > 0 && response.ID == "" {
+			if result.StreamedTextShown {
+				a.finishAssistantStream()
+			}
+			if _, saveErr := a.persistPartialStream(assistantText); saveErr != nil {
+				return saveErr
+			}
 			return fmt.Errorf("custom-provider tool response requires a stable response ID")
 		}
 		if requestedCalls == 0 && assistantText == "" {
