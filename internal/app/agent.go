@@ -101,6 +101,9 @@ func (a *Agent) Run(ctx context.Context) error {
 			}
 			break
 		}
+		if strings.TrimSpace(userInput) == "" {
+			continue
+		}
 		if ctx.Err() != nil {
 			return a.handleInterruption(false)
 		}
@@ -136,6 +139,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}()
 	if ctx.Err() != nil {
 		return a.handleInterruption(false)
+	}
+	if a.session != nil && a.store == nil {
+		return errors.New("session requires a persistence store")
 	}
 	if a.registry == nil {
 		registry, err := tool.New(a.tools)
@@ -248,6 +254,8 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if a.customProvider && requestedCalls > 0 && response.ID == "" {
 			if result.StreamedTextShown {
 				a.finishAssistantStream()
+			} else if assistantText != "" {
+				a.emitAssistantMessage(assistantText)
 			}
 			if _, saveErr := a.persistPartialStream(assistantText); saveErr != nil {
 				return saveErr

@@ -217,8 +217,10 @@ and a log of up to 16 MiB, which is persisted as an artifact. Log output beyond
 that bound is discarded with a trailing truncation marker. Patch/edit and other
 tool-result artifacts retain their already bounded text. Database, WAL/SHM, snapshots, locks and temporary
 files are separate, so the database page cap is not a hard cap on the whole data
-directory. Stale temporary artifact files are removed under the database write
-transaction; committed history and artifacts are not automatically pruned.
+directory. Stale temporary artifacts are removed under the database write
+transaction. Failed writes attempt to remove their new, unreferenced artifact;
+when capacity is needed, digest files with neither a committed save event nor a
+tool-result reference are reclaimed. Committed artifacts are not pruned.
 Artifact quota exhaustion retains the bounded tool result with `truncated=true`.
 Other artifact failures stop execution after attempting to persist the known
 tool outcome; database failures still stop recording/execution. Existing WAL
@@ -249,7 +251,8 @@ repaired snapshot before creating the next Run. This preserves user changes of
 intent across the event/snapshot crash gap without duplicating saved requests.
 Older task snapshots without a watermark replay all durable requests once in
 sequence, then save a watermark. Previously saved requests may appear twice on
-that first upgrade; a recovery note explains this. Wall-clock timestamps and
+that first upgrade; a flag stored with the snapshot keeps the recovery note
+available after another interruption. Wall-clock timestamps and
 repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 

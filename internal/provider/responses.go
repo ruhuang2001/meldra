@@ -8,7 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
+	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -343,6 +346,20 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 
 	var result wireResult
 	var text strings.Builder
+	// Done events describe one content part, not the entire response. Keep
+	// those boundaries so completing a prefix cannot erase other text parts.
+	parts := make(map[[2]int64]*strings.Builder)
+	var partOrder [][2]int64
+	partFor := func(event responses.ResponseStreamEventUnion) *strings.Builder {
+		key := [2]int64{event.OutputIndex, event.ContentIndex}
+		if part := parts[key]; part != nil {
+			return part
+		}
+		part := new(strings.Builder)
+		parts[key] = part
+		partOrder = append(partOrder, key)
+		return part
+	}
 	var completedOutput []responses.ResponseOutputItemUnion
 	responseLimit := a.providerResponseLimit()
 	for stream.Next() {
@@ -362,6 +379,7 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 					return result, &ResponseLimitError{Limit: responseLimit}
 				}
 				result.ReceivedTextDelta = true
+				partFor(event).WriteString(event.Delta)
 				text.WriteString(event.Delta)
 				if delta := a.filterText(event.Delta); delta != "" {
 					firstDelta := !result.StreamedTextShown
@@ -374,21 +392,32 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 				a.status("Preparing " + event.Name)
 			}
 		case "response.output_text.done":
-			// Well-formed streams send deltas before this event. Some compatible
-			// gateways only send the final text event, so use it when no delta has
-			// been received rather than completing with an empty reply.
-			if text.Len() == 0 && event.Text != "" {
-				// This is still a streamed text event even though the gateway did
-				// not emit individual deltas.
-				if exceedsProviderResponseLimit(text.Len(), len(event.Text), responseLimit) {
+			// A compatible gateway may omit some deltas. Reconcile the complete
+			// content part and emit only its missing suffix when possible.
+			if event.Text != "" {
+				part := partFor(event)
+				previous := part.String()
+				if exceedsProviderResponseLimit(text.Len()-len(previous), len(event.Text), responseLimit) {
 					result.StreamedText = text.String()
 					return result, &ResponseLimitError{Limit: responseLimit}
 				}
+				part.Reset()
+				part.WriteString(event.Text)
+				text.Reset()
+				for _, key := range partOrder {
+					text.WriteString(parts[key].String())
+				}
 				result.ReceivedTextDelta = true
-				text.WriteString(event.Text)
-				if finalText := a.filterText(event.Text); finalText != "" {
+				finalText := event.Text
+				first := !result.StreamedTextShown
+				if strings.HasPrefix(event.Text, previous) {
+					finalText = strings.TrimPrefix(event.Text, previous)
+				} else if previous != "" && result.StreamedTextShown {
+					finalText = "\n" + event.Text
+				}
+				if finalText = a.filterText(finalText); finalText != "" {
 					result.StreamedTextShown = true
-					a.text(finalText, true)
+					a.text(finalText, first)
 				}
 			}
 		case "response.output_item.done":
@@ -495,7 +524,7 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 // Identity must agree when present. Missing streamed fields never erase valid
 // terminal fields; re-decode the combined JSON so SDK union accessors agree.
 func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (responses.ResponseOutputItemUnion, error) {
-	for _, pair := range [][2]string{{terminal.ID, streamed.ID}, {terminal.CallID, streamed.CallID}, {terminal.Name, streamed.Name}, {terminal.Arguments.OfString, streamed.Arguments.OfString}} {
+	for _, pair := range [][2]string{{terminal.ID, streamed.ID}, {terminal.CallID, streamed.CallID}, {terminal.Name, streamed.Name}} {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
 			return terminal, errors.New("conflicting streamed and terminal tool call")
 		}
@@ -521,6 +550,16 @@ func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (re
 	if err != nil {
 		return terminal, err
 	}
+	terminalArgs, terminalValid := normalizedArguments(terminal.Arguments.OfString)
+	streamedArgs, streamedValid := normalizedArguments(streamed.Arguments.OfString)
+	if terminalValid && streamedValid && !reflect.DeepEqual(terminalArgs, streamedArgs) {
+		return terminal, errors.New("conflicting streamed and terminal tool arguments")
+	}
+	// The terminal value is authoritative when complete. A progressive gateway
+	// may have emitted an incomplete prefix; never replay it over valid JSON.
+	if terminalValid {
+		right["arguments"] = left["arguments"]
+	}
 	for key, value := range left {
 		if old := right[key]; len(old) == 0 || string(old) == `""` || string(old) == "null" {
 			right[key] = value
@@ -533,6 +572,50 @@ func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (re
 	var merged responses.ResponseOutputItemUnion
 	err = json.Unmarshal(raw, &merged)
 	return merged, err
+}
+
+type exactJSONNumber struct{ Value string }
+
+func normalizedArguments(raw string) (any, bool) {
+	if !json.Valid([]byte(raw)) {
+		return nil, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	return normalizeJSONNumbers(value), true
+}
+
+func normalizeJSONNumbers(value any) any {
+	switch v := value.(type) {
+	case json.Number:
+		if len(v) > 4096 {
+			return v
+		}
+		if index := strings.IndexAny(string(v), "eE"); index >= 0 {
+			exponent, err := strconv.ParseInt(string(v)[index+1:], 10, 32)
+			if err != nil || exponent < -4096 || exponent > 4096 {
+				return v
+			}
+		}
+		// Preserve integers beyond float64 precision, including nested values.
+		if number, ok := new(big.Rat).SetString(string(v)); ok {
+			return exactJSONNumber{number.RatString()}
+		}
+		return v
+	case []any:
+		for i := range v {
+			v[i] = normalizeJSONNumbers(v[i])
+		}
+	case map[string]any:
+		for key, item := range v {
+			v[key] = normalizeJSONNumbers(item)
+		}
+	}
+	return value
 }
 
 // fallbackFromUnsupportedStream only retries compatible providers before text
@@ -595,9 +678,6 @@ func exceedsProviderResponseLimit(current, additional int, limit int64) bool {
 // limitProviderResponse bounds the raw response body before the SDK
 // parses SSE. This covers output items and tool arguments in addition to the
 // assistant text accumulated by Agent.runInference.
-func limitProviderResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	return limitProviderResponseWithLimit(defaultProviderResponseBytes)(request, next)
-}
 
 func limitProviderResponseWithLimit(limit int64) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -648,9 +728,6 @@ func (r *providerResponseLimitReadCloser) Read(buffer []byte) (int, error) {
 // provider accepts stream=true but replies with a complete Responses JSON body.
 // It turns that body into one terminal SSE event instead of issuing the prompt a
 // second time through the non-streaming API.
-func normalizeNonSSEStreamingResponse(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	return normalizeNonSSEStreamingResponseWithLimit(defaultProviderResponseBytes)(request, next)
-}
 
 func normalizeNonSSEStreamingResponseWithLimit(limit int64) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -736,9 +813,6 @@ func readProviderResponse(body io.Reader, limit int64) ([]byte, error) {
 // responseBodyStartsWithJSON returns a reader which still includes every byte
 // consumed while checking the prefix. JSON permits leading whitespace, while
 // SSE normally begins with "event:", "data:", or a comment.
-func responseBodyStartsWithJSON(body io.ReadCloser) (bool, io.ReadCloser, error) {
-	return responseBodyStartsWithJSONWithLimit(body, defaultProviderResponsePrefixBytes)
-}
 
 func responseBodyStartsWithJSONWithLimit(body io.ReadCloser, limit int64) (bool, io.ReadCloser, error) {
 	reader := bufio.NewReader(body)

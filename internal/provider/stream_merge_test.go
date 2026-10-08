@@ -2,8 +2,9 @@ package provider
 
 import (
 	"encoding/json"
-	"github.com/openai/openai-go/v3/responses"
 	"testing"
+
+	"github.com/openai/openai-go/v3/responses"
 )
 
 func TestMergeKeepsCompleteToolIdentity(t *testing.T) {
@@ -52,6 +53,39 @@ func TestMergeKeepsCompleteToolIdentity(t *testing.T) {
 	} {
 		if _, err := mergeCompletedStreamOutput([]responses.ResponseOutputItemUnion{full}, []responses.ResponseOutputItemUnion{decode(raw)}); err == nil {
 			t.Fatal("conflicting completed call accepted")
+		}
+	}
+}
+
+func TestMergeToolArgumentsSemantically(t *testing.T) {
+	item := func(args string) responses.ResponseOutputItemUnion {
+		encoded, err := json.Marshal(map[string]any{"type": "function_call", "id": "fc", "call_id": "call", "name": "edit_file", "arguments": args})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value responses.ResponseOutputItemUnion
+		if err := json.Unmarshal(encoded, &value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	for _, test := range []struct {
+		terminal, streamed string
+		conflict           bool
+	}{
+		{`{"a":1,"b":[true,null]}`, `{ "b": [true, null], "a":1.0 }`, false},
+		{`{"a":1}`, `{"a":`, false},
+		{`{"a":`, `{"a":1}`, false},
+		{`{"a":9007199254740992}`, `{"a":9007199254740993}`, true},
+		{`{"a":1e100000000}`, `{"a":1e100000000}`, false},
+		{`{"a":1}`, `{"a":2}`, true},
+	} {
+		merged, err := mergeFunctionCall(item(test.terminal), item(test.streamed))
+		if (err != nil) != test.conflict {
+			t.Fatalf("merge %s / %s: %v", test.terminal, test.streamed, err)
+		}
+		if err == nil && json.Valid([]byte(test.terminal)) && merged.AsFunctionCall().Arguments != test.terminal {
+			t.Fatal("valid terminal arguments not authoritative")
 		}
 	}
 }

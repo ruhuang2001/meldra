@@ -22,6 +22,14 @@ func TestStorageLimitsRejectBeforeMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	counts := make(map[string]int)
+	for _, table := range []string{"tasks", "runs", "tool_calls", "approvals"} {
+		var count int
+		if err := f.s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		counts[table] = count
+	}
 	for name, op := range map[string]func() error{
 		"goal": func() error {
 			_, err := f.s.EnsureTask(t.Context(), task.Task{ID: "large", Goal: strings.Repeat("x", maxTextBytes+1), Workspace: f.workspace})
@@ -61,6 +69,12 @@ func TestStorageLimitsRejectBeforeMutation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if err := op(); !errors.Is(err, task.ErrLimit) {
 				t.Fatalf("limit not enforced: %v", err)
+			}
+			for table, want := range counts {
+				var count int
+				if err := f.s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != want {
+					t.Fatalf("rejected operation changed %s count: %d want %d err=%v", table, count, want, err)
+				}
 			}
 		})
 	}

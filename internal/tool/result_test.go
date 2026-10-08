@@ -39,6 +39,26 @@ func TestInvokeReportsSemanticOutcomeWithoutParsingText(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", unknown, err)
 	}
 }
+
+func TestSuccessfulObservationCannotHideReturnedError(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		r, err := New([]Definition{{Name: "ambiguous", Function: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Observe(ctx, func(o *Observation) { o.Started = started; o.Result.Status = Succeeded })
+			return "partial", errors.New("later failure")
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := r.Invoke(t.Context(), "ambiguous", nil)
+		want := Failed
+		if started {
+			want = Unknown
+		}
+		if err == nil || result.Status != want {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+	}
+}
 func TestInvokePropagatesPersistenceFailureAndCancellation(t *testing.T) {
 	failure := errors.New("storage failure")
 	registry, err := New([]Definition{{Name: "test", Function: func(ctx context.Context, _ json.RawMessage) (string, error) {

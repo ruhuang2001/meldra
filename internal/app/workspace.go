@@ -1971,7 +1971,9 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	combined := io.MultiWriter(&b, &log)
 	cmd.Stdout = combined
 	cmd.Stderr = combined
+	processStarted := false
 	e := runCommandProcess(ctx, cmd, func() {
+		processStarted = true
 		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	})
 	status := 0
@@ -1981,6 +1983,9 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		} else if ctx.Err() != nil {
 			status = -1
 		} else {
+			if !processStarted {
+				tool.Observe(w.ctx, func(o *tool.Observation) { o.Result.Status = tool.Failed })
+			}
 			return "", e
 		}
 	}
@@ -1997,7 +2002,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		o.Result.Truncated = o.Result.Truncated || b.truncated
 		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
 		if ctx.Err() != nil {
-			if o.Started {
+			if processStarted {
 				o.Result.Status = tool.Unknown
 			} else {
 				o.Result.Status = tool.Cancelled
@@ -2165,10 +2170,23 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 
 	var output strings.Builder
 	for index, command := range commands {
+		// Completed earlier commands do not make a later unstarted process
+		// uncertain. Keep accumulated exit codes and output, reset the boundary.
+		previousFailure := false
+		tool.Observe(w.ctx, func(o *tool.Observation) {
+			previousFailure = o.Result.Status == tool.Failed
+			o.Started = false
+			o.Result.Status = ""
+		})
 		result, err := w.executeWithApproval(command.command, command.args, 120, false)
 		if err != nil {
 			return "", err
 		}
+		tool.Observe(w.ctx, func(o *tool.Observation) {
+			if previousFailure && o.Result.Status == "" {
+				o.Result.Status = tool.Failed
+			}
+		})
 		if index > 0 {
 			output.WriteString("\n\n")
 		}

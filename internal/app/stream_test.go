@@ -176,6 +176,46 @@ func TestAgentStreamsDeltasToTerminalWithoutRepeatingText(t *testing.T) {
 	}
 }
 
+func TestAgentUsesCompleteOutputTextDoneAfterPartialDelta(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
+	stream := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{
+		{Type: "response.output_text.delta", Delta: "partial"},
+		{Type: "response.output_text.done", Text: "partial complete"},
+		{Type: "response.completed", Response: responses.Response{ID: "complete", Status: responses.ResponseStatusCompleted}},
+	}}
+	var output bytes.Buffer
+	agent := Agent{getUserMessage: userMessages("reply"), output: &output, backend: &provider.Client{CreateStream: func(context.Context, responses.ResponseNewParams) provider.Stream { return stream }}}
+	if err := agent.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "partial complete") || strings.Count(output.String(), "partial complete") != 1 {
+		t.Fatalf("output=%q", output.String())
+	}
+}
+
+func TestCompletedTextReconcilesEachPartWithinBudget(t *testing.T) {
+	stream := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{
+		{Type: "response.output_text.delta", Delta: "Al", OutputIndex: 0, ContentIndex: 0},
+		{Type: "response.output_text.done", Text: "Alpha", OutputIndex: 0, ContentIndex: 0},
+		{Type: "response.output_text.delta", Delta: "Be", OutputIndex: 0, ContentIndex: 1},
+		{Type: "response.output_text.done", Text: "Beta", OutputIndex: 0, ContentIndex: 1},
+		{Type: "response.output_text.done", Text: "Beta", OutputIndex: 0, ContentIndex: 1},
+		{Type: "response.completed", Response: responses.Response{ID: "parts", Status: responses.ResponseStatusCompleted}},
+	}}
+	client := &provider.Client{CreateStream: func(context.Context, responses.ResponseNewParams) provider.Stream { return stream }}
+	var displayed strings.Builder
+	result, err := client.Infer(t.Context(), provider.Request{Input: provider.UserInput("reply")}, provider.Options{MaxResponseBytes: 9}, provider.Observer{Text: func(text string, _ bool) { displayed.WriteString(text) }})
+	if err != nil || result.StreamedText != "AlphaBeta" || result.Response.OutputText() != "AlphaBeta" || displayed.String() != "AlphaBeta" {
+		t.Fatalf("result=%+v shown=%q err=%v", result, displayed.String(), err)
+	}
+	tooLarge := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{{Type: "response.output_text.delta", Delta: "a"}, {Type: "response.output_text.done", Text: "too long"}}}
+	client.CreateStream = func(context.Context, responses.ResponseNewParams) provider.Stream { return tooLarge }
+	_, err = client.Infer(t.Context(), provider.Request{Input: provider.UserInput("reply")}, provider.Options{MaxResponseBytes: 3}, provider.Observer{})
+	if _, ok := errors.AsType[*provider.ResponseLimitError](err); !ok {
+		t.Fatalf("done text exceeded budget without error: %v", err)
+	}
+}
+
 func TestAgentStreamsDeltasToUIEvents(t *testing.T) {
 	t.Setenv("OPENAI_BASE_URL", defaultBaseURL)
 	stream := &scriptedResponseStream{events: []responses.ResponseStreamEventUnion{

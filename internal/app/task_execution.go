@@ -20,22 +20,21 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
-	requestSequence     int64
-	paused              bool
-	paths               ConfigPaths
-	workspace           *Workspace
-	session             *Session
-	config              task.Config
-	db                  *taskstore.Store
-	lease               *taskstore.Lease
-	run                 task.Run
-	current             *task.ToolCall
-	pendingApprovalID   string
-	err                 error
-	resume              bool
-	context             string
-	replayScope         string
-	legacyRequestReplay bool
+	requestSequence   int64
+	paused            bool
+	paths             ConfigPaths
+	workspace         *Workspace
+	session           *Session
+	config            task.Config
+	db                *taskstore.Store
+	lease             *taskstore.Lease
+	run               task.Run
+	current           *task.ToolCall
+	pendingApprovalID string
+	err               error
+	resume            bool
+	context           string
+	replayScope       string
 }
 
 type executionContextKey struct{}
@@ -59,7 +58,6 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.paused = false
 	e.current = nil
 	e.context = ""
-	e.legacyRequestReplay = false
 	started := false
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
@@ -422,7 +420,7 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	if record.LegacyHistoryMissing {
 		b.WriteString("Imported legacy session: prior tool history was not recorded. Inspect the workspace before acting.\n")
 	}
-	if e.legacyRequestReplay {
+	if e.session.RequestsReplayedWithoutCheckpoint {
 		b.WriteString("The snapshot had no request checkpoint. Durable requests were replayed in sequence without guessing from wall-clock timestamps; some previously saved requests may appear twice.\n")
 	}
 	// A bounded excerpt retains the most recent tool evidence; the full ledger
@@ -456,7 +454,7 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			}
 			// Without a checkpoint, neither timestamps nor repeated message text
 			// prove which requests were saved. Replay once rather than drop intent.
-			e.legacyRequestReplay = upgrading
+			e.session.RequestsReplayedWithoutCheckpoint = e.session.RequestsReplayedWithoutCheckpoint || upgrading
 			e.session.appendMessage("user", input.Request)
 			e.session.PreviousResponseID = ""
 			e.session.resumed = true

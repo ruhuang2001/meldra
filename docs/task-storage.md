@@ -133,8 +133,11 @@ execution. Stale `.pending-*` artifacts are reclaimed while holding the database
 write transaction, excluding active writers. Artifact writes use a private
 temporary file, file sync, rename and directory sync. References verify both
 length and SHA-256 when read. A crash can leave an unreferenced artifact;
-it does not turn an incomplete tool into success. No automatic retention job
-deletes execution history in 0.2.0. Back up and archive the entire closed store
+it does not turn an incomplete tool into success. Failed writes attempt to
+remove newly promoted files under another write transaction, after checking
+committed save events and tool references. Capacity-driven cleanup reclaims
+unreferenced digest files left by process death. No retention job deletes
+committed execution history. Back up and archive the entire closed store
 when necessary; deleting only the WAL while a database is live is unsafe.
 
 `PRAGMA user_version` is checked before migration or enabling WAL. Schema 0
