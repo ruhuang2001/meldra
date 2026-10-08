@@ -130,8 +130,11 @@ It is not interchangeable with cancellation or failure.
 Store writes use SQLite transactions. Partial indexes reject multiple active
 runs for the same task. Advisory file locks cover the task and canonical writable
 workspace for the whole foreground turn, across processes using the same user
-cache directory. Separate `MELDRA_HOME` directories still contend on workspace
-ownership in that cache. Locks release when their process exits; their files are
+home. Separate `MELDRA_HOME` directories still contend on workspace ownership.
+Primary locks live in `~/.meldra-locks`; legacy cache locks are also held to
+exclude older builds. Cache eviction cannot bypass the primary locks.
+Lock file identity is rechecked before recording side effects. Locks release
+when their process exits; their files are
 not deleted, because unlinking a held lock would allow a different inode to be
 locked. Editors and unrelated tools do not participate in this protocol.
 
@@ -165,7 +168,10 @@ Unknown external commands require inspection and an explicit
 records evidence without invoking a tool or changing an old Run's outcome.
 Unresolved calls prevent a new run. Re-delivery of the same provider call ID and
 parameter hash uses its recorded result; that check is not a promise to recognize
-arbitrarily reworded commands with new IDs.
+arbitrarily reworded commands with new IDs. Custom-provider replay additionally
+includes provider/model and response identity, so a call ID reused by a new
+response is a new operation. These providers must supply stable response IDs;
+missing or duplicate tool call IDs are rejected before execution.
 
 Recovery context includes the original goal, missing-history markers and a
 bounded excerpt of recent tool results, alongside conversation messages and
@@ -184,9 +190,13 @@ tasks/sessions/                 current bounded conversation snapshots
 tasks/artifacts/<sha256>        retained output referenced by task records
 ```
 
-Execution lock files live in `os.UserCacheDir()/meldra/locks`, not inside the task
-database. The store requires private real directories/files and rejects unsafe
-symlinks. Unknown newer database schemas are rejected instead of downgraded.
+Execution locks live in `~/.meldra-locks` and the legacy
+`os.UserCacheDir()/meldra/locks`, outside the task database. Stop all old builds
+before upgrading; the legacy compatibility locks cannot protect an old binary
+whose cache locks have already been deleted. Do not delete either lock namespace
+while any Meldra process is running. Private storage roots and descendants reject
+symlinks; external ancestors such as a system-provided home alias are resolved.
+Unknown newer database schemas are rejected instead of downgraded.
 
 | Bound | Current limit |
 | --- | --- |
@@ -205,8 +215,12 @@ and a log of up to 16 MiB, which is persisted as an artifact. Log output beyond
 that bound is discarded with a trailing truncation marker. Patch/edit and other
 tool-result artifacts retain their already bounded text. Database, WAL/SHM, snapshots, locks and temporary
 files are separate, so the database page cap is not a hard cap on the whole data
-directory. There is no automatic pruning or task-deletion command. Limit errors
-stop recording/execution rather than silently discarding history. Back up stopped
+directory. Stale temporary artifact files are removed under the database write
+transaction; committed history and artifacts are not automatically pruned.
+Artifact quota exhaustion retains the bounded tool result with `truncated=true`.
+Other artifact failures stop execution after attempting to persist the known
+tool outcome; database failures still stop recording/execution. Existing WAL
+files may exceed the page cap and are recovered by SQLite. Back up stopped
 stores before maintenance; copying only a live `tasks.db` is unsafe.
 
 ## CLI inspection and legacy compatibility

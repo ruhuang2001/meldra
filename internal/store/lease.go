@@ -43,18 +43,32 @@ func (s *Store) Acquire(ctx context.Context, taskID, workspace string) (*Lease, 
 	if identity, err := directoryIdentity(s.dir); err != nil || identity != s.dirIdentity {
 		return nil, fmt.Errorf("%w: task storage directory changed", task.ErrLease)
 	}
-	if err := secureDir(s.lockDir); err != nil {
+	dirs, err := OwnershipDirectories()
+	if s.lockDir != "" {
+		dirs, err = []string{s.lockDir}, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	l := &Lease{store: s, taskID: taskID, workspace: canonical, workspaceIdentity: workspaceIdentity}
-	for _, key := range []string{"task:" + s.dirIdentity + ":" + taskID, "workspace:" + workspaceIdentity} {
-		path := filepath.Join(s.lockDir, Hash([]byte(key))+".lock")
-		f, err := lockFile(path)
-		if err != nil {
+	for _, dir := range dirs {
+		if err := secureDir(dir); err != nil {
 			_ = l.Close()
-			return nil, fmt.Errorf("acquire execution ownership: %w", err)
+			return nil, err
 		}
-		l.files = append(l.files, f)
+		for _, key := range []string{"task:" + s.dirIdentity + ":" + taskID, "workspace:" + workspaceIdentity} {
+			path := filepath.Join(dir, Hash([]byte(key))+".lock")
+			f, err := lockFile(path)
+			if err != nil {
+				_ = l.Close()
+				return nil, fmt.Errorf("acquire execution ownership: %w", err)
+			}
+			l.files = append(l.files, f)
+		}
+	}
+	if err := l.validateFiles(); err != nil {
+		_ = l.Close()
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		_ = l.Close()
@@ -90,6 +104,9 @@ func (s *Store) owned(ctx context.Context, l *Lease, taskID string, fn func(*sql
 	if l.closed || l.store != s || l.taskID != taskID {
 		return task.ErrLease
 	}
+	if err := l.validateFiles(); err != nil {
+		return err
+	}
 	if identity, err := directoryIdentity(s.dir); err != nil || identity != s.dirIdentity {
 		return fmt.Errorf("%w: task storage directory changed", task.ErrLease)
 	}
@@ -110,4 +127,43 @@ func (s *Store) owned(ctx context.Context, l *Lease, taskID string, fn func(*sql
 		}
 		return fn(tx)
 	})
+}
+
+// OwnershipDirectories is independent of MELDRA_HOME. Persistent locks survive
+// cache eviction; legacy cache locks still exclude older running builds.
+func OwnershipDirectories() ([]string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	home, err = filepath.EvalSymlinks(home)
+	if err != nil {
+		return nil, err
+	}
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := privateRoot(filepath.Join(cache, "meldra"))
+	if err != nil {
+		return nil, err
+	}
+	return []string{filepath.Join(home, ".meldra-locks"), filepath.Join(legacy, "locks")}, nil
+}
+
+func (l *Lease) validateFiles() error {
+	for _, f := range l.files {
+		held, err := f.Stat()
+		if err != nil {
+			return fmt.Errorf("%w: %v", task.ErrLease, err)
+		}
+		current, err := os.Lstat(f.Name())
+		if err != nil || !current.Mode().IsRegular() || !os.SameFile(held, current) {
+			return fmt.Errorf("%w: execution lock replaced", task.ErrLease)
+		}
+		if err := rejectSymlinkAncestors(f.Name()); err != nil {
+			return fmt.Errorf("%w: %v", task.ErrLease, err)
+		}
+	}
+	return nil
 }

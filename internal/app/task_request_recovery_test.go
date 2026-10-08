@@ -123,7 +123,9 @@ func TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint(t *testing.T) {
 	if err := agent.execution.begin(t.Context(), "newer request"); err != nil {
 		t.Fatal(err)
 	}
-	agent.execution.close()
+	if err := agent.execution.close(); err != nil {
+		t.Fatal(err)
+	}
 	loaded, err := loadSessionForResume(paths, agent.session.ID)
 	if err != nil {
 		t.Fatal(err)

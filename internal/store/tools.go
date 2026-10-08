@@ -31,7 +31,7 @@ func (s *Store) PlanTool(ctx context.Context, l *Lease, c task.ToolCall) (task.T
 	if !validID(c.ID) || !validID(c.TaskID) || !validID(c.RunID) || c.Name == "" {
 		return c, errors.New("tool call requires valid IDs and name")
 	}
-	if len(c.Name) > 256 || len(c.ProviderCallID) > 1024 {
+	if len(c.Name) > 256 || len(c.ProviderCallID) > 1024 || len(c.ReplayScope) > 128 {
 		return c, task.ErrLimit
 	}
 	if c.Effect != task.Read && c.Effect != task.Write && c.Effect != task.Command {
@@ -112,7 +112,7 @@ func validateResult(result task.Result) error {
 		return task.ErrLimit
 	}
 	for _, ref := range result.Artifacts {
-		if !validID(ref.ID) || len(ref.Name) > 256 || len(ref.SHA256) != 64 || ref.Size < 0 || ref.Size > MaxArtifactBytes {
+		if !validDigest(ref.ID) || ref.ID != ref.SHA256 || len(ref.Name) > 256 || ref.Size < 0 || ref.Size > MaxArtifactBytes {
 			return task.ErrLimit
 		}
 	}

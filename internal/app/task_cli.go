@@ -54,12 +54,17 @@ func runTasksCommand(ctx context.Context, args []string, out io.Writer) error {
 		return json.NewEncoder(out).Encode(tasks)
 	}
 	for _, record := range tasks {
-		fmt.Fprintf(out, "%s  %-18s %s\n", record.ID, record.Status, sanitizeTerminalText(record.Goal))
+		if _, err := fmt.Fprintf(out, "%s  %-18s %s\n", record.ID, record.Status, sanitizeTerminalText(record.Goal)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) error {
+func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Writer) (err error) {
+	checked := &taskOutput{Writer: out}
+	out = checked
+	defer func() { err = errors.Join(err, checked.err) }()
 	if len(args) < 2 {
 		return fmt.Errorf("usage: meldra task show|events|resume|resolve TASK_ID [options]")
 	}
@@ -194,10 +199,20 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			return err
 		}
 		defer lease.Close()
+		call, err := db.GetToolCall(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		if call.TaskID != id {
+			return fmt.Errorf("call belongs to another task")
+		}
+		if call.Status != task.ToolUnknown && call.Status != task.ToolRunning {
+			return task.ErrTransition
+		}
 		if err := db.RecoverInterrupted(ctx, lease, id); err != nil {
 			return err
 		}
-		call, err := db.GetToolCall(ctx, args[2])
+		call, err = db.GetToolCall(ctx, args[2])
 		if err != nil {
 			return err
 		}
@@ -215,6 +230,24 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	default:
 		return fmt.Errorf("unknown task command %q", action)
 	}
+}
+
+// Preserve output failures even on the human-readable inspection paths.
+type taskOutput struct {
+	io.Writer
+	err error
+}
+
+func (w *taskOutput) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return 0, w.err
+	}
+	n, err := w.Writer.Write(p)
+	if err == nil && n != len(p) {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
 }
 
 // A crash after task creation but before the first JSON snapshot must remain

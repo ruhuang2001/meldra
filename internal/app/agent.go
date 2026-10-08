@@ -245,6 +245,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			assistantText = result.StreamedText
 		}
 		requestedCalls := countToolCalls(response.Output)
+		if a.customProvider && requestedCalls > 0 && response.ID == "" {
+			return fmt.Errorf("custom-provider tool response requires a stable response ID")
+		}
 		if requestedCalls == 0 && assistantText == "" {
 			if result.StreamedTextShown {
 				a.finishAssistantStream()
@@ -286,7 +289,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			}
 			break
 		}
-		toolResults := a.executeToolCallsContext(ctx, response.Output)
+		toolResults := a.executeToolCallsContext(ctx, response.Output, response.ID)
 		if a.toolFailure != nil {
 			return a.toolFailure
 		}
@@ -415,7 +418,18 @@ func (a *Agent) executeToolCalls(output []provider.OutputItem) provider.Items {
 	return a.executeToolCallsContext(context.Background(), output)
 }
 
-func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.OutputItem) provider.Items {
+func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.OutputItem, responseIDs ...string) provider.Items {
+	if a.execution != nil {
+		a.execution.replayScope = ""
+		if a.customProvider {
+			identity := a.execution.run.ID
+			if len(responseIDs) > 0 && responseIDs[0] != "" {
+				identity = responseIDs[0]
+			}
+			a.execution.replayScope = digest([]byte(a.execution.config.Provider + "\x00" + a.modelName() + "\x00" + identity))
+		}
+	}
+
 	var results provider.Items
 	for _, item := range output {
 		if ctx.Err() != nil {

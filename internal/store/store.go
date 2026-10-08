@@ -45,10 +45,14 @@ type Store struct {
 // Open creates a private local store and migrates older schemas transactionally.
 // It does not recover or execute any previously recorded work.
 func Open(dir string) (*Store, error) {
+	dir, err := privateRoot(dir)
+	if err != nil {
+		return nil, err
+	}
 	if err := secureDir(dir); err != nil {
 		return nil, err
 	}
-	dir, err := filepath.EvalSymlinks(dir)
+	dir, err = filepath.EvalSymlinks(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -62,9 +66,12 @@ func Open(dir string) (*Store, error) {
 	}
 	path := filepath.Join(dir, "tasks.db")
 	for _, candidate := range []string{path, path + "-wal", path + "-shm"} {
-		if err := secureExistingFile(candidate); err != nil {
+		if err := secureFile(candidate); err != nil {
 			return nil, err
 		}
+	}
+	if err := secureExistingFile(path); err != nil {
+		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
 	if err != nil {
@@ -86,12 +93,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	cache, err := os.UserCacheDir()
-	if err != nil {
-		_ = db.Close()
-		return nil, err
-	}
-	s := &Store{db: db, dir: dir, dirIdentity: dirIdentity, lockDir: filepath.Join(cache, "meldra", "locks")}
+	s := &Store{db: db, dir: dir, dirIdentity: dirIdentity}
 	if err := s.migrate(context.Background()); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -138,6 +140,9 @@ PRAGMA user_version = 1;`)
 		return fmt.Errorf("index tool identities: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS tools_recovery ON tool_calls(task_id,status,id); CREATE INDEX IF NOT EXISTS approvals_call ON approvals(call_id)`); err != nil {
 		return err
 	}
 	// Do not change newer databases at all. WAL is enabled only after checking
@@ -295,6 +300,24 @@ func rejectSymlinkAncestors(path string) error {
 }
 
 func secureExistingFile(path string) error {
+	if err := secureFile(path); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() > MaxDatabaseBytes {
+		return task.ErrLimit
+	}
+	return nil
+}
+
+// WAL size is independent of the page limit; let SQLite recover its journal.
+func secureFile(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -305,10 +328,37 @@ func secureExistingFile(path string) error {
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("storage file must be regular: %s", path)
 	}
-	if info.Size() > MaxDatabaseBytes {
-		return task.ErrLimit
-	}
 	return os.Chmod(path, 0600)
+}
+
+// privateRoot resolves external ancestors, never the private root itself.
+// All private descendants still pass the strict symlink checks.
+func privateRoot(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	parent := filepath.Dir(absolute)
+	var missing []string
+	for {
+		_, err := os.Lstat(parent)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		missing = append(missing, filepath.Base(parent))
+		parent = filepath.Dir(parent)
+	}
+	parent, err = filepath.EvalSymlinks(parent)
+	if err != nil {
+		return "", err
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		parent = filepath.Join(parent, missing[i])
+	}
+	return filepath.Join(parent, filepath.Base(absolute)), nil
 }
 
 func (s *Store) appendEvent(ctx context.Context, tx *sql.Tx, event task.Event) error {

@@ -57,7 +57,8 @@ func TestTaskNonGitPreflightFailureDoesNotBlockNextTool(t *testing.T) {
 
 func TestTaskCancelledGitPreflightHasKnownOutcome(t *testing.T) {
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\nexec sleep 30\n"), 0700); err != nil {
+	ready := filepath.Join(bin, "ready")
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\ntouch "+strconv.Quote(ready)+"\nexec sleep 30\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -68,9 +69,32 @@ func TestTaskCancelledGitPreflightHasKnownOutcome(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	timer := time.AfterFunc(100*time.Millisecond, cancel)
-	defer timer.Stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticks := time.Tick(5 * time.Millisecond)
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		for {
+			select {
+			case <-ticks:
+				if _, err := os.Stat(ready); err == nil {
+					cancel()
+					return
+				}
+			case <-deadline.C:
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	defer func() { cancel(); <-done }()
 	result, err := registry.Invoke(ctx, "git_review", json.RawMessage(`{}`))
+	if _, err := os.Stat(ready); err != nil {
+		t.Fatalf("Git preflight never started: %v", err)
+	}
 	if !errors.Is(err, context.Canceled) || result.Status != tool.Cancelled {
 		t.Fatalf("read-only preflight cancellation=%+v err=%v", result, err)
 	}

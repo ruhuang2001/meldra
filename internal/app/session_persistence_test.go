@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -102,12 +103,21 @@ func TestTaskSessionSaveFailureStopsBatchAndPreservesRecovery(t *testing.T) {
 
 				// Reload through the actual recovery path. Known failures may resume;
 				// an uncertain replacement must block before another model request.
-				recovered := recoveryExecution(t, paths, agent.execution.workspace.root, agent.session.ID)
-				agent.execution = recovered
-				agent.session = recovered.session
-				agent.store = newTaskSessionStore(paths)
+				runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "fixture", BaseURL: defaultBaseURL}, ChatOptions{Resume: agent.session.ID}, func(root string, auto bool) (*Workspace, error) {
+					return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, auto)
+				}, nil, io.Discard)
+				if err != nil {
+					t.Fatal(err)
+				}
+				agent = runtime.agent
+				recovered := agent.execution
+				resumedRequests := 0
 				agent.backend = inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
 					requests++
+					resumedRequests++
+					if resumedRequests == 1 {
+						return provider.Result{Response: callResponse("recovered-summary", "save_summary", `{"summary":"recovered handler"}`)}, nil
+					}
 					return provider.Result{Response: finishResponse()}, nil
 				})
 				if stage == "after_replace" {
@@ -124,8 +134,12 @@ func TestTaskSessionSaveFailureStopsBatchAndPreservesRecovery(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if err := agent.RunTurn(t.Context(), "continue explicitly"); err != nil || requests != 2 {
+				if err := agent.RunTurn(t.Context(), "continue explicitly"); err != nil || requests != 3 {
 					t.Fatalf("explicit recovery failed: error=%v requests=%d", err, requests)
+				}
+				saved, err := NewSessionStore(paths).Load(agent.session.ID)
+				if err != nil || saved.Summary != "recovered handler" {
+					t.Fatalf("recovered tools saved stale session: %+v %v", saved, err)
 				}
 				old, err := db.GetRun(t.Context(), runs[0].ID)
 				if err != nil || old.Status != task.RunInterrupted {

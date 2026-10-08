@@ -52,12 +52,13 @@ const (
 )
 
 var (
-	ErrTransition = errors.New("invalid state transition")
-	ErrNotFound   = errors.New("task record not found")
-	ErrBusy       = errors.New("task or workspace already executing")
-	ErrUnresolved = errors.New("task has unresolved tool outcomes")
-	ErrLease      = errors.New("execution ownership is not held")
-	ErrLimit      = errors.New("task storage limit exceeded")
+	ErrTransition    = errors.New("invalid state transition")
+	ErrNotFound      = errors.New("task record not found")
+	ErrBusy          = errors.New("task or workspace already executing")
+	ErrUnresolved    = errors.New("task has unresolved tool outcomes")
+	ErrLease         = errors.New("execution ownership is not held")
+	ErrLimit         = errors.New("task storage limit exceeded")
+	ErrArtifactLimit = fmt.Errorf("%w: artifact quota", ErrLimit)
 )
 
 type Task struct {
@@ -113,6 +114,7 @@ type ToolCall struct {
 	TaskID         string          `json:"task_id"`
 	RunID          string          `json:"run_id"`
 	ProviderCallID string          `json:"provider_call_id,omitempty"`
+	ReplayScope    string          `json:"replay_scope,omitempty"`
 	Name           string          `json:"name"`
 	Arguments      json.RawMessage `json:"arguments"`
 	ParameterHash  string          `json:"parameter_hash"`

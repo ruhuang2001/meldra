@@ -7,13 +7,13 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"meldra/internal/provider"
+	taskstore "meldra/internal/store"
 	"meldra/internal/task"
 
 	tea "charm.land/bubbletea/v2"
@@ -601,14 +601,15 @@ func newChatRuntime(
 	if err := workspace.ProtectPath(paths.Home); err != nil {
 		return nil, err
 	}
-	// Execution locks live outside MELDRA_HOME so separate configurations share
-	// ownership. Protect their namespace when a broad workspace contains the cache.
-	cache, err := os.UserCacheDir()
+	// Protect both persistent and legacy shared execution lock namespaces.
+	lockDirs, err := taskstore.OwnershipDirectories()
 	if err != nil {
 		return nil, err
 	}
-	if err := workspace.ProtectPath(filepath.Join(cache, "meldra")); err != nil {
-		return nil, err
+	for _, dir := range lockDirs {
+		if err := workspace.ProtectPath(dir); err != nil {
+			return nil, err
+		}
 	}
 	workspace.SetContext(ctx)
 	if session != nil {
@@ -799,7 +800,7 @@ Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
   --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
-	  --auto-approve                 Skip operation approvals; use only in an isolated container or VM.
+  --auto-approve                 Skip operation approvals; use only in an isolated container or VM.
 
 Configuration:
   Meldra reads ~/.meldra/config.toml and ~/.meldra/credentials.env by default.

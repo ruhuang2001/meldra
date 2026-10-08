@@ -158,11 +158,17 @@ func TestRecoverInterruptedAndExplicitReconciliation(t *testing.T) {
 	if err := f.s.RecoverInterrupted(t.Context(), f.l, f.task.ID); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+	before, err := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := f.s.RecoverInterrupted(t.Context(), f.l, f.task.ID); err != nil {
 		t.Fatal(err)
 	}
-	after, _ := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+	after, err := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(before) != len(after) {
 		t.Fatal("recovery not idempotent")
 	}
@@ -232,10 +238,12 @@ func TestFaultsRollbackStateAndEvents(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			before, _ := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+			before, err := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
 			fault := errors.New("injected disk commit failure")
 			f.s.beforeCommit = func() error { return fault }
-			var err error
 			switch boundary {
 			case "intent":
 				_, err = f.s.PlanTool(t.Context(), f.l, task.ToolCall{TaskID: f.task.ID, RunID: f.run.ID, Name: "write_file", Effect: task.Write})
@@ -250,14 +258,20 @@ func TestFaultsRollbackStateAndEvents(t *testing.T) {
 				t.Fatalf("fault not propagated: %v", err)
 			}
 			f.s.beforeCommit = nil
-			after, _ := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+			after, err := f.s.Events(t.Context(), f.task.ID, 0, 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(before) != len(after) {
 				t.Fatal("event committed without operation")
 			}
 			if err := f.s.RecoverInterrupted(t.Context(), f.l, f.task.ID); err != nil {
 				t.Fatal(err)
 			}
-			calls, _ := f.s.ToolCalls(t.Context(), f.task.ID)
+			calls, err := f.s.ToolCalls(t.Context(), f.task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
 			switch boundary {
 			case "intent":
 				if len(calls) != 0 {
@@ -360,14 +374,20 @@ func TestImportIdempotentAtomicAndImmutable(t *testing.T) {
 	if err != nil || first.ID != second.ID || !second.LegacyHistoryMissing {
 		t.Fatalf("import: %+v %v", second, err)
 	}
-	events, _ := s.Events(t.Context(), first.ID, 0, 1000)
+	events, err := s.Events(t.Context(), first.ID, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(events) != 2 {
 		t.Fatal("duplicate import event")
 	}
 	if _, err := s.ImportLegacy(t.Context(), record, path, Hash([]byte("changed"))); err != nil {
 		t.Fatal(err)
 	}
-	listed, _ := s.ListTasks(t.Context(), "", 100)
+	listed, err := s.ListTasks(t.Context(), "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(listed) != 1 {
 		t.Fatal("new snapshot created duplicate task")
 	}
@@ -375,7 +395,10 @@ func TestImportIdempotentAtomicAndImmutable(t *testing.T) {
 	if err != nil || string(got) != string(legacy) {
 		t.Fatal("source altered")
 	}
-	calls, _ := s.ToolCalls(t.Context(), first.ID)
+	calls, err := s.ToolCalls(t.Context(), first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(calls) != 0 {
 		t.Fatal("fabricated legacy tools")
 	}
@@ -416,8 +439,13 @@ func TestArtifactsLimitsDigestsAndSymlinks(t *testing.T) {
 	if err := os.Symlink(dir, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(filepath.Join(link, "nested")); err == nil {
-		t.Fatal("store ancestor symlink accepted")
+	nested, err := Open(filepath.Join(link, "nested"))
+	if err != nil {
+		t.Fatalf("external ancestor alias rejected: %v", err)
+	}
+	_ = nested.Close()
+	if _, err := Open(link); err == nil {
+		t.Fatal("private store root symlink accepted")
 	}
 	if err := os.Symlink(filepath.Join(f.s.dir, "tasks.db"), filepath.Join(dir, "tasks.db")); err != nil {
 		t.Fatal(err)

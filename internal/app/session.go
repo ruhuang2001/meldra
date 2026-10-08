@@ -628,7 +628,7 @@ func (s *SessionTools) updatePlan(ctx context.Context, raw json.RawMessage) (str
 	if err := s.persist(ctx, next); err != nil {
 		return "", err
 	}
-	return s.status(ctx, json.RawMessage(`{}`))
+	return s.status(context.WithoutCancel(ctx), json.RawMessage(`{}`))
 }
 
 func (s *SessionTools) saveSummary(ctx context.Context, raw json.RawMessage) (string, error) {

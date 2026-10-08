@@ -18,7 +18,7 @@ import (
 func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, data []byte) (task.ArtifactRef, error) {
 	ref := task.ArtifactRef{ID: Hash(data), Name: name, SHA256: Hash(data), Size: int64(len(data))}
 	if name == "" || len(name) > 256 || len(data) > MaxArtifactBytes {
-		return ref, task.ErrLimit
+		return ref, task.ErrArtifactLimit
 	}
 	err := s.owned(ctx, l, taskID, func(tx *sql.Tx) error {
 		dir := filepath.Join(s.dir, "artifacts")
@@ -30,7 +30,7 @@ func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, 
 			return err
 		}
 		if info, err := os.Stat(path); err == nil && info.Size() > MaxArtifactBytes {
-			return task.ErrLimit
+			return task.ErrArtifactLimit
 		}
 		if existing, err := os.ReadFile(path); err == nil {
 			if Hash(existing) != ref.SHA256 {
@@ -45,6 +45,14 @@ func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, 
 			}
 			var total int64
 			for _, entry := range entries {
+				// The immediate write transaction excludes every other artifact writer.
+				// Temporary files can only be leftovers from a terminated writer here.
+				if strings.HasPrefix(entry.Name(), ".pending-") {
+					if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+						return err
+					}
+					continue
+				}
 				info, err := entry.Info()
 				if err != nil {
 					return err
@@ -52,7 +60,7 @@ func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, 
 				total += info.Size()
 			}
 			if total+ref.Size > MaxArtifactTotalBytes {
-				return task.ErrLimit
+				return task.ErrArtifactLimit
 			}
 			f, err := os.CreateTemp(dir, ".pending-")
 			if err != nil {
@@ -92,7 +100,7 @@ func (s *Store) ReadArtifact(ctx context.Context, ref task.ArtifactRef) ([]byte,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if len(ref.ID) != 64 || ref.ID != ref.SHA256 || strings.ContainsAny(ref.ID, "/\\.") || ref.Size < 0 || ref.Size > MaxArtifactBytes {
+	if !validDigest(ref.ID) || ref.ID != ref.SHA256 || ref.Size < 0 || ref.Size > MaxArtifactBytes {
 		return nil, errors.New("invalid artifact reference")
 	}
 	path := filepath.Join(s.dir, "artifacts", ref.ID)
@@ -115,4 +123,16 @@ func (s *Store) ReadArtifact(ctx context.Context, ref task.ArtifactRef) ([]byte,
 		return nil, errors.New("artifact content or size does not match digest")
 	}
 	return data, nil
+}
+
+func validDigest(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, c := range value {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
