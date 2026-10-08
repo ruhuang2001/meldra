@@ -89,3 +89,25 @@ func TestMergeToolArgumentsSemantically(t *testing.T) {
 		}
 	}
 }
+
+func TestToolOutputSlotCannotBecomeDuplicateExecution(t *testing.T) {
+	decode := func(id, call string) responses.ResponseOutputItemUnion {
+		raw, err := json.Marshal(map[string]any{"type": "function_call", "id": id, "call_id": call, "name": "edit_file", "arguments": "{}"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var item responses.ResponseOutputItemUnion
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	one, two := decode("one", "call1"), decode("two", "call2")
+	if _, err := mergeCompletedStreamOutput([]responses.ResponseOutputItemUnion{one}, []responses.ResponseOutputItemUnion{two}, []int64{0}); err == nil {
+		t.Fatal("conflicting identities at same slot became two tools")
+	}
+	merged, err := mergeCompletedStreamOutput([]responses.ResponseOutputItemUnion{one}, []responses.ResponseOutputItemUnion{two}, []int64{1})
+	if err != nil || len(merged) != 2 {
+		t.Fatalf("distinct operations with equal arguments collapsed: %+v %v", merged, err)
+	}
+}
