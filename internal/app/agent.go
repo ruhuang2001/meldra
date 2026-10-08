@@ -446,6 +446,11 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			}
 		} else {
 			result, err = a.executeTool(ctx, call.Name, json.RawMessage(call.Arguments))
+			if _, ok := errors.AsType[*persistenceError](err); ok {
+				a.toolFailure = err
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: err.Error()})
+				return results
+			}
 		}
 		if err != nil {
 			result = "Error: " + err.Error()

@@ -96,6 +96,13 @@ The real execution sequence is:
 5. Record the terminal Run status, preserving prior attempts, and release the
    ownership lease. A persistence failure stops subsequent side effects.
 
+Session tools follow the same rule: a failed plan/summary save stops the current
+batch and further model requests. Failure before snapshot replacement records a
+known failed call; failure after replacement but before directory synchronization
+records an unknown outcome requiring explicit reconciliation. Unconfirmed metadata
+is not published to the in-memory session. Invalid tool arguments remain ordinary
+recoverable failures.
+
 The workspace still owns path restrictions, command allowlists, diff previews,
 atomic single-file replacement, in-process rollback and undo. A persisted
 approval is tied to one operation; it is not transferable permission for a later

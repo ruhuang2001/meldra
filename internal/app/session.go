@@ -17,6 +17,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"meldra/internal/tool"
 )
 
 const (
@@ -63,7 +65,19 @@ type SessionStore struct {
 	includeTaskSnapshots bool
 	paths                ConfigPaths
 	dir                  string
+	// syncDir defaults to syncDirectory; tests can inject post-rename failures.
+	syncDir func(string) error
 }
+
+// sessionSaveError distinguishes an unchanged snapshot from a replacement
+// whose directory entry could not be confirmed durable.
+type sessionSaveError struct {
+	err      error
+	replaced bool
+}
+
+func (e *sessionSaveError) Error() string { return e.err.Error() }
+func (e *sessionSaveError) Unwrap() error { return e.err }
 
 // SessionListDiagnostics describes files skipped while listing sessions.
 // It intentionally omits file names and errors because session files can
@@ -104,7 +118,13 @@ func newSessionID() (string, error) {
 	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(random), nil
 }
 
-func (s *SessionStore) Save(session *Session) error {
+func (s *SessionStore) Save(session *Session) (err error) {
+	replaced := false
+	defer func() {
+		if err != nil {
+			err = &sessionSaveError{err: err, replaced: replaced}
+		}
+	}()
 	if session == nil || !validSessionID(session.ID) {
 		return fmt.Errorf("invalid session")
 	}
@@ -169,7 +189,12 @@ func (s *SessionStore) Save(session *Session) error {
 	if err := os.Rename(tempPath, target); err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}
-	if err := syncDirectory(s.dir); err != nil {
+	replaced = true
+	syncDir := s.syncDir
+	if syncDir == nil {
+		syncDir = syncDirectory
+	}
+	if err := syncDir(s.dir); err != nil {
 		return err
 	}
 	session.savedRevision = sha256.Sum256(contents)
@@ -598,8 +623,9 @@ func (s *SessionTools) updatePlan(ctx context.Context, raw json.RawMessage) (str
 			return "", fmt.Errorf("plan steps must not exceed %d bytes", maxSessionPlanStepBytes)
 		}
 	}
-	s.session.Plan = append([]string(nil), input.Steps...)
-	if err := s.store.Save(s.session); err != nil {
+	next := *s.session
+	next.Plan = slices.Clone(input.Steps)
+	if err := s.persist(ctx, next); err != nil {
 		return "", err
 	}
 	return s.status(ctx, json.RawMessage(`{}`))
@@ -622,11 +648,27 @@ func (s *SessionTools) saveSummary(ctx context.Context, raw json.RawMessage) (st
 	if len(input.Summary) > maxSessionSummaryBytes {
 		return "", fmt.Errorf("summary is too large")
 	}
-	s.session.Summary = input.Summary
-	if err := s.store.Save(s.session); err != nil {
+	next := *s.session
+	next.Summary = input.Summary
+	if err := s.persist(ctx, next); err != nil {
 		return "", err
 	}
 	return "Session summary saved.", nil
+}
+
+func (s *SessionTools) persist(ctx context.Context, next Session) error {
+	// A generic SessionSaver can fail after writing. Only the concrete store's
+	// explicit pre-replacement error proves that the snapshot was not changed.
+	tool.Observe(ctx, func(o *tool.Observation) { o.Started = true })
+	if err := s.store.Save(&next); err != nil {
+		if saveErr, ok := errors.AsType[*sessionSaveError](err); ok && !saveErr.replaced {
+			tool.Observe(ctx, func(o *tool.Observation) { o.Started = false })
+		}
+		return &persistenceError{err: err}
+	}
+	*s.session = next
+	tool.Observe(ctx, func(o *tool.Observation) { o.Result.Status = tool.Succeeded })
+	return nil
 }
 
 func (s *SessionTools) status(ctx context.Context, raw json.RawMessage) (string, error) {
