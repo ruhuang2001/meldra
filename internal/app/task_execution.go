@@ -272,6 +272,12 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 		e.err = &persistenceError{err}
 		return result, e.err
 	}
+	// A session snapshot failure is fatal even if the ledger is still writable.
+	// Record its known/unknown outcome first, then stop the rest of the batch.
+	if _, ok := errors.AsType[*persistenceError](callErr); ok {
+		e.err = callErr
+		return result, e.err
+	}
 	if stored.Status == task.ToolUnknown {
 		e.err = fmt.Errorf("tool %s has an unknown outcome; inspect task %s before resuming", call.ID, e.session.ID)
 		return result, e.err
