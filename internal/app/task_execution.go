@@ -34,6 +34,7 @@ type taskExecution struct {
 	err               error
 	resume            bool
 	context           string
+	replayScope       string
 }
 
 type executionContextKey struct{}
@@ -49,7 +50,7 @@ func providerIdentity(base string) string {
 		return "custom"
 	}
 	// Credentials and query strings are never part of the persisted identity.
-	return parsed.Scheme + "://" + parsed.Hostname()
+	return parsed.Scheme + "://" + parsed.Host
 }
 
 func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
@@ -57,13 +58,23 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.paused = false
 	e.current = nil
 	e.context = ""
+	started := false
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
-			_ = e.close()
+			if started {
+				saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				status := task.RunInterrupted
+				if ctx.Err() != nil {
+					status = task.RunCancelled
+				}
+				err = errors.Join(err, e.db.FinishRun(saveCtx, e.lease, e.run.ID, status, truncateSessionMessage(err.Error())))
+				cancel()
+			}
+			err = errors.Join(err, e.close())
 		}
 	}()
 	e.lease, err = e.db.Acquire(ctx, e.session.ID, e.workspace.root)
@@ -120,6 +131,7 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		return err
 	}
 	e.resume = false
+	started = true
 	if err = e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal)}); err != nil {
 		return err
 	}
@@ -182,8 +194,7 @@ func (e *taskExecution) event(ctx context.Context, kind, status string, data any
 		record.ToolCallID = e.current.ID
 	}
 	if err = e.db.AppendEvent(ctx, e.lease, record); err != nil {
-		e.err = &persistenceError{err}
-		return e.err
+		return e.recordingError(ctx, err)
 	}
 	return nil
 }
@@ -191,9 +202,9 @@ func toolEffect(name string) task.Effect {
 	switch name {
 	case "edit_file", "apply_patch", "undo_last_change", "update_plan", "save_summary":
 		return task.Write
-	case "run_command", "verify", "git_review":
+	case "run_command", "verify":
 		return task.Command
-	case "read_file", "list_files", "search_files", "session_status":
+	case "read_file", "list_files", "search_files", "session_status", "git_review":
 		return task.Read
 	default:
 		return task.Command
@@ -203,13 +214,25 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	if e.err != nil {
 		return tool.Result{}, e.err
 	}
+	if err := ctx.Err(); err != nil {
+		return tool.Result{Status: tool.Cancelled, Error: err.Error()}, err
+	}
+	if len(input) == 0 {
+		input = json.RawMessage(`{}`)
+	}
+	if !json.Valid(input) || len(input) > taskstore.MaxArgumentsBytes || len(name) > 256 || name == "" || len(callID) > 1024 {
+		validation := fmt.Errorf("invalid tool identity or arguments: require valid JSON within %d bytes", taskstore.MaxArgumentsBytes)
+		if err := e.event(ctx, "tool.rejected", string(task.ToolFailed), map[string]string{"name": truncateSessionMessage(name), "arguments_sha256": digest(input), "reason": validation.Error()}); err != nil {
+			return tool.Result{}, err
+		}
+		return tool.Result{Status: tool.Failed, Error: validation.Error()}, validation
+	}
 	// Provider call IDs are stable operation identities. Re-delivery of a known
 	// result supplies that result again without repeating the side effect.
 	if callID != "" {
-		old, err := e.db.GetToolCallByProviderID(ctx, e.session.ID, callID)
+		old, err := e.db.GetScopedToolCall(ctx, e.session.ID, callID, e.replayScope)
 		if err != nil && !errors.Is(err, task.ErrNotFound) {
-			e.err = &persistenceError{err}
-			return tool.Result{}, e.err
+			return tool.Result{}, e.recordingError(ctx, err)
 		}
 		if err == nil {
 			if old.Name != name || old.ParameterHash != digest(input) {
@@ -230,16 +253,14 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 			return result, nil
 		}
 	}
-	call, err := e.db.PlanTool(ctx, e.lease, task.ToolCall{TaskID: e.session.ID, RunID: e.run.ID, ProviderCallID: callID, Name: name, Arguments: input, ParameterHash: digest(input), Effect: toolEffect(name)})
+	call, err := e.db.PlanTool(ctx, e.lease, task.ToolCall{TaskID: e.session.ID, RunID: e.run.ID, ProviderCallID: callID, ReplayScope: e.replayScope, Name: name, Arguments: input, ParameterHash: digest(input), Effect: toolEffect(name)})
 	if err != nil {
-		e.err = &persistenceError{err}
-		return tool.Result{}, e.err
+		return tool.Result{}, e.recordingError(ctx, err)
 	}
 	e.current = &call
 	defer func() { e.current = nil }()
 	if err = e.db.StartTool(ctx, e.lease, call.ID); err != nil {
-		e.err = &persistenceError{err}
-		return tool.Result{}, e.err
+		return tool.Result{}, e.recordingError(ctx, err)
 	}
 	result, callErr := registry.Invoke(context.WithValue(ctx, executionContextKey{}, e), name, input)
 
@@ -249,27 +270,40 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stored := task.Result{Status: task.ToolStatus(result.Status), Output: capText(result.Output), ExitCode: result.ExitCode, DurationMS: result.DurationMS, Truncated: result.Truncated || len(result.Output) > maxToolOutput, Retryable: result.Retryable, Error: truncateSessionMessage(result.Error)}
-	for _, attachment := range result.Attachments {
-		ref, artifactErr := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, attachment.Name, attachment.Content)
-		if artifactErr != nil {
-			e.err = &persistenceError{artifactErr}
-			return result, e.err
+	var artifactFailure error
+	saveArtifact := func(name string, content []byte) {
+		if artifactFailure != nil {
+			stored.Truncated = true
+			return
+		}
+		ref, err := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, name, content)
+		if err != nil {
+			stored.Truncated = true
+			if !errors.Is(err, task.ErrArtifactLimit) {
+				artifactFailure = err
+			}
+			return
 		}
 		stored.Artifacts = append(stored.Artifacts, ref)
+	}
+	for _, attachment := range result.Attachments {
+		saveArtifact(attachment.Name, attachment.Content)
 		if attachment.Truncated {
 			stored.Truncated = true
 		}
 	}
 	if name == "run_command" || name == "verify" || name == "git_review" || name == "apply_patch" || name == "edit_file" || name == "undo_last_change" {
-		ref, artifactErr := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, name+".txt", []byte(stored.Output))
-		if artifactErr != nil {
-			e.err = &persistenceError{artifactErr}
-			return result, e.err
-		}
-		stored.Artifacts = append(stored.Artifacts, ref)
+		saveArtifact(name+".txt", []byte(stored.Output))
 	}
-	if err = e.db.FinishTool(saveCtx, e.lease, call.ID, stored); err != nil {
+	// Artifact IO may exhaust its deadline. Give the known outcome its own save.
+	resultCtx, resultCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer resultCancel()
+	if err = e.db.FinishTool(resultCtx, e.lease, call.ID, stored); err != nil {
 		e.err = &persistenceError{err}
+		return result, e.err
+	}
+	if artifactFailure != nil {
+		e.err = &persistenceError{artifactFailure}
 		return result, e.err
 	}
 	// A session snapshot failure is fatal even if the ledger is still writable.
@@ -292,8 +326,7 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 	detail, _ := json.Marshal(map[string]string{"title": request.Title, "detail": truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]")})
 	approval, err := e.db.RecordApproval(ctx, e.lease, task.Approval{TaskID: e.session.ID, RunID: e.run.ID, ToolCallID: e.current.ID, Operation: string(request.Kind), ParameterHash: e.current.ParameterHash, WorkspaceState: request.WorkspaceState, Detail: detail, Decision: task.Pending, Scope: "single_call"})
 	if err != nil {
-		e.err = &persistenceError{err}
-		return e.err
+		return e.recordingError(ctx, err)
 	}
 	e.pendingApprovalID = approval.ID
 	return nil
@@ -311,69 +344,74 @@ func (e *taskExecution) approval(ctx context.Context, request ApprovalRequest, a
 	err := e.db.DecideApproval(saveCtx, e.lease, e.pendingApprovalID, decision)
 	e.pendingApprovalID = ""
 	if err != nil {
-		e.err = &persistenceError{err}
-		return e.err
+		return e.recordingError(ctx, err)
 	}
 	return nil
 }
 func (e *taskExecution) reconcile(ctx context.Context) error {
-	calls, err := e.db.ToolCalls(ctx, e.session.ID)
-	if err != nil {
-		return err
-	}
-	approvals, err := e.db.Approvals(ctx, e.session.ID)
-	if err != nil {
-		return err
-	}
-	for _, call := range calls {
-		if call.Status != task.ToolUnknown {
-			continue
+	after := ""
+	for {
+		calls, err := e.db.UnknownToolCalls(ctx, e.session.ID, after)
+		if err != nil {
+			return err
 		}
-		status := task.ToolUnknown
-		reason := ""
-		if call.Effect == task.Read {
-			status = task.ToolFailed
-			reason = "interrupted read; no workspace side effects"
+		if len(calls) == 0 {
+			return nil
 		}
-		for _, approval := range approvals {
-			if approval.ToolCallID != call.ID {
+		for _, call := range calls {
+			if call.Status != task.ToolUnknown {
 				continue
 			}
-			if approval.Decision == task.Expired {
-				status = task.ToolCancelled
-				reason = "approval expired before execution"
-				break
-			}
-			if approval.Decision == task.Declined {
-				status = task.ToolDeclined
-				reason = "operation was declined"
-				break
-			}
-			if approval.Decision == task.Approved && len(approval.WorkspaceState) > 0 {
-				state, checkErr := e.workspace.reconcileFiles(approval.WorkspaceState)
-				if checkErr != nil {
-					return fmt.Errorf("reconcile %s: %w", call.ID, checkErr)
-				}
-				if state == "after" {
-					status = task.ToolSucceeded
-					reason = "all recorded file postimages match"
-				}
-				if state == "before" {
-					status = task.ToolFailed
-					reason = "all recorded file preimages match; no net change"
-				}
-			}
-		}
-		if status != task.ToolUnknown {
-			if err := e.db.ResolveTool(ctx, e.lease, call.ID, task.Result{Status: status, Output: reason}, reason); err != nil {
+			after = call.ID
+			approvals, err := e.db.CallApprovals(ctx, call.ID)
+			if err != nil {
 				return err
+			}
+			status := task.ToolUnknown
+			reason := ""
+			if call.Effect == task.Read || call.Name == "git_review" {
+				status = task.ToolFailed
+				reason = "interrupted read; no workspace side effects"
+			}
+			for _, approval := range approvals {
+				if approval.ToolCallID != call.ID {
+					continue
+				}
+				if approval.Decision == task.Expired {
+					status = task.ToolCancelled
+					reason = "approval expired before execution"
+					break
+				}
+				if approval.Decision == task.Declined {
+					status = task.ToolDeclined
+					reason = "operation was declined"
+					break
+				}
+				if approval.Decision == task.Approved && len(approval.WorkspaceState) > 0 {
+					state, checkErr := e.workspace.reconcileFiles(approval.WorkspaceState)
+					if checkErr != nil {
+						return fmt.Errorf("reconcile %s: %w", call.ID, checkErr)
+					}
+					if state == "after" {
+						status = task.ToolSucceeded
+						reason = "all recorded file postimages match"
+					}
+					if state == "before" {
+						status = task.ToolFailed
+						reason = "all recorded file preimages match; no net change"
+					}
+				}
+			}
+			if status != task.ToolUnknown {
+				if err := e.db.ResolveTool(ctx, e.lease, call.ID, task.Result{Status: status, Output: reason}, reason); err != nil {
+					return err
+				}
 			}
 		}
 	}
-	return nil
 }
 func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (string, error) {
-	calls, err := e.db.ToolCalls(ctx, record.ID)
+	calls, err := e.db.LatestToolCalls(ctx, record.ID)
 	if err != nil {
 		return "", err
 	}
@@ -384,7 +422,7 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	}
 	// A bounded excerpt retains the most recent tool evidence; the full ledger
 	// remains queryable through the task CLI without sending it all to the model.
-	for _, call := range calls[max(0, len(calls)-30):] {
+	for _, call := range calls {
 		fmt.Fprintf(&b, "%s %s: %s\n%s\n", call.ID, call.Name, call.Status, truncateUTF8(call.Result.Output, 2048, " [truncated]"))
 	}
 	b.WriteString("Do not repeat confirmed completed actions. Verify current files before new edits.\n")
@@ -425,4 +463,12 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			return fmt.Errorf("save recovered requests: %w", err)
 		}
 	}
+}
+
+func (e *taskExecution) recordingError(ctx context.Context, err error) error {
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return err
+	}
+	e.err = &persistenceError{err}
+	return e.err
 }

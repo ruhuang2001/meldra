@@ -148,7 +148,7 @@ func TestBoundCustomTurnInputEmptyAndNonshrinkingOutputs(t *testing.T) {
 		responses.ResponseInputItemParamOfFunctionCallOutput("long", strings.Repeat("x", 1024)),
 	}
 	want := responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfFunctionCallOutput("short", compactedToolOutput),
+		input[0],
 		responses.ResponseInputItemParamOfFunctionCallOutput("long", compactedToolOutput),
 	}
 	encoded := mustMarshalConversation(t, want)
@@ -241,7 +241,11 @@ func FuzzBoundCustomTurnInput(f *testing.F) {
 		encoded := original
 		wantCompacted := false
 		for i := 1; len(encoded) > limit && i < len(want); i++ {
-			want[i] = responses.ResponseInputItemParamOfFunctionCallOutput(fmt.Sprint(i-1), compactedToolOutput)
+			replacement := responses.ResponseInputItemParamOfFunctionCallOutput(fmt.Sprint(i-1), compactedToolOutput)
+			if len(mustMarshalConversation(t, replacement)) >= len(mustMarshalConversation(t, want[i])) {
+				continue
+			}
+			want[i] = replacement
 			wantCompacted = true
 			encoded = mustMarshalConversation(t, want)
 		}
@@ -267,6 +271,14 @@ func mustMarshalConversation(t testing.TB, value any) []byte {
 	return encoded
 }
 func TestValidateResponse(t *testing.T) {
+	for _, calls := range [][]OutputItem{
+		{{Type: "function_call", Name: "edit_file"}},
+		{{Type: "function_call", CallID: "same"}, {Type: "function_call", CallID: "same"}},
+	} {
+		if err := Validate(&Response{Status: "completed", Output: calls}); err == nil {
+			t.Fatal("ambiguous call identities accepted")
+		}
+	}
 	if err := Validate(domainResponse(&responses.Response{Status: responses.ResponseStatusCompleted})); err != nil {
 		t.Fatalf("completed response was rejected: %v", err)
 	}

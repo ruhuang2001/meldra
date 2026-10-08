@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"meldra/internal/task"
 )
@@ -77,13 +78,33 @@ const providerLookupSQL = `SELECT record FROM tool_calls WHERE task_id=? AND jso
 // at most one bounded record even when a long task has thousands of calls.
 // Empty provider IDs are not identities and never match another empty ID.
 func (s *Store) GetToolCallByProviderID(ctx context.Context, taskID, providerID string) (task.ToolCall, error) {
+	return s.GetScopedToolCall(ctx, taskID, providerID, "")
+}
+
+func (s *Store) GetScopedToolCall(ctx context.Context, taskID, providerID, scope string) (task.ToolCall, error) {
 	if !validID(taskID) || providerID == "" {
 		return task.ToolCall{}, task.ErrNotFound
 	}
 	if len(providerID) > 1024 {
 		return task.ToolCall{}, task.ErrLimit
 	}
-	return getRecord[task.ToolCall](ctx, s.db, providerLookupSQL, taskID, providerID)
+	if scope == "" {
+		return getRecord[task.ToolCall](ctx, s.db, `SELECT record FROM tool_calls WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.provider_call_id')=? AND COALESCE(json_extract(CAST(record AS TEXT),'$.replay_scope'),'')='' ORDER BY planned,id LIMIT 1`, taskID, providerID)
+	}
+	return getRecord[task.ToolCall](ctx, s.db, `SELECT record FROM tool_calls WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.provider_call_id')=? AND json_extract(CAST(record AS TEXT),'$.replay_scope')=? ORDER BY planned,id LIMIT 1`, taskID, providerID, scope)
+}
+
+// Recovery queries bound decoding independently of the complete task history.
+func (s *Store) LatestToolCalls(ctx context.Context, id string) ([]task.ToolCall, error) {
+	calls, err := queryRecords[task.ToolCall](ctx, s.db, "SELECT record FROM tool_calls WHERE task_id=? ORDER BY planned DESC,id DESC LIMIT 30", id)
+	slices.Reverse(calls)
+	return calls, err
+}
+func (s *Store) UnknownToolCalls(ctx context.Context, id, after string) ([]task.ToolCall, error) {
+	return queryRecords[task.ToolCall](ctx, s.db, "SELECT record FROM tool_calls WHERE task_id=? AND status='unknown' AND id>? ORDER BY id LIMIT 100", id, after)
+}
+func (s *Store) CallApprovals(ctx context.Context, id string) ([]task.Approval, error) {
+	return queryRecords[task.Approval](ctx, s.db, "SELECT record FROM approvals WHERE call_id=? ORDER BY rowid", id)
 }
 
 func (s *Store) ListTasks(ctx context.Context, workspace string, limit int) ([]task.Task, error) {

@@ -401,6 +401,16 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 		case "response.completed", "response.failed", "response.incomplete":
 			response := event.Response
 			response.Output = mergeCompletedStreamOutput(response.Output, completedOutput)
+			// Some compatible gateways only deliver assistant text as stream events.
+			// Preserve it in the response used for custom-provider replay as well.
+			if OutputText(&response) == "" && text.Len() > 0 {
+				raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": text.String(), "annotations": []any{}}}})
+				var message responses.ResponseOutputItemUnion
+				if err := json.Unmarshal(raw, &message); err != nil {
+					return result, err
+				}
+				response.Output = append([]responses.ResponseOutputItemUnion{message}, response.Output...)
+			}
 			result.Response = &response
 			result.StreamedText = text.String()
 			return result, nil

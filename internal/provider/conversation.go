@@ -63,12 +63,15 @@ func boundCustomTurnInput(input responses.ResponseInputParam, limit int) (respon
 		if err != nil {
 			return nil, 0, compacted, fmt.Errorf("compact custom-provider context: %w", err)
 		}
-		bounded[index] = replacement
-		compacted = true
 		encoded, err := json.Marshal(replacement)
 		if err != nil {
 			return nil, 0, compacted, fmt.Errorf("measure compacted custom-provider context: %w", err)
 		}
+		if len(encoded) >= sizes[index] {
+			continue
+		}
+		bounded[index] = replacement
+		compacted = true
 		size += len(encoded) - sizes[index]
 		if size <= limit {
 			return bounded, size, compacted, nil
@@ -224,6 +227,16 @@ func Validate(response *Response) error {
 		return errors.New("response stream completed without a response")
 	}
 	if response.Status == "completed" {
+		seen := map[string]bool{}
+		for _, item := range response.Output {
+			if item.Type != "function_call" {
+				continue
+			}
+			if item.CallID == "" || seen[item.CallID] {
+				return errors.New("response contains missing or duplicate tool call identity")
+			}
+			seen[item.CallID] = true
+		}
 		return nil
 	}
 	if response.ErrorMessage != "" {

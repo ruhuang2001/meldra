@@ -2084,6 +2084,7 @@ func safeCommandEnvironment(home, temporary string) []string {
 		"GIT_PAGER=cat",
 		"PAGER=cat",
 		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_OPTIONAL_LOCKS=0",
 	}
 	for _, name := range []string{"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TZ"} {
 		if value, ok := os.LookupEnv(name); ok {

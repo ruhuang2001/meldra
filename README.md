@@ -88,7 +88,7 @@ meldra version
 - Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Approved commands run as your OS user and may access the filesystem and network; environment filtering is not a sandbox. Use `--auto-approve` only inside an isolated container or VM.
 - The `verify` tool detects root project markers and selects bounded presets for Make, Go, Python/pytest, Node/npm or pnpm, and Rust/Cargo projects. A Makefile's explicit `check` or `test` target takes priority, and the complete command plan is approved once before execution.
 - Custom providers have a 4 MiB replay-context budget; older tool results are compacted first when needed.
-- Session files are bounded and validated while loading; conflicting saves from another process are rejected instead of silently overwriting newer state. Task execution also holds advisory locks for the task and canonical workspace, preventing concurrent Meldra writers using the same user cache. These locks do not block your editor or other programs. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
+- Session files are bounded and validated while loading; conflicting saves from another process are rejected instead of silently overwriting newer state. Task execution also holds advisory locks for the task and canonical workspace, preventing concurrent Meldra writers in the same workspace across configurations. Persistent ownership lives in `~/.meldra-locks`; cache locks remain for older-build compatibility. These locks do not block your editor or other programs. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 
 ## Tasks and recovery
@@ -168,7 +168,7 @@ Stop all Meldra processes before upgrading or copying data. Back up the entire
 `MELDRA_HOME` directory (default `~/.meldra`) with private permissions, including
 credentials, legacy snapshots, `tasks/` and any SQLite WAL/SHM files. Copying only
 `tasks.db` from a running process is not a supported backup. Keep the previous
-binary alongside the backup. Execution locks in the user cache must not be
+binary alongside the backup. Execution locks in `~/.meldra-locks` and the user cache must not be
 removed while held.
 
 After installing the selected version, check `meldra version`, inspect `tasks`

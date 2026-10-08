@@ -860,6 +860,7 @@ func (m *tuiModel) View() tea.View {
 		header += tuiDimStyle.Render("  session " + sanitizeTerminalText(m.sessionID))
 	}
 
+	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""
 	switch {
 	case m.pending != nil:

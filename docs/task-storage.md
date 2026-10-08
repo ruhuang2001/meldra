@@ -74,13 +74,16 @@ authorize an operation by itself.
 
 ## Ownership and transaction boundaries
 
-`Acquire` takes two nonblocking OS advisory locks: task identity within this
+`Acquire` locks two identities in each namespace: task identity within this
 store, and workspace identity across stores. Directory device/inode identities
 prevent case aliases on default macOS filesystems from bypassing ownership.
-Locks live under the user's OS cache `meldra/locks/`, so changing `MELDRA_HOME`
-does not allow a second writer. Canonicalization resolves workspace symlinks
+Primary locks live in `~/.meldra-locks`, with additional legacy OS-cache
+`meldra/locks/` locks for older builds. Changing `MELDRA_HOME` does not allow a
+second writer, and cache eviction does not remove the primary ownership.
+Stop older builds before upgrading and never remove active lock files.
+Canonicalization resolves workspace symlinks
 before reading filesystem identity. Mutations revalidate the store and workspace
-directory identities; renaming/replacing a leased directory fails closed.
+directory and lock file identities; replacement fails closed.
 This serializes Meldra executions in the same workspace; it does not prevent
 an editor, Git, another program, or a process ignoring advisory locks from
 changing files. The application compares before/after evidence on recovery.
@@ -101,7 +104,10 @@ Provider-call replay lookup uses a task-scoped expression index and loads at
 most one bounded record; it does not decode the whole history for every tool.
 The index is rebuildable and added idempotently to existing schema 1 stores;
 older binaries can still read those stores. Empty provider IDs are not replay
-identities. The query-plan test prevents an accidental full-history scan.
+identities. Custom-provider calls additionally carry a response-based replay
+scope. Recovery pages unknown calls and reads only their approvals; the context
+query decodes at most the most recent 30 calls. Inspection can open an existing
+store without resolving execution lock paths.
 
 The application commits tool intent before starting the handler and commits
 the outcome after completion. SQLite cannot atomically commit an external
@@ -120,8 +126,11 @@ unrecorded started outcomes unknown rather than asserting that no effect occurre
 - WAL: checkpoint every 256 pages, target retained journal size 4 MiB.
 
 The WAL retention target is not a peak disk-usage guarantee: an in-flight write
-or reader can delay checkpointing. Quota failures stop recording/execution
-rather than silently dropping earlier evidence. Artifact writes use a private
+or reader can delay checkpointing. Existing WAL files are permitted to exceed
+the page cap so SQLite can recover them. Artifact quota exhaustion preserves the
+known bounded result and marks it truncated; other persistence errors stop
+execution. Stale `.pending-*` artifacts are reclaimed while holding the database
+write transaction, excluding active writers. Artifact writes use a private
 temporary file, file sync, rename and directory sync. References verify both
 length and SHA-256 when read. A crash can leave an unreferenced artifact;
 it does not turn an incomplete tool into success. No automatic retention job

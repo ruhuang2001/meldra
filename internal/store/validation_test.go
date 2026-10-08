@@ -18,7 +18,10 @@ func TestStorageLimitsRejectBeforeMutation(t *testing.T) {
 	if err := f.s.StartTool(t.Context(), f.l, c.ID); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := f.s.Events(t.Context(), f.task.ID, 0, 100)
+	before, err := f.s.Events(t.Context(), f.task.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, op := range map[string]func() error{
 		"goal": func() error {
 			_, err := f.s.EnsureTask(t.Context(), task.Task{ID: "large", Goal: strings.Repeat("x", maxTextBytes+1), Workspace: f.workspace})
@@ -61,11 +64,17 @@ func TestStorageLimitsRejectBeforeMutation(t *testing.T) {
 			}
 		})
 	}
-	after, _ := f.s.Events(t.Context(), f.task.ID, 0, 100)
+	after, err := f.s.Events(t.Context(), f.task.ID, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(before) != len(after) {
 		t.Fatal("rejected large record appended event")
 	}
-	got, _ := f.s.GetToolCall(t.Context(), c.ID)
+	got, err := f.s.GetToolCall(t.Context(), c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Status != task.ToolRunning {
 		t.Fatal("rejected result changed state")
 	}
