@@ -922,7 +922,7 @@ func newTUIWorkspace(root string, autoApprove bool) (*Workspace, error) {
 	return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, autoApprove)
 }
 
-func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths ConfigPaths, settings Settings, options ChatOptions, providerWarning string) error {
+func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths ConfigPaths, settings Settings, options ChatOptions) error {
 	chatCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -943,7 +943,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		sessionID: runtime.session.ID,
 		model:     settings.Model,
 		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
-		notices:   []string{providerWarning, "Task: " + runtime.session.ID},
+		notices:   []string{"Task: " + runtime.session.ID},
 	}, func() {
 		started = true
 		go func() {

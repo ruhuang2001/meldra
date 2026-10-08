@@ -678,12 +678,8 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if settings.APIKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is not configured; run \"meldra config init\" and add it to %s, or set OPENAI_API_KEY", paths.CredentialsFile)
 	}
-	providerWarning := providerCredentialWarning(settings)
 	if shouldUseTUI(stdin, stdout) {
-		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options, providerWarning)
-	}
-	if providerWarning != "" {
-		fmt.Fprintln(stdout, providerWarning)
+		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
 	}
 
 	reader := bufferedInput(stdin)
