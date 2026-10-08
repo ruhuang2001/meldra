@@ -188,7 +188,7 @@ func TestAgentUsesCompleteOutputTextDoneAfterPartialDelta(t *testing.T) {
 	if err := agent.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output.String(), "partial complete") || strings.Count(output.String(), "partial complete") != 1 {
+	if !strings.Contains(output.String(), "partial complete") || strings.Count(output.String(), "partial complete") != 1 || strings.Count(output.String(), "partial") != 1 {
 		t.Fatalf("output=%q", output.String())
 	}
 }

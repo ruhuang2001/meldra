@@ -345,7 +345,7 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 	defer closeStream()
 
 	var result wireResult
-	var text strings.Builder
+	textBytes := 0
 	// Done events describe one content part, not the entire response. Keep
 	// those boundaries so completing a prefix cannot erase other text parts.
 	parts := make(map[[2]int64]*strings.Builder)
@@ -360,11 +360,19 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 		partOrder = append(partOrder, key)
 		return part
 	}
+	currentText := func() string {
+		var joined strings.Builder
+		joined.Grow(textBytes)
+		for _, key := range partOrder {
+			joined.WriteString(parts[key].String())
+		}
+		return joined.String()
+	}
 	var completedOutput []responses.ResponseOutputItemUnion
 	responseLimit := a.providerResponseLimit()
 	for stream.Next() {
 		if !idleWatchdog.noteEvent() {
-			result.StreamedText = text.String()
+			result.StreamedText = currentText()
 			return result, &IdleTimeoutError{Timeout: idleTimeout}
 		}
 		result.StreamHadEvent = true
@@ -374,13 +382,13 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 			a.status("Thinking")
 		case "response.output_text.delta":
 			if event.Delta != "" {
-				if exceedsProviderResponseLimit(text.Len(), len(event.Delta), responseLimit) {
-					result.StreamedText = text.String()
+				if exceedsProviderResponseLimit(textBytes, len(event.Delta), responseLimit) {
+					result.StreamedText = currentText()
 					return result, &ResponseLimitError{Limit: responseLimit}
 				}
 				result.ReceivedTextDelta = true
 				partFor(event).WriteString(event.Delta)
-				text.WriteString(event.Delta)
+				textBytes += len(event.Delta)
 				if delta := a.filterText(event.Delta); delta != "" {
 					firstDelta := !result.StreamedTextShown
 					result.StreamedTextShown = true
@@ -397,16 +405,13 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 			if event.Text != "" {
 				part := partFor(event)
 				previous := part.String()
-				if exceedsProviderResponseLimit(text.Len()-len(previous), len(event.Text), responseLimit) {
-					result.StreamedText = text.String()
+				if exceedsProviderResponseLimit(textBytes-len(previous), len(event.Text), responseLimit) {
+					result.StreamedText = currentText()
 					return result, &ResponseLimitError{Limit: responseLimit}
 				}
 				part.Reset()
 				part.WriteString(event.Text)
-				text.Reset()
-				for _, key := range partOrder {
-					text.WriteString(parts[key].String())
-				}
+				textBytes += len(event.Text) - len(previous)
 				result.ReceivedTextDelta = true
 				finalText := event.Text
 				first := !result.StreamedTextShown
@@ -431,14 +436,14 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 			response := event.Response
 			merged, err := mergeCompletedStreamOutput(response.Output, completedOutput)
 			if err != nil {
-				result.StreamedText = text.String()
+				result.StreamedText = currentText()
 				return result, err
 			}
 			response.Output = merged
 			// Some compatible gateways only deliver assistant text as stream events.
 			// Preserve it in the response used for custom-provider replay as well.
-			if OutputText(&response) == "" && text.Len() > 0 {
-				raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": text.String(), "annotations": []any{}}}})
+			if OutputText(&response) == "" && textBytes > 0 {
+				raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": currentText(), "annotations": []any{}}}})
 				var message responses.ResponseOutputItemUnion
 				if err := json.Unmarshal(raw, &message); err != nil {
 					return result, err
@@ -446,17 +451,17 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 				response.Output = append([]responses.ResponseOutputItemUnion{message}, response.Output...)
 			}
 			result.Response = &response
-			result.StreamedText = text.String()
+			result.StreamedText = currentText()
 			return result, nil
 		case "error":
-			result.StreamedText = text.String()
+			result.StreamedText = currentText()
 			if event.Message != "" {
 				return result, fmt.Errorf("response stream: %s", event.Message)
 			}
 			return result, fmt.Errorf("response stream failed")
 		}
 	}
-	result.StreamedText = text.String()
+	result.StreamedText = currentText()
 	if idleWatchdog.expired() {
 		return result, &IdleTimeoutError{Timeout: idleTimeout}
 	}
