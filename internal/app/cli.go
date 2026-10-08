@@ -709,7 +709,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	}
 	defer runtime.deleteEmptyNewSession()
 
-	fmt.Fprintf(stdout, "Session: %s\nTask: %s\nWorkspace: %s\n", runtime.session.ID, runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
+	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
 	if err := runtime.agent.Run(ctx); err != nil {
 		return err
 	}
