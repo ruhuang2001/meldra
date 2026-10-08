@@ -857,7 +857,11 @@ func (m *tuiModel) View() tea.View {
 	workspace := sanitizeTerminalText(filepath.Base(m.workspace))
 	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+sanitizeTerminalText(version)+"  "+workspace+"  "+sanitizeTerminalText(m.modelName))
 	if m.sessionID != "" {
-		header += tuiDimStyle.Render("  session " + sanitizeTerminalText(m.sessionID))
+		label := sanitizeTerminalText(m.sessionID)
+		if index := strings.LastIndexByte(label, '-'); index >= 0 {
+			label = label[index+1:]
+		}
+		header += tuiDimStyle.Render("  session " + ansi.Truncate(label, 9, "…"))
 	}
 
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
@@ -943,7 +947,6 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		sessionID: runtime.session.ID,
 		model:     settings.Model,
 		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
-		notices:   []string{"Task: " + runtime.session.ID},
 	}, func() {
 		started = true
 		go func() {
