@@ -460,23 +460,6 @@ func TestProviderURLConfigRoundTripAndEnvironmentValidation(t *testing.T) {
 	}
 }
 
-func TestProviderCredentialWarningNamesHostWithoutLeakingKey(t *testing.T) {
-	const secret = "sk-provider-secret"
-	warning := providerCredentialWarning(Settings{
-		APIKey:  secret,
-		BaseURL: "https://provider.example:8443/v1",
-	})
-	if !strings.Contains(warning, "provider.example:8443") {
-		t.Fatalf("warning = %q", warning)
-	}
-	if strings.Contains(warning, secret) {
-		t.Fatalf("warning leaked API key: %q", warning)
-	}
-	if warning := providerCredentialWarning(Settings{BaseURL: defaultBaseURL}); warning != "" {
-		t.Fatalf("default provider warning = %q", warning)
-	}
-}
-
 func TestMeldraNeverLoadsWorkingDirectoryDotEnv(t *testing.T) {
 	workingDirectory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workingDirectory, ".env"), []byte("OPENAI_API_KEY=project-secret\n"), 0o600); err != nil {

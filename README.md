@@ -73,8 +73,6 @@ base_url = "http://localhost:8080/v1"
 allow_insecure_base_url = true
 ```
 
-Meldra warns before a configured API key is sent to a custom provider host.
-
 ```bash
 meldra config init   # create starter config files
 meldra config        # show effective values and config paths (hides API key)

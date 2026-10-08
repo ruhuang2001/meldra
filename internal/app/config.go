@@ -562,14 +562,6 @@ func validateProviderBaseURL(value string, allowInsecure bool) error {
 	return nil
 }
 
-func providerCredentialWarning(settings Settings) string {
-	parsed, err := url.Parse(settings.BaseURL)
-	if err != nil || strings.EqualFold(parsed.Hostname(), "api.openai.com") {
-		return ""
-	}
-	return fmt.Sprintf("Warning: OPENAI_API_KEY will be sent to custom provider host %s.", parsed.Host)
-}
-
 func validateProviderResponseLimit(value int64) error {
 	if value < 0 {
 		return fmt.Errorf("max_provider_response_bytes must be positive")
