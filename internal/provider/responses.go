@@ -369,6 +369,7 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 		return joined.String()
 	}
 	var completedOutput []responses.ResponseOutputItemUnion
+	var completedIndices []int64
 	responseLimit := a.providerResponseLimit()
 	for stream.Next() {
 		if !idleWatchdog.noteEvent() {
@@ -431,10 +432,11 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 			// complete output items earlier in the SSE stream.
 			if event.Item.Type != "" {
 				completedOutput = append(completedOutput, event.Item)
+				completedIndices = append(completedIndices, event.OutputIndex)
 			}
 		case "response.completed", "response.failed", "response.incomplete":
 			response := event.Response
-			merged, err := mergeCompletedStreamOutput(response.Output, completedOutput)
+			merged, err := mergeCompletedStreamOutput(response.Output, completedOutput, completedIndices)
 			if err != nil {
 				result.StreamedText = currentText()
 				return result, err
@@ -479,7 +481,7 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 // mergeCompletedStreamOutput fills in output items which some compatible
 // gateways omit from their terminal response. A matching streamed item is more
 // complete than its terminal counterpart, while terminal-only items are kept.
-func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion) ([]responses.ResponseOutputItemUnion, error) {
+func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion, positions ...[]int64) ([]responses.ResponseOutputItemUnion, error) {
 	if len(completed) == 0 {
 		return output, nil
 	}
@@ -489,7 +491,7 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 
 	merged := append([]responses.ResponseOutputItemUnion(nil), output...)
 	hasAssistantText := OutputText(&responses.Response{Output: merged}) != ""
-	for _, completedItem := range completed {
+	for completedIndex, completedItem := range completed {
 		match := -1
 		for index, existing := range merged {
 			if existing.ID != "" && existing.ID == completedItem.ID {
@@ -499,6 +501,14 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 			if existing.Type == "function_call" && completedItem.Type == "function_call" && existing.CallID != "" && existing.CallID == completedItem.CallID {
 				match = index
 				break
+			}
+		}
+		// A tool at the same terminal output slot must not become a second
+		// side effect merely because a gateway changed both of its IDs.
+		if match < 0 && completedItem.Type == "function_call" && len(positions) > 0 && completedIndex < len(positions[0]) {
+			position := positions[0][completedIndex]
+			if position >= 0 && position < int64(len(output)) && output[position].Type == "function_call" {
+				match = int(position)
 			}
 		}
 		if match >= 0 {
