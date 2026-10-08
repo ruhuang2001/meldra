@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"meldra/internal/tool"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,17 +73,19 @@ func validateChangeCount(count int) error {
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
-	toolMu      sync.Mutex
-	root        string
-	input       *bufio.Reader
-	output      io.Writer
-	autoApprove bool
-	approve     ApprovalFunc
-	present     ApprovalPresenter
-	ctx         context.Context
-	last        []fileChange
-	protected   []string
-	syncDir     func(string) error
+	toolMu          sync.Mutex
+	root            string
+	input           *bufio.Reader
+	output          io.Writer
+	autoApprove     bool
+	approve         ApprovalFunc
+	approvalRecord  func(context.Context, ApprovalRequest, bool) error
+	approvalPending func(context.Context, ApprovalRequest) error
+	present         ApprovalPresenter
+	ctx             context.Context
+	last            []fileChange
+	protected       []string
+	syncDir         func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -1049,10 +1052,11 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 		return "", err
 	}
 	if !w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalChanges,
-		Title:  "Review file changes",
-		Detail: diff,
-		Prompt: "Apply changes? [y/N] ",
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(changes, false),
+		Title:          "Review file changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
 	}
@@ -1063,7 +1067,35 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	return "Applied successfully.\n" + diff, nil
 }
 
-func (w *Workspace) requestApproval(request ApprovalRequest) bool {
+func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
+	if w.approvalPending != nil && w.contextErr() == nil {
+		if err := w.approvalPending(w.ctx, request); err != nil {
+			tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			return false
+		}
+	}
+
+	defer func() {
+		if w.approvalRecord != nil {
+			if err := w.approvalRecord(w.ctx, request, approved); err != nil {
+				approved = false
+				tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			}
+		}
+	}()
+	defer func() {
+		if !approved {
+			tool.Observe(w.ctx, func(o *tool.Observation) {
+				if o.Result.Status == tool.Unknown {
+					return
+				}
+				o.Result.Status = tool.Declined
+				if w.contextErr() != nil {
+					o.Result.Status = tool.Cancelled
+				}
+			})
+		}
+	}()
 	// Approval data can include workspace content and command arguments.
 	request.Title = sanitizeTerminalText(request.Title)
 	request.Detail = sanitizeTerminalText(request.Detail)
@@ -1145,6 +1177,9 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 			}
 			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
 		}
+		// Validation and path checks above have not changed the workspace.
+		// Only classify later failures as uncertain after entering mutation.
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 		if exists {
 			if !reverse {
 				created, e := makeDirectoryTreeDurableTracked(filepath.Dir(c.path), 0o755, w.syncDirectory)
@@ -1367,10 +1402,11 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	if !w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalChanges,
-		Title:  "Review undo changes",
-		Detail: diff,
-		Prompt: "Apply changes? [y/N] ",
+		Kind:           ApprovalChanges,
+		WorkspaceState: changeFingerprints(w.last, true),
+		Title:          "Review undo changes",
+		Detail:         diff,
+		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
 	}
@@ -1840,7 +1876,7 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		return "", err
 	}
 	if command == "git" {
-		topLevel, err := gitTopLevel(w.root, executable)
+		topLevel, err := gitTopLevel(w.ctx, w.root, executable)
 		if err != nil {
 			return "", err
 		}
@@ -1904,6 +1940,11 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		return "", fmt.Errorf("timeout must be 1..120 seconds")
 	}
 	if w.contextErr() != nil {
+		tool.Observe(w.ctx, func(o *tool.Observation) {
+			if o.Result.Status != tool.Unknown {
+				o.Result.Status = tool.Cancelled
+			}
+		})
 		return "Command cancelled before start.\n[cancelled]", nil
 	}
 	if requestApproval && commandRequiresApproval(command) && !w.confirmCommand(command, args) {
@@ -1925,8 +1966,12 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	cmd.Env = environment
 	var b limitedBuffer
 	b.limit = maxToolOutput
-	cmd.Stdout = &b
-	cmd.Stderr = &b
+	var log limitedBuffer
+	log.limit = 16 << 20
+	combined := io.MultiWriter(&b, &log)
+	cmd.Stdout = combined
+	cmd.Stderr = combined
+	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 	e := runCommandProcess(ctx, cmd)
 	status := 0
 	if e != nil {
@@ -1944,6 +1989,18 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	} else if errors.Is(ctx.Err(), context.Canceled) {
 		suffix = "\n[cancelled]"
 	}
+	tool.Observe(w.ctx, func(o *tool.Observation) {
+		if o.Result.ExitCode == nil || *o.Result.ExitCode == 0 {
+			o.Result.ExitCode = new(status)
+		}
+		o.Result.Truncated = o.Result.Truncated || b.truncated
+		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
+		if ctx.Err() != nil {
+			o.Result.Status = tool.Unknown
+		} else if status != 0 {
+			o.Result.Status = tool.Failed
+		}
+	})
 	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", command, strings.Join(args, " "), status, b.String()) + suffix, nil
 }
 
@@ -2111,6 +2168,11 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 		}
 		fmt.Fprintf(&output, "verification %d/%d\n", index+1, len(commands))
 		output.WriteString(result)
+		stop := false
+		tool.Observe(w.ctx, func(o *tool.Observation) { stop = o.Result.Status == tool.Unknown || o.Err != nil })
+		if stop {
+			return output.String(), nil
+		}
 	}
 	return output.String(), nil
 }
@@ -2302,7 +2364,7 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	topLevel, err := gitTopLevel(w.root, gitExecutable)
+	topLevel, err := gitTopLevel(w.ctx, w.root, gitExecutable)
 	if err != nil {
 		return "", err
 	}
@@ -2321,20 +2383,36 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	return capText(out.String()), nil
 }
 
-func gitTopLevel(workspace, gitExecutable string) (string, error) {
+func gitTopLevel(parent context.Context, workspace, gitExecutable string) (string, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
 	environment, cleanupEnvironment, err := newCommandEnvironment()
 	if err != nil {
 		return "", err
 	}
 	defer cleanupEnvironment()
-	check := exec.Command(gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
+	check := exec.CommandContext(ctx, gitExecutable, "-c", "core.fsmonitor=false", "rev-parse", "--show-toplevel")
 	check.Dir = workspace
 	check.Env = environment
-	output, err := check.Output()
-	if err != nil {
+	var output limitedBuffer
+	output.limit = maxToolOutput
+	check.Stdout = &output
+	check.Stderr = io.Discard
+	// rev-parse is a read-only preflight. A missing repository or cancelled
+	// lookup has a known outcome; only the actual operation marks effects started.
+	if err := runCommandProcess(ctx, check); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("Git workspace lookup cancelled: %w", ctx.Err())
+		}
 		return "", fmt.Errorf("workspace is not a git repository")
 	}
-	topLevel, err := filepath.EvalSymlinks(strings.TrimSpace(string(output)))
+	if output.truncated {
+		return "", fmt.Errorf("Git workspace path exceeds output limit")
+	}
+	topLevel, err := filepath.EvalSymlinks(strings.TrimSpace(output.String()))
 	if err != nil {
 		return "", fmt.Errorf("resolve Git repository root: %w", err)
 	}

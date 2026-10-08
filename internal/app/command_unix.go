@@ -6,12 +6,22 @@ import (
 	"context"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 func runCommandProcess(ctx context.Context, command *exec.Cmd) error {
+	// Bound pipe cleanup even when a child detaches and retains output descriptors.
+	command.WaitDelay = 2 * time.Second
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := command.Start(); err != nil {
 		return err
+	}
+	if execution, ok := ctx.Value(executionContextKey{}).(*taskExecution); ok {
+		if err := execution.event(ctx, "command.started", "running", map[string]any{"pid": command.Process.Pid, "process_group": command.Process.Pid, "started_at": time.Now().UTC()}); err != nil {
+			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+			_ = command.Wait()
+			return err
+		}
 	}
 	done := make(chan error, 1)
 	go func() { done <- command.Wait() }()

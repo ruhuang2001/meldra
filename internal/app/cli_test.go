@@ -23,7 +23,7 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 	}{
 		{
 			name: "session ID followed by yes",
-			args: []string{"session-123", "--yes"},
+			args: []string{"session-123", "--auto-approve"},
 			want: ChatOptions{Resume: "session-123", AutoApprove: true},
 		},
 		{
@@ -38,7 +38,7 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 		},
 		{
 			name: "flags before session ID",
-			args: []string{"--yes", "session-123"},
+			args: []string{"--auto-approve", "session-123"},
 			want: ChatOptions{Resume: "session-123", AutoApprove: true},
 		},
 		{
@@ -439,9 +439,9 @@ func TestResumeLatestWarnsAboutSkippedSessionFilesWithoutLeakingContents(t *test
 
 func TestParseChatOptionsRejectsAnotherFlagAsAnOptionValue(t *testing.T) {
 	for _, args := range [][]string{
-		{"--workspace", "--yes"},
-		{"--resume", "--yes"},
-		{"--prompt", "--yes"},
+		{"--workspace", "--auto-approve"},
+		{"--resume", "--auto-approve"},
+		{"--prompt", "--auto-approve"},
 	} {
 		if _, err := parseChatOptions(args); err == nil {
 			t.Fatalf("parseChatOptions(%#v) accepted a flag as a value", args)
@@ -450,7 +450,7 @@ func TestParseChatOptionsRejectsAnotherFlagAsAnOptionValue(t *testing.T) {
 }
 
 func TestParseChatOptionsAcceptsPrompt(t *testing.T) {
-	got, err := parseChatOptions([]string{"--workspace", "./project", "--yes", "--prompt", "fix the bug"})
+	got, err := parseChatOptions([]string{"--workspace", "./project", "--auto-approve", "--prompt", "fix the bug"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -492,5 +492,17 @@ func TestRunSessionsCommandTruncatesUTF8OnRuneBoundary(t *testing.T) {
 	want := strings.Repeat("\u754c", 80) + "..."
 	if got := output.String(); !utf8.ValidString(got) || !strings.Contains(got, want) {
 		t.Fatalf("session list = %q, want valid UTF-8 containing %q", got, want)
+	}
+}
+
+func TestApprovalCLIRejectsRemovedYesAlias(t *testing.T) {
+	for _, parse := range []func([]string) (ChatOptions, error){parseChatOptions, parseResumeOptions} {
+		if _, err := parse([]string{"--yes"}); err == nil {
+			t.Fatal("removed --yes alias was accepted")
+		}
+		options, err := parse([]string{"--auto-approve"})
+		if err != nil || !options.AutoApprove {
+			t.Fatalf("public approval option=%+v err=%v", options, err)
+		}
 	}
 }
