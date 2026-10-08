@@ -292,10 +292,11 @@ func TestSessionStoreValidatesLoadedFieldLimits(t *testing.T) {
 		"message bytes": func(session *Session) {
 			session.Messages = []SessionMessage{{Role: "user", Content: strings.Repeat("x", maxSessionMessageBytes+1)}}
 		},
-		"plan count": func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
-		"plan step":  func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
-		"summary":    func(session *Session) { session.Summary = strings.Repeat("x", maxSessionSummaryBytes+1) },
-		"workspace":  func(session *Session) { session.Workspace = strings.Repeat("x", maxSessionPathBytes+1) },
+		"plan count":         func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
+		"plan step":          func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
+		"request checkpoint": func(session *Session) { session.LastRequestSequence = -1 },
+		"summary":            func(session *Session) { session.Summary = strings.Repeat("x", maxSessionSummaryBytes+1) },
+		"workspace":          func(session *Session) { session.Workspace = strings.Repeat("x", maxSessionPathBytes+1) },
 		"provider ID": func(session *Session) {
 			session.PreviousResponseID = strings.Repeat("x", maxSessionProviderIDBytes+1)
 		},
@@ -517,25 +518,6 @@ func TestRunSessionsCommandMarksUnavailableWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), workspace+" [unavailable]") {
 		t.Fatalf("session list = %q, want unavailable workspace", output.String())
-	}
-}
-
-func BenchmarkSessionResumeContext(b *testing.B) {
-	session := &Session{
-		Summary: strings.Repeat("completed work ", 100),
-		Plan:    []string{"inspect", "edit", "verify"},
-	}
-	for index := range 100 {
-		session.Messages = append(session.Messages, SessionMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("message %d: %s", index, strings.Repeat("context ", 20)),
-		})
-	}
-	b.ReportAllocs()
-	for b.Loop() {
-		if context := session.resumeContext(); context == "" {
-			b.Fatal("resumeContext returned an empty context")
-		}
 	}
 }
 

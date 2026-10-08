@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"meldra/internal/provider"
+	"meldra/internal/task"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -24,7 +26,7 @@ var version = "dev"
 // Main owns process signals and delegates to the application.
 func Main(buildVersion string) {
 	version = buildVersion
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	// Bubble Tea restores raw terminal state during shutdown. Closing its input
 	// descriptor on a signal can make that restoration fail, so only interrupt
@@ -58,6 +60,10 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "tasks":
+			return runTasksCommand(ctx, args[1:], stdout)
+		case "task":
+			return runTaskCommand(ctx, args[1:], stdin, stdout)
 		case "config":
 			return runConfigCommand(args[1:], stdout)
 		case "version", "--version", "-v":
@@ -203,7 +209,7 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch {
-		case argument == "--yes":
+		case argument == "--auto-approve":
 			options.AutoApprove = true
 		case argument == "--workspace":
 			index++
@@ -574,7 +580,7 @@ func newChatRuntime(
 	var session *Session
 	var err error
 	if options.Resume != "" {
-		session, err = store.Load(options.Resume)
+		session, err = loadSessionForResume(paths, options.Resume)
 		if err != nil {
 			return nil, err
 		}
@@ -595,9 +601,25 @@ func newChatRuntime(
 	if err := workspace.ProtectPath(paths.Home); err != nil {
 		return nil, err
 	}
+	// Execution locks live outside MELDRA_HOME so separate configurations share
+	// ownership. Protect their namespace when a broad workspace contains the cache.
+	cache, err := os.UserCacheDir()
+	if err != nil {
+		return nil, err
+	}
+	if err := workspace.ProtectPath(filepath.Join(cache, "meldra")); err != nil {
+		return nil, err
+	}
 	workspace.SetContext(ctx)
-	if session != nil && session.Workspace != workspace.root {
-		return nil, fmt.Errorf("session %s belongs to workspace %s, not %s", session.ID, session.Workspace, workspace.root)
+	if session != nil {
+		canonical, err := canonicalWorkspacePath(session.Workspace)
+		if err != nil {
+			return nil, err
+		}
+		if canonical != workspace.root {
+			return nil, fmt.Errorf("session %s belongs to workspace %s, not %s", session.ID, session.Workspace, workspace.root)
+		}
+		session.Workspace = canonical
 	}
 	if session == nil {
 		session, err = store.New(workspace.root)
@@ -605,6 +627,11 @@ func newChatRuntime(
 			return nil, err
 		}
 	}
+	// Task-era snapshots never overwrite the imported 0.1.x JSON source.
+	if !session.taskSnapshot {
+		session.hasSavedRevision = false
+	}
+	store = newTaskSessionStore(paths)
 	backend := provider.Connect(provider.Connection{APIKey: settings.APIKey, BaseURL: settings.BaseURL})
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
@@ -616,6 +643,9 @@ func newChatRuntime(
 	agent.output = output
 	agent.session = session
 	agent.store = store
+	agent.execution = &taskExecution{paths: paths, workspace: workspace, session: session, resume: options.Resume != "", config: task.Config{Model: settings.Model, Provider: providerIdentity(settings.BaseURL), Workspace: workspace.root}}
+	workspace.approvalRecord = agent.execution.approval
+	workspace.approvalPending = agent.execution.pendingApproval
 	return &chatRuntime{
 		store:      store,
 		session:    session,
@@ -682,7 +712,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	}
 	defer runtime.deleteEmptyNewSession()
 
-	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
+	fmt.Fprintf(stdout, "Session: %s\nTask: %s\nWorkspace: %s\n", runtime.session.ID, runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
 	if err := runtime.agent.Run(ctx); err != nil {
 		return err
 	}
@@ -755,6 +785,12 @@ const usageText = `Usage:
   meldra [options]               Start a chat in a bounded workspace.
   meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.
+  meldra tasks [--json]           List recorded tasks.
+  meldra task show ID [--json]    Inspect task runs, tools and approvals.
+  meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.
+  meldra task resume ID           Explicitly continue in the foreground.
+  meldra task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT
+                                 Record an inspected unknown outcome; runs no tools.
   meldra config init             Create ~/.meldra configuration files.
   meldra config [show]           Show effective configuration without secrets.
   meldra version                 Print the installed version.
@@ -763,7 +799,7 @@ Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
   --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
-  --yes                          Skip approvals; use only in an isolated container or VM.
+	  --auto-approve                 Skip operation approvals; use only in an isolated container or VM.
 
 Configuration:
   Meldra reads ~/.meldra/config.toml and ~/.meldra/credentials.env by default.

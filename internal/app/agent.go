@@ -53,6 +53,8 @@ func NewAgent(backend provider.Inference, getUserMessage func() (string, bool), 
 }
 
 type Agent struct {
+	execution          *taskExecution
+	toolFailure        error
 	turnMu             sync.Mutex
 	previousResponseID string
 	registry           *tool.Registry
@@ -142,6 +144,13 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		a.registry = registry
 	}
+	a.toolFailure = nil
+	if a.execution != nil {
+		if err = a.execution.begin(ctx, userInput); err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, a.execution.finish(ctx, err)) }()
+	}
 	previousResponseID := a.previousResponseID
 	if a.session != nil {
 		previousResponseID = a.session.PreviousResponseID
@@ -157,8 +166,15 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		modelInput = a.session.resumeContext() + "\nNew user request:\n" + userInput
 		previousResponseID = ""
 	}
+	if a.execution != nil && a.execution.context != "" {
+		modelInput = a.execution.context + "\n" + modelInput
+		previousResponseID = ""
+	}
 	if a.session != nil {
 		a.session.appendMessage("user", userInput)
+		if a.execution != nil {
+			a.session.LastRequestSequence = a.execution.requestSequence
+		}
 		if err := a.store.Save(a.session); err != nil {
 			return err
 		}
@@ -181,6 +197,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
+		if a.execution != nil {
+			if err := a.execution.event(ctx, "model.requested", "", nil); err != nil {
+				return err
+			}
+		}
 		result, err := a.runInference(ctx, input, previousResponseID)
 		if err != nil {
 			if result.StreamedTextShown {
@@ -194,6 +215,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				return a.handleInterruption(!partialSaved)
 			}
 			return err
+		}
+		if a.execution != nil && result.Response != nil {
+			if err := a.execution.event(ctx, "model.completed", "", map[string]any{"response_id": result.Response.ID, "input_tokens": result.Response.InputTokens, "output_tokens": result.Response.OutputTokens}); err != nil {
+				return err
+			}
 		}
 		response := result.Response
 		if response != nil {
@@ -247,6 +273,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			}
 		}
 		if requestedCalls == 0 {
+			if a.execution != nil {
+				if err := a.execution.event(ctx, "assistant.completed", "", map[string]string{"text": truncateSessionMessage(assistantText)}); err != nil {
+					return err
+				}
+			}
 			if a.session != nil {
 				a.session.PreviousResponseID = response.ID
 				if err := a.store.Save(a.session); err != nil {
@@ -256,6 +287,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			break
 		}
 		toolResults := a.executeToolCallsContext(ctx, response.Output)
+		if a.toolFailure != nil {
+			return a.toolFailure
+		}
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
@@ -317,6 +351,10 @@ func (a *Agent) customTurnInputLimit() int {
 }
 
 func (a *Agent) pauseTurn(message string) error {
+	if a.execution != nil {
+		a.execution.paused = true
+		a.execution.resume = true
+	}
 	a.emitAssistantMessage(message)
 	if a.session == nil {
 		return nil
@@ -345,7 +383,9 @@ func (a *Agent) handleInterruption(activeTurn bool) error {
 		a.session.PreviousResponseID = ""
 	}
 	a.session.resumed = true
-	if a.store != nil {
+	// Idle task state is already durable. Writing it here can create a task-era
+	// snapshot before legacy import and replace the source revision used by resume.
+	if a.store != nil && (activeTurn || a.execution == nil) {
 		if err := a.store.Save(a.session); err != nil {
 			return err
 		}
@@ -392,12 +432,30 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			a.emit(UIEvent{Kind: UIEventToolStarted, Name: call.Name})
 		}
 
-		result, err := a.executeTool(ctx, call.Name, json.RawMessage(call.Arguments))
+		var result string
+		outcome := ""
+		var err error
+		if a.execution != nil {
+			structured, callErr := a.execution.invoke(ctx, a.registry, call.CallID, call.Name, json.RawMessage(call.Arguments))
+			result, err = structured.Output, callErr
+			outcome = structured.Status
+			if a.execution.err != nil || structured.Status == tool.Unknown {
+				a.toolFailure = err
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: outcome + ": " + summarizeToolResult(result)})
+				return results
+			}
+		} else {
+			result, err = a.executeTool(ctx, call.Name, json.RawMessage(call.Arguments))
+		}
 		if err != nil {
 			result = "Error: " + err.Error()
 		}
 		if a.events != nil {
-			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: summarizeToolResult(result)})
+			detail := summarizeToolResult(result)
+			if outcome != "" {
+				detail = outcome + ": " + detail
+			}
+			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: detail})
 		}
 		results = append(results, provider.ToolOutput(call.CallID, result))
 	}
