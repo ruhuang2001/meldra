@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -32,30 +34,85 @@ func toolFollowUpInput(output []responses.ResponseOutputItemUnion, toolResults r
 const compactedToolOutput = "[older tool output omitted to fit the custom-provider context budget]"
 
 func boundCustomTurnInput(input responses.ResponseInputParam, limit int) (responses.ResponseInputParam, int, bool, error) {
-	encoded, err := json.Marshal(input)
-	if err != nil {
-		return nil, 0, false, fmt.Errorf("measure custom-provider context: %w", err)
+	// A JSON array's size is the sum of its encoded items, separators and
+	// brackets. Measure each item once; repeatedly marshaling the entire array
+	// after replacing each old output makes a long conversation quadratic.
+	size := 2 + max(0, len(input)-1)
+	if input == nil {
+		size = len("null")
 	}
-	if len(encoded) <= limit {
-		return input, len(encoded), false, nil
+	sizes := make([]int, len(input))
+	for index, item := range input {
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return nil, 0, false, fmt.Errorf("measure custom-provider context: %w", err)
+		}
+		sizes[index] = len(encoded)
+		size += len(encoded)
 	}
-	bounded := append(responses.ResponseInputParam(nil), input...)
+	if size <= limit {
+		return input, size, false, nil
+	}
+	bounded := slices.Clone(input)
 	compacted := false
 	for index, item := range bounded {
 		if item.OfFunctionCallOutput == nil {
 			continue
 		}
-		bounded[index] = responses.ResponseInputItemParamOfFunctionCallOutput(item.OfFunctionCallOutput.CallID, compactedToolOutput)
+		replacement, err := compactFunctionOutput(item)
+		if err != nil {
+			return nil, 0, compacted, fmt.Errorf("compact custom-provider context: %w", err)
+		}
+		bounded[index] = replacement
 		compacted = true
-		encoded, err = json.Marshal(bounded)
+		encoded, err := json.Marshal(replacement)
 		if err != nil {
 			return nil, 0, compacted, fmt.Errorf("measure compacted custom-provider context: %w", err)
 		}
-		if len(encoded) <= limit {
-			return bounded, len(encoded), compacted, nil
+		size += len(encoded) - sizes[index]
+		if size <= limit {
+			return bounded, size, compacted, nil
 		}
 	}
-	return nil, len(encoded), compacted, fmt.Errorf("custom-provider context exceeds %d byte limit", limit)
+	return nil, size, compacted, fmt.Errorf("custom-provider context exceeds %d byte limit", limit)
+}
+
+func compactFunctionOutput(item responses.ResponseInputItemUnionParam) (responses.ResponseInputItemUnionParam, error) {
+	// Copy the output before changing its body: IDs, status and caller metadata
+	// are part of the replay protocol, and callers may still retain the input.
+	output := *item.OfFunctionCallOutput
+	output.Output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(compactedToolOutput)}
+	replacement := item
+	replacement.OfFunctionCallOutput = &output
+	_, itemOverride := item.Overrides()
+	_, outputOverride := item.OfFunctionCallOutput.Overrides()
+	if !itemOverride && !outputOverride && len(item.ExtraFields()) == 0 && len(output.ExtraFields()) == 0 {
+		return replacement, nil
+	}
+
+	// SDK overrides/extra fields can take precedence over typed fields. Retain
+	// their actual wire representation while replacing only the output body.
+	encoded, err := json.Marshal(item)
+	if err != nil {
+		return replacement, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		return replacement, err
+	}
+	if fields == nil {
+		return replacement, errors.New("function output override is not an object")
+	}
+	fields["output"], _ = json.Marshal(compactedToolOutput)
+	encoded, err = json.Marshal(fields)
+	if err != nil {
+		return replacement, err
+	}
+	// Override the copied output rather than the union: the SDK gives a present
+	// union variant precedence over the union's own override. Keeping the typed
+	// variant also lets later checks identify an already compacted output.
+	param.SetJSON(encoded, &output)
+	return replacement, nil
 }
 
 // Item carries opaque provider continuation data. The runner may retain and
