@@ -177,7 +177,7 @@ backup. Unknown newer database schemas are rejected, not rewritten.
 
 ## Development
 
-Requires Go 1.26.6. Python 3 is required for the real-terminal integration
+Requires Go 1.26.9. Python 3 is required for the real-terminal integration
 tests; building the binary itself requires only Go.
 
 ```bash
