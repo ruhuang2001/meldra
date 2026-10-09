@@ -23,7 +23,7 @@ func TestToolFollowUpInputPreservesReasoningMessagesAndCalls(t *testing.T) {
 	]`), &output); err != nil {
 		t.Fatal(err)
 	}
-	input, err := toolFollowUpInput(output, responses.ResponseInputParam{responses.ResponseInputItemParamOfFunctionCallOutput("call_1", "ok")})
+	input, err := toolFollowUpInput(output, responses.ResponseInputParam{functionCallOutput("call_1", "ok")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestToolFollowUpInputPreservesReasoningMessagesAndCalls(t *testing.T) {
 	}
 }
 func TestBoundCustomTurnInputCompactsOldestToolOutputs(t *testing.T) {
-	input := responses.ResponseInputParam{responses.ResponseInputItemParamOfMessage("request", responses.EasyInputMessageRoleUser), responses.ResponseInputItemParamOfFunctionCallOutput("old", strings.Repeat("x", 2048)), responses.ResponseInputItemParamOfFunctionCallOutput("new", strings.Repeat("y", 2048))}
+	input := responses.ResponseInputParam{responses.ResponseInputItemParamOfMessage("request", responses.EasyInputMessageRoleUser), functionCallOutput("old", strings.Repeat("x", 2048)), functionCallOutput("new", strings.Repeat("y", 2048))}
 	full, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
@@ -87,15 +87,15 @@ func TestBoundCustomTurnInputExactBudget(t *testing.T) {
 	escaped := strings.Repeat("\"\\\n\t<>&\u2028\u2029世界\xff", 32)
 	input := responses.ResponseInputParam{
 		responses.ResponseInputItemParamOfMessage("keep <request>", responses.EasyInputMessageRoleUser),
-		responses.ResponseInputItemParamOfFunctionCallOutput("old<>&", escaped),
+		functionCallOutput("old<>&", escaped),
 		responses.ResponseInputItemParamOfMessage("keep intervening message", responses.EasyInputMessageRoleAssistant),
-		responses.ResponseInputItemParamOfFunctionCallOutput("new\"", escaped),
+		functionCallOutput("new\"", escaped),
 	}
 	original := mustMarshalConversation(t, input)
 	want := slices.Clone(input)
-	want[1] = responses.ResponseInputItemParamOfFunctionCallOutput("old<>&", compactedToolOutput)
+	want[1] = functionCallOutput("old<>&", compactedToolOutput)
 	oneCompacted := mustMarshalConversation(t, want)
-	want[3] = responses.ResponseInputItemParamOfFunctionCallOutput("new\"", compactedToolOutput)
+	want[3] = functionCallOutput("new\"", compactedToolOutput)
 	allCompacted := mustMarshalConversation(t, want)
 	for _, test := range []struct {
 		name      string
@@ -144,12 +144,12 @@ func TestBoundCustomTurnInputEmptyAndNonshrinkingOutputs(t *testing.T) {
 		}
 	}
 	input := responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfFunctionCallOutput("short", ""),
-		responses.ResponseInputItemParamOfFunctionCallOutput("long", strings.Repeat("x", 1024)),
+		functionCallOutput("short", ""),
+		functionCallOutput("long", strings.Repeat("x", 1024)),
 	}
 	want := responses.ResponseInputParam{
 		input[0],
-		responses.ResponseInputItemParamOfFunctionCallOutput("long", compactedToolOutput),
+		functionCallOutput("long", compactedToolOutput),
 	}
 	encoded := mustMarshalConversation(t, want)
 	got, size, compacted, err := boundCustomTurnInput(input, len(encoded))
@@ -166,7 +166,7 @@ func TestBoundCustomTurnInputEmptyAndNonshrinkingOutputs(t *testing.T) {
 func TestBoundCustomTurnInputPreservesOutputMetadata(t *testing.T) {
 	for _, kind := range []string{"typed", "extra fields", "output override", "union override"} {
 		t.Run(kind, func(t *testing.T) {
-			item := responses.ResponseInputItemParamOfFunctionCallOutput("call_1", strings.Repeat("large ", 512))
+			item := functionCallOutput("call_1", strings.Repeat("large ", 512))
 			item.OfFunctionCallOutput.ID = openai.String("output_1")
 			item.OfFunctionCallOutput.Status = "completed"
 			if err := json.Unmarshal([]byte(`{"type":"program","caller_id":"parent_1"}`), &item.OfFunctionCallOutput.Caller); err != nil {
@@ -231,7 +231,7 @@ func FuzzBoundCustomTurnInput(f *testing.F) {
 		}
 		input := responses.ResponseInputParam{responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleUser)}
 		for i := range int(count%8) + 1 {
-			input = append(input, responses.ResponseInputItemParamOfFunctionCallOutput(fmt.Sprint(i), text))
+			input = append(input, functionCallOutput(fmt.Sprint(i), text))
 		}
 		original := mustMarshalConversation(t, input)
 		limit := int(budget) % (len(original) + 1)
@@ -241,7 +241,7 @@ func FuzzBoundCustomTurnInput(f *testing.F) {
 		encoded := original
 		wantCompacted := false
 		for i := 1; len(encoded) > limit && i < len(want); i++ {
-			replacement := responses.ResponseInputItemParamOfFunctionCallOutput(fmt.Sprint(i-1), compactedToolOutput)
+			replacement := functionCallOutput(fmt.Sprint(i-1), compactedToolOutput)
 			if len(mustMarshalConversation(t, replacement)) >= len(mustMarshalConversation(t, want[i])) {
 				continue
 			}
@@ -300,7 +300,7 @@ func TestToolFollowUpInputIncludesCallsBeforeTheirOutputs(t *testing.T) {
 	}
 
 	input, err := toolFollowUpInput(output, responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfFunctionCallOutput("call_1", "one"),
+		functionCallOutput("call_1", "one"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -326,5 +326,21 @@ func TestToolFollowUpInputIncludesCallsBeforeTheirOutputs(t *testing.T) {
 	}
 	if got[1].Type != "function_call_output" || got[1].CallID != "call_1" {
 		t.Fatalf("second item is %#v, want the matching function output", got[1])
+	}
+}
+
+func TestToolOutputWireIdentity(t *testing.T) {
+	for _, output := range []string{"", "tool result"} {
+		encoded, err := json.Marshal(ToolOutput("call_123", output))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(encoded, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["type"] != "function_call_output" || got["call_id"] != "call_123" || got["output"] != output {
+			t.Fatalf("invalid tool output wire format: %s", encoded)
+		}
 	}
 }
