@@ -6,7 +6,7 @@ it never resumes a model, a tool, a command, or a pending approval.
 ## Driver and layout
 
 The task ledger uses `modernc.org/sqlite v1.60.1`, a pure Go SQLite driver that
-requires Go 1.26.0 (the project builds with Go 1.26.6). It compiles with
+requires Go 1.26.0 (the project builds with Go 1.26.9). It compiles with
 `CGO_ENABLED=0` for Darwin/Linux on both amd64 and arm64. SQLite runs locally
 in WAL mode with `synchronous=FULL`, foreign keys, a five-second busy timeout,
 and a single connection per Store. Mutation transactions use `BEGIN IMMEDIATE`
