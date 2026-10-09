@@ -5,6 +5,31 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.2.0](https://github.com/ruhuang2001/meldra/compare/v0.1.0...v0.2.0) (2026-10-09)
+
+
+### Features
+
+* **agent:** integrate foreground recovery and task controls ([c2fbb33](https://github.com/ruhuang2001/meldra/commit/c2fbb33216c1c3394e483601667efd69dc77c430))
+* **session:** persist task records and execution ownership ([0bb40ea](https://github.com/ruhuang2001/meldra/commit/0bb40ea6a3b3284200fcdfc276058d563bdc4e3a))
+
+
+### Bug Fixes
+
+* **agent:** harden execution recovery and provider replay ([f8ab8ae](https://github.com/ruhuang2001/meldra/commit/f8ab8aef2d5109790e4ba69f403dc08566f2b509))
+* **agent:** preserve recovery evidence across failure boundaries ([0c40e43](https://github.com/ruhuang2001/meldra/commit/0c40e4388f92cceff2fca46ddad54c9397fb0ff4))
+* **agent:** resolve remaining runtime and recovery issues ([4be7c2e](https://github.com/ruhuang2001/meldra/commit/4be7c2e3efb6a842ade7b0a91837789209816639))
+* **ci:** update Go toolchain for security fixes ([9d28c09](https://github.com/ruhuang2001/meldra/commit/9d28c0910b81e857ca2270987c8750debafc7daf))
+* **cli:** remove custom provider startup warning ([8dd71d2](https://github.com/ruhuang2001/meldra/commit/8dd71d2044162a3b65c3c7dd183d8034d2a4d62c))
+* **session:** stop execution after snapshot persistence failures ([7fcd435](https://github.com/ruhuang2001/meldra/commit/7fcd435648ad5416605e74fcf7ce6062d9c7a4bb))
+* **stream:** preserve terminal tool identity during merge ([744547f](https://github.com/ruhuang2001/meldra/commit/744547f7f145a29a5f2a59a4552d2991f3a95120))
+* **tui:** simplify session identification at startup ([35b9507](https://github.com/ruhuang2001/meldra/commit/35b95074390b29509c83f8f45a6075dee701a12a))
+
+
+### Performance
+
+* **stream:** assemble completed text only when needed ([170fe97](https://github.com/ruhuang2001/meldra/commit/170fe979db83ff81bb9bcf6914c60cbb19436d70))
+
 ## [0.1.0](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.4...v0.1.0) (2026-09-15)
 
 
