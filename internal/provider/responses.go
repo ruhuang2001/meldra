@@ -396,9 +396,9 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 					a.text(delta, firstDelta)
 				}
 			}
-		case "response.function_call_arguments.done":
-			if event.Name != "" {
-				a.status("Preparing " + event.Name)
+		case "response.output_item.added":
+			if event.Item.Type == "function_call" && event.Item.Name != "" {
+				a.status("Preparing " + event.Item.Name)
 			}
 		case "response.output_text.done":
 			// A compatible gateway may omit some deltas. Reconcile the complete

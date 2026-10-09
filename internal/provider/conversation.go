@@ -138,7 +138,7 @@ func UserItems(text string) Items {
 	return Items{{value: responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleUser)}}
 }
 func ToolOutput(callID, output string) Item {
-	return Item{value: responses.ResponseInputItemParamOfFunctionCallOutput(callID, output)}
+	return Item{value: functionCallOutput(callID, output)}
 }
 func ItemsInput(items Items) Input {
 	return Input{value: responses.ResponseNewParamsInputUnion{OfInputItemList: wireItems(items)}}
@@ -246,4 +246,10 @@ func Validate(response *Response) error {
 		return fmt.Errorf("response %s: %s", response.Status, response.IncompleteReason)
 	}
 	return fmt.Errorf("response ended with status %q", response.Status)
+}
+
+func functionCallOutput(callID, output string) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfFunctionCallOutput(output)
+	item.OfFunctionCallOutput.CallID = openai.String(callID)
+	return item
 }
