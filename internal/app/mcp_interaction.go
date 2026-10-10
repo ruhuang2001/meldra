@@ -231,6 +231,9 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 							content[key] = float
 						}
 					}
+					if !declared {
+						break
+					}
 				}
 			}
 			if declared && resolved.Validate(content) == nil {
@@ -350,7 +353,7 @@ func (w *Workspace) sampleMCP(ctx context.Context, server string, p *mcp.CreateM
 	backend := provider.Connect(provider.Connection{APIKey: settings.APIKey, BaseURL: settings.BaseURL})
 	inferenceCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	result, err := backend.Infer(inferenceCtx, provider.Request{Model: settings.Model, Instructions: p.SystemPrompt, Input: provider.ItemsInput(items), MaxOutputTokens: min(p.MaxTokens, 8192)}, provider.Options{CustomProvider: isCustomBaseURL(settings.BaseURL), MaxResponseBytes: 1 << 20}, provider.Observer{})
+	result, err := backend.Infer(inferenceCtx, provider.Request{Model: settings.Model, Instructions: p.SystemPrompt, Input: provider.ItemsInput(items), MaxOutputTokens: min(p.MaxTokens, 8192)}, provider.Options{CustomProvider: isCustomBaseURL(settings.BaseURL), MaxResponseBytes: min(1<<20, settings.MaxProviderResponseBytes)}, provider.Observer{})
 	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("MCP sampling provider failed")

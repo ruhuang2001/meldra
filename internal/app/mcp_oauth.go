@@ -133,7 +133,8 @@ func (mcpOAuthSDKHandler) TokenSource(context.Context) (oauth2.TokenSource, erro
 
 type mcpOAuthBearerTransport struct {
 	http.RoundTripper
-	handler auth.OAuthHandler
+	handler        auth.OAuthHandler
+	refreshAllowed func() bool
 }
 
 func (t mcpOAuthBearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -142,23 +143,8 @@ func (t mcpOAuthBearerTransport) RoundTrip(request *http.Request) (*http.Respons
 		return nil, err
 	}
 	if source != nil {
-		if cached, ok := source.(*mcpOAuthTokenSource); ok {
-			cached.allowRefresh = request.Method != http.MethodDelete
-			if request.GetBody != nil {
-				body, err := request.GetBody()
-				if err != nil {
-					return nil, err
-				}
-				var message struct {
-					ID json.RawMessage `json:"id"`
-				}
-				err = json.NewDecoder(io.LimitReader(body, maxMCPMessage)).Decode(&message)
-				body.Close()
-				if err != nil {
-					return nil, err
-				}
-				cached.allowRefresh = cached.allowRefresh && len(message.ID) != 0
-			}
+		if cached, ok := source.(*mcpOAuthTokenSource); ok && t.refreshAllowed != nil {
+			cached.allowRefresh = t.refreshAllowed()
 		}
 		token, err := source.Token()
 		if err != nil {

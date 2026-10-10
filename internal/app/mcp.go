@@ -8,14 +8,17 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math/big"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -198,6 +201,7 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 	startupCtx, cancel := context.WithTimeout(ctx, mcpTimeout(config.StartupTimeout, 10))
 	defer cancel()
 	var transport mcp.Transport
+	var oauthReady atomic.Bool
 	if config.Command != "" {
 		transport = mcpCommandTransport{command: newMCPCommand(config, workspace)}
 	} else {
@@ -222,6 +226,9 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			httpTransport := transport.(*mcp.StreamableClientTransport)
 			httpTransport.OAuthHandler = mcpOAuthSDKHandler{handler}
 			httpTransport.HTTPClient = mcpOAuthMCPClient(config, handler)
+			bearer := httpTransport.HTTPClient.Transport.(mcpOAuthBearerTransport)
+			bearer.refreshAllowed = func() bool { return oauthReady.Load() || startupCtx.Err() == nil }
+			httpTransport.HTTPClient.Transport = bearer
 		}
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "meldra", Version: version}, mcpClientOptions(workspace, name, config))
@@ -285,6 +292,7 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 		}
 	}
 	definitions = append(definitions, mcpCatalogTools(session, name, config, workspace)...)
+	oauthReady.Store(true)
 	return session, definitions, nil
 }
 
@@ -293,6 +301,9 @@ func newMCPCommand(config mcpServerConfig, workspace *Workspace) *exec.Cmd {
 	command := exec.Command(config.Command, config.Args...)
 	command.Dir = workspace.root
 	command.WaitDelay = time.Second
+	if configuredPath, ok := config.Env["PATH"]; ok && filepath.Base(config.Command) == config.Command && configuredPath != os.Getenv("PATH") {
+		command.Err = fmt.Errorf("MCP commands with a configured PATH must use an absolute command path")
+	}
 	command.Env = []string{}
 	for _, key := range append([]string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "SYSTEMROOT"}, config.EnvVars...) {
 		if value, ok := os.LookupEnv(key); ok {
@@ -315,8 +326,8 @@ func mcpToolName(server, name string) string {
 }
 
 func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, timeout *int, schema *jsonschema.Resolved, input json.RawMessage) (string, error) {
-	var arguments map[string]any
-	if len(input) > maxApprovalPreviewBytes || json.Unmarshal(input, &arguments) != nil || arguments == nil {
+	arguments, decodeErr := decodeMCPArguments(input)
+	if decodeErr != nil {
 		return "", fmt.Errorf("MCP arguments must be a JSON object within 1 MiB")
 	}
 	if err := schema.Validate(arguments); err != nil {
@@ -430,4 +441,55 @@ func (t mcpHTTPTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	}
 	response.Body = http.MaxBytesReader(nil, response.Body, maxMCPMessage)
 	return response, nil
+}
+
+// Reject numeric tokens whose value would change during schema validation.
+func decodeMCPArguments(input json.RawMessage) (map[string]any, error) {
+	if len(input) > maxApprovalPreviewBytes {
+		return nil, fmt.Errorf("arguments exceed 1 MiB")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.UseNumber()
+	var arguments map[string]any
+	if err := decoder.Decode(&arguments); err != nil {
+		return nil, err
+	}
+	if arguments == nil {
+		return nil, fmt.Errorf("arguments must be an object")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("arguments contain trailing data")
+	}
+	var convert func(any) (any, error)
+	convert = func(value any) (any, error) {
+		switch v := value.(type) {
+		case json.Number:
+			f, err := v.Float64()
+			original, valid := new(big.Rat).SetString(string(v))
+			encoded, exact := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
+			if err != nil || !valid || !exact || original.Cmp(encoded) != 0 {
+				return nil, fmt.Errorf("numeric argument loses precision")
+			}
+			return f, nil
+		case map[string]any:
+			for key, item := range v {
+				next, err := convert(item)
+				if err != nil {
+					return nil, err
+				}
+				v[key] = next
+			}
+		case []any:
+			for i, item := range v {
+				next, err := convert(item)
+				if err != nil {
+					return nil, err
+				}
+				v[i] = next
+			}
+		}
+		return value, nil
+	}
+	_, err := convert(arguments)
+	return arguments, err
 }
