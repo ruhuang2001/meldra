@@ -11,6 +11,9 @@ import (
 
 const SchemaVersion = 1
 
+// DatabaseSchemaVersion advances independently of the stable event envelope.
+const DatabaseSchemaVersion = 2
+
 type Status string
 type RunStatus string
 type ToolStatus string
@@ -75,9 +78,13 @@ type Task struct {
 // Config records reproducible non-secret configuration only. Provider is an
 // identifier, never a URL carrying credentials or a serialized SDK client.
 type Config struct {
-	Model     string `json:"model"`
-	Provider  string `json:"provider"`
-	Workspace string `json:"workspace"`
+	Model              string `json:"model"`
+	Provider           string `json:"provider"`
+	Workspace          string `json:"workspace"`
+	Mode               string `json:"mode,omitempty"`
+	Permissions        string `json:"permissions,omitempty"`
+	PolicyGeneration   uint64 `json:"policy_generation,omitzero"`
+	ApprovedPlanDigest string `json:"approved_plan_digest,omitempty"`
 }
 
 type Run struct {
