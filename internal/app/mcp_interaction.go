@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,7 +222,10 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 						}
 					} else {
 						float, err := number.Float64()
-						if err != nil {
+						// Match the value that encoding/json will send, permitting
+						// ordinary decimals such as 0.1 while rejecting lost digits.
+						wireValue, valid := new(big.Rat).SetString(strconv.FormatFloat(float, 'g', -1, 64))
+						if err != nil || !valid || rational.Cmp(wireValue) != 0 {
 							declared = false
 						} else {
 							content[key] = float
@@ -233,7 +237,7 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 				return &mcp.ElicitResult{Action: "accept", Content: content}, nil
 			}
 		}
-		prompt = "Invalid form response: values must match the shown schema.\n" + originalPrompt
+		prompt = "Invalid form response: values must match the shown schema and retain precision in JSON.\n" + originalPrompt
 	}
 	return nil, fmt.Errorf("elicitation response failed validation three times")
 }

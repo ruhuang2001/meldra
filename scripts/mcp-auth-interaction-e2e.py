@@ -284,8 +284,9 @@ def interaction_case(binary, output, mode, stdin, expected):
             elif mode == 'form-integer-fraction':
                 assert value == 42 and result.stdout.count('Schema:') >= 2, 'fractional integer was accepted'
             else:
-                # Inspect the wire spelling too: Python's float parser also rounds decimals.
-                assert '0.1234567890123456789' in (directory / 'wire.jsonl').read_text(), 'decimal changed on the wire'
+                assert value == 0.125 and result.stdout.count('Schema:') >= 2, 'inexact decimal was not rejected before exact retry'
+                raw = next(row['interaction_response_raw'] for row in wire if 'interaction_response_raw' in row)
+                assert '"value":0.125' in raw and '"value":0.1234567890123456789' not in raw, raw
         samples = [r for r in server.provider_requests if r.get('instructions') == 'isolated-sampling-system']
         if mode.startswith('sampling-accept') or mode == 'sampling-share-decline':
             assert samples, 'sampling provider was not invoked'
@@ -408,7 +409,7 @@ def main():
     checks.append(oauth_case(args.binary, args.output))
     for mode, stdin, expected in [('secret-camel', '', 'sensitive elicitation'), ('schema-additional', '', 'flat elicitation'), ('schema-pattern', '', 'flat elicitation'), ('schema-composition', '', 'flat elicitation'), ('form-extra', '{"color":"blue","apiKey":"fixture-only"}\ndecline\n', 'decline'), ('titled-enum', '{"color":"blue"}\n', 'blue'), ('titled-array', '{"color":["blue"]}\n', 'blue')]:
         checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
-    for mode, stdin, expected in [('format-password', '', 'unsupported format'), ('form-integer-exact', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-exact-modern', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-fraction', '{"value":9007199254740993.5}\n{"value":42}\n', '42')]:
+    for mode, stdin, expected in [('format-password', '', 'unsupported format'), ('form-integer-exact', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-exact-modern', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-fraction', '{"value":9007199254740993.5}\n{"value":42}\n', '42'), ('form-number-exact', '{"value":0.1234567890123456789}\n{"value":0.125}\n', '0.125')]:
         checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
     write(args.output / 'report.json', checks)
     write(args.output / 'checksums.json', {str(p.relative_to(args.output)): hashlib.sha256(p.read_bytes()).hexdigest() for p in args.output.rglob('*') if p.is_file() and 'home' not in p.relative_to(args.output).parts})

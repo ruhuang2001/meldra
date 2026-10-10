@@ -417,7 +417,7 @@ def run_serve_case(binary, output, name):
     env = dict(os.environ, MELDRA_HOME=str(home))
     process = subprocess.Popen([str(binary), 'mcp', 'serve', '--workspace', str(workspace)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     latest = name.startswith('serve-latest-')
-    accepted = name.endswith('approve') or name in ('serve-command-failed', 'serve-approval-budget', 'serve-latest-undo-state')
+    accepted = name.endswith('approve') or name in ('serve-command-failed', 'serve-approval-budget', 'serve-latest-undo-state', 'serve-latest-undo-decline')
     buffer = bytearray()
     transcript = directory / 'protocol.jsonl'
     sequence = 0
@@ -501,6 +501,14 @@ def run_serve_case(binary, output, name):
             assert failed['result'].get('isError') and 'nonzero-command-evidence' in json.dumps(failed), failed
         response = request('tools/call', {'name': 'edit_file', 'arguments': {'path': 'hello.txt', 'old_str': 'server-read-evidence', 'new_str': 'server-write-evidence'}})
         assert bool(response['result'].get('isError')) == (not accepted), response
+        if name == 'serve-latest-undo-decline':
+            challenge = request('tools/call', {'name': 'undo_last_change', 'arguments': {}}, handle_approval=False)['result']
+            accepted = False
+            rejected = request('tools/call', {'name': 'edit_file', 'arguments': {'path': 'hello.txt', 'old_str': 'server-write-evidence', 'new_str': 'must-not-write'}})
+            assert rejected['result'].get('isError'), rejected
+            accepted = True
+            unchanged = request('tools/call', {'name': 'undo_last_change', 'arguments': {}, 'requestState': challenge['requestState'], 'inputResponses': {'approval': {'action': 'accept', 'content': {'approve': True}}}})
+            assert not unchanged['result'].get('isError'), 'declined edit invalidated pending undo approval: ' + json.dumps(unchanged)
         if name == 'serve-latest-undo-state':
             challenge = request('tools/call', {'name': 'undo_last_change', 'arguments': {}}, handle_approval=False)['result']
             assert challenge.get('resultType') == 'input_required', challenge
@@ -519,7 +527,7 @@ def run_serve_case(binary, output, name):
         if latest and not accepted:
             declined_command = request('tools/call', {'name': 'run_command', 'arguments': {'command': 'git', 'args': ['status'], 'timeout': None}})
             assert 'Declined; operation was not executed.' in json.dumps(declined_command), declined_command
-        expected = 'server-write-evidence\n' if accepted else 'server-read-evidence\n'
+        expected = 'server-write-evidence\n' if accepted and name != 'serve-latest-undo-decline' else 'server-read-evidence\n'
         assert (workspace / 'hello.txt').read_text() == expected, response
         assert any(row['message'].get('method') == 'elicitation/create' or row['message'].get('result', {}).get('resultType') == 'input_required' for row in messages(transcript)), 'server did not request approval'
         process.stdin.close()
@@ -537,7 +545,10 @@ def run_serve_case(binary, output, name):
             details.append(json.loads(show.stdout))
         save(directory / 'task-details.json', details)
         decisions = [approval['decision'] for detail in details for approval in (detail.get('approvals') or [])]
-        assert decisions == (['approved'] * (3 if name == 'serve-latest-undo-state' else 2 if name == 'serve-command-failed' else 1) if accepted else ['declined'] * (2 if latest else 1)), decisions
+        if name == 'serve-latest-undo-decline':
+            assert sorted(decisions) == ['approved', 'approved', 'declined'], decisions
+        else:
+            assert decisions == (['approved'] * (3 if name == 'serve-latest-undo-state' else 2 if name == 'serve-command-failed' else 1) if accepted else ['declined'] * (2 if latest else 1)), decisions
         return {'name': name, 'passed': True, 'tasks': len(tasks), 'approval': decisions[0]}
     finally:
         if process.poll() is None:
@@ -567,7 +578,7 @@ def main():
     scenarios += [('resources-client', {}), ('resources-deny', {'approval': 'no'}), ('prompts-client', {}), ('resources-cancel', {'mode': 'pre-cancel', 'approval': 'yes'}), ('resources-invalid', {'mode': 'invalid-args'}), ('prompts-invalid', {'mode': 'invalid-args'})]
     scenarios += [('serve-approve', {}), ('serve-deny', {}), ('serve-latest-approve', {}), ('serve-latest-deny', {}), ('serve-cancel', {})]
     scenarios += [('http-slow-startup', {'transport': 'http'})]
-    scenarios += [('catalog-count', {}), ('catalog-bytes', {}), ('catalog-escaped-bytes', {}), ('serve-command-failed', {}), ('serve-approval-budget', {}), ('serve-latest-undo-state', {})]
+    scenarios += [('catalog-count', {}), ('catalog-bytes', {}), ('catalog-escaped-bytes', {}), ('serve-command-failed', {}), ('serve-approval-budget', {}), ('serve-latest-undo-state', {}), ('serve-latest-undo-decline', {})]
     reports = []
     for name, options in scenarios:
         if args.case and name != args.case:
