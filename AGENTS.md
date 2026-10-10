@@ -1,5 +1,10 @@
 # Meldra Agent Rules
 
+## Documentation Language
+
+Use English for project documentation and documentation examples by default.
+Preserve useful content when translating existing documents.
+
 ## Commit Messages
 
 Use Conventional Commits with a scope:
