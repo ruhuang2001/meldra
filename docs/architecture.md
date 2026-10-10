@@ -212,7 +212,7 @@ Unknown newer database schemas are rejected instead of downgraded.
 | One JSON session snapshot | 2 MiB, at most 100 messages |
 | Built-in command duration | 60 seconds by default, at most 120 seconds |
 
-Commands capture stdout/stderr separately for a 256 KiB model-facing excerpt
+Commands combine stdout/stderr into a 256 KiB model-facing excerpt
 and a log of up to 16 MiB, which is persisted as an artifact. Log output beyond
 that bound is discarded with a trailing truncation marker. Patch/edit and other
 tool-result artifacts retain their already bounded text. Database, WAL/SHM, snapshots, locks and temporary

@@ -2,11 +2,16 @@
 """Run Meldra's checks locally against staged files or a committed revision."""
 
 import argparse
+import math
 import os
 from pathlib import Path
 import subprocess
+import signal
 import sys
 import tempfile
+
+
+DEFAULT_CHECK_TIMEOUT_SECONDS = 900
 
 
 def git(*args):
@@ -28,6 +33,50 @@ def check_staged():
             sys.stderr.buffer.write(formatted.stderr)
             failed = True
     return 1 if failed else 0
+
+
+def run_local_check(snapshot, environment):
+    value = environment.get('MELDRA_LOCAL_CI_TIMEOUT', str(DEFAULT_CHECK_TIMEOUT_SECONDS))
+    try:
+        timeout = float(value)
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError
+    except ValueError:
+        print('MELDRA_LOCAL_CI_TIMEOUT must be a positive number of seconds', file=sys.stderr)
+        return 1
+
+    process = subprocess.Popen(['make', 'check'], cwd=snapshot, env=environment,
+                               start_new_session=(os.name != 'nt'))
+    def stop_processes():
+        if os.name == 'nt':
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            finally:
+                # Children can outlive make or ignore SIGTERM. Always clean
+                # the entire group, even if make has already exited.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        process.wait()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        print(f'Local CI timed out after {timeout:g} seconds; terminating make and its children.', file=sys.stderr)
+        stop_processes()
+        return 124
+    except KeyboardInterrupt:
+        stop_processes()
+        return 130
+    return process.returncode
 
 
 def main():
@@ -61,7 +110,7 @@ def main():
         for name in git('rev-parse', '--local-env-vars').decode().splitlines():
             environment.pop(name, None)
         print(f'Local CI: {label}; running make check on this computer.', flush=True)
-        return subprocess.run(['make', 'check'], cwd=snapshot, env=environment).returncode
+        return run_local_check(snapshot, environment)
 
 
 if __name__ == '__main__':

@@ -111,3 +111,31 @@ func TestToolOutputSlotCannotBecomeDuplicateExecution(t *testing.T) {
 		t.Fatalf("distinct operations with equal arguments collapsed: %+v %v", merged, err)
 	}
 }
+
+func TestMergeRetainsDistinctAssistantMessages(t *testing.T) {
+	message := func(id, text string) responses.ResponseOutputItemUnion {
+		raw, err := json.Marshal(map[string]any{"type": "message", "id": id, "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": text}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var item responses.ResponseOutputItemUnion
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	for _, test := range []struct {
+		id, text string
+		want     int
+	}{
+		{"streamed", "distinct explanation", 2},
+		{"streamed", "final text", 2},
+		{"", "final text", 1},
+		{"", "distinct explanation", 2},
+	} {
+		merged, err := mergeCompletedStreamOutput([]responses.ResponseOutputItemUnion{message("terminal", "final text")}, []responses.ResponseOutputItemUnion{message(test.id, test.text)})
+		if err != nil || len(merged) != test.want {
+			t.Fatalf("id=%q text=%q items=%d err=%v", test.id, test.text, len(merged), err)
+		}
+	}
+}

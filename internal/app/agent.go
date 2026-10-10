@@ -492,7 +492,10 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			}
 		}
 		if err != nil {
-			result = "Error: " + err.Error()
+			if result != "" {
+				result += "\n"
+			}
+			result += "Error: " + err.Error()
 		}
 		if a.events != nil {
 			detail := summarizeToolResult(result)

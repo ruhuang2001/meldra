@@ -8,7 +8,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +57,7 @@ func TestTaskNonGitPreflightFailureDoesNotBlockNextTool(t *testing.T) {
 func TestTaskCancelledGitPreflightHasKnownOutcome(t *testing.T) {
 	bin := t.TempDir()
 	ready := filepath.Join(bin, "ready")
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\ntouch "+strconv.Quote(ready)+"\nexec sleep 30\n"), 0700); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!/bin/sh\ntouch '"+strings.ReplaceAll(ready, "'", "'\"'\"'")+"'\nexec sleep 30\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -126,7 +125,7 @@ func TestTaskVerificationPreservesFailureAndStopsUnknown(t *testing.T) {
 			}
 			bin := t.TempDir()
 			marker := filepath.Join(bin, "calls")
-			script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> " + strconv.Quote(marker) + "\n"
+			script := "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '" + strings.ReplaceAll(marker, "'", "'\"'\"'") + "'\n"
 			if mode == "cancel" {
 				script += "exec sleep 30\n"
 			} else {

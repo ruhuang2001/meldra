@@ -26,8 +26,12 @@ func TestToolTransitions(t *testing.T) {
 	for _, from := range states {
 		for _, to := range states {
 			valid := from == ToolPlanned && (to == ToolRunning || to == ToolDeclined || to == ToolCancelled) || from == ToolRunning && (to == ToolSucceeded || to == ToolFailed || to == ToolDeclined || to == ToolCancelled || to == ToolUnknown)
-			if err := ToolTransition(from, to); (err == nil) != valid {
+			err := ToolTransition(from, to)
+			if (err == nil) != valid {
 				t.Errorf("transition %s -> %s: %v", from, to, err)
+			}
+			if err != nil && !errors.Is(err, ErrTransition) {
+				t.Errorf("missing typed transition error: %v", err)
 			}
 		}
 	}

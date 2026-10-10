@@ -312,7 +312,11 @@ func rejectSymlinkAncestors(path string) error {
 				return fmt.Errorf("symlink in private storage path: %s", path)
 			}
 		}
-		path = filepath.Dir(path)
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+		path = parent
 	}
 	return nil
 }

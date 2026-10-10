@@ -7,7 +7,7 @@ Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-
 > **Early stage:** Meldra is experimental. Review every change it makes and avoid running it in directories with sensitive or irreplaceable files.
 
 This branch implements the upcoming **0.2.0 foreground task runtime**. It is
-under integration; the latest published binary may not include the task
+under integration; the latest published binary may not include the skills and task
 commands below.
 
 ## Requirements
@@ -220,6 +220,8 @@ before pushing. The push check uses the exact committed revisions being pushed;
 the manual `make check-local-ci` command uses staged contents, so stage new or
 modified files first. Temporary checks exclude untracked projects and do not
 rewrite working files. These commands consume no GitHub Actions minutes.
+Full local checks time out after 15 minutes and stop their process group; set
+`MELDRA_LOCAL_CI_TIMEOUT` to a positive number of seconds to adjust this limit.
 
 Skills E2E verification stays manual:
 
