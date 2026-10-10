@@ -886,7 +886,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if readErr != nil {
 		return readErr
 	}
-	return errors.Join(controller.inputError(), boundedOutput.Err())
+	return errors.Join(controller.inputError(), boundedOutput.Close())
 }
 
 func effectiveSettings(settings Settings) (Settings, error) {

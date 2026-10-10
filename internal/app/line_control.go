@@ -15,23 +15,28 @@ import (
 type synchronizedWriter struct {
 	mu        sync.Mutex
 	writer    io.Writer
+	terminal  *os.File
 	ctx       context.Context
 	deadline  interface{ SetWriteDeadline(time.Time) error }
 	err       error
+	fatal     error
+	pending   []byte
 	live      bool
 	closeOnce sync.Once
-	cleanup   func()
+	cleanup   func() error
 }
+
+const resumedOutputNotice = "\n[Output resumed after a stall; some display output was skipped.]\n"
 
 func (w *synchronizedWriter) Write(data []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.err != nil {
-		return 0, w.err
+	if w.fatal != nil {
+		return 0, w.fatal
 	}
 	if w.ctx != nil && w.ctx.Err() != nil {
-		w.err = w.ctx.Err()
-		return 0, w.err
+		w.recordError(w.ctx.Err())
+		return 0, w.fatal
 	}
 	if w.deadline != nil {
 		deadline := time.Now().Add(time.Second)
@@ -41,7 +46,7 @@ func (w *synchronizedWriter) Write(data []byte) (int, error) {
 			}
 		}
 		if err := w.deadline.SetWriteDeadline(deadline); err != nil {
-			w.err = err
+			w.recordError(err)
 			return 0, err
 		}
 		if w.ctx != nil {
@@ -57,24 +62,60 @@ func (w *synchronizedWriter) Write(data []byte) (int, error) {
 			defer w.deadline.SetWriteDeadline(time.Time{})
 		}
 	}
+	if len(w.pending) != 0 {
+		n, err := w.writer.Write(w.pending)
+		w.pending = w.pending[n:]
+		if err == nil && len(w.pending) != 0 {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			w.recordError(err)
+			return 0, err
+		}
+	}
 	n, err := w.writer.Write(data)
 	if err == nil && n != len(data) {
 		err = io.ErrShortWrite
 	}
 	if err != nil {
-		w.err = err
+		w.recordError(err)
+		if errors.Is(err, os.ErrDeadlineExceeded) && w.fatal == nil {
+			// Never replay the partially delivered payload. A resumed writer
+			// reports the gap once, and keeps any partial notice's cursor.
+			w.pending = []byte(resumedOutputNotice)
+		}
 	}
 	return n, err
 }
 
+// Keep the first failure for the CLI's exit status, but a temporary stalled
+// terminal must not suppress all later prompts and results in this session.
+func (w *synchronizedWriter) recordError(err error) {
+	hadError := w.err != nil
+	if !hadError {
+		w.err = err
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) || w.ctx != nil && w.ctx.Err() != nil {
+		if w.fatal == nil {
+			w.fatal = err
+			if hadError {
+				w.err = errors.Join(w.err, err)
+			}
+		}
+	}
+}
+
 func (w *synchronizedWriter) Err() error { w.mu.Lock(); defer w.mu.Unlock(); return w.err }
 
-// Fd preserves terminal detection and window-size queries without calling
-// os.File.Fd, which would switch a pollable descriptor back to blocking mode.
-// Non-file writers deliberately return the invalid descriptor sentinel.
+// Fd exposes the caller's terminal for detection and window-size queries. The
+// actual writer can be an independently reopened device or a private relay pipe.
+// SyscallConn avoids File.Fd changing a Go-pollable file to blocking mode.
 func (w *synchronizedWriter) Fd() uintptr {
-	file, ok := w.writer.(*os.File)
-	if !ok {
+	file := w.terminal
+	if file == nil {
+		file, _ = w.writer.(*os.File)
+	}
+	if file == nil {
 		return ^uintptr(0)
 	}
 	connection, err := file.SyscallConn()
@@ -89,17 +130,21 @@ func (w *synchronizedWriter) Fd() uintptr {
 }
 
 // Terminal libraries use io.ReadWriteCloser plus Fd to identify output devices.
-// This wrapper owns only its output duplicate; it neither reads the terminal's
-// input stream nor closes the caller's original file.
+// This wrapper neither reads terminal input nor closes the caller's file.
 func (w *synchronizedWriter) Read([]byte) (int, error) { return 0, os.ErrPermission }
 
 func (w *synchronizedWriter) Close() error {
 	w.closeOnce.Do(func() {
+		// Close interrupts a concurrent OS write before waiting for the mutex.
 		if w.cleanup != nil {
-			w.cleanup()
+			if err := w.cleanup(); err != nil {
+				w.mu.Lock()
+				w.recordError(err)
+				w.mu.Unlock()
+			}
 		}
 	})
-	return nil
+	return w.Err()
 }
 
 // Ordinary embedders retain the usual io.Writer contract. Background live
@@ -110,6 +155,7 @@ func newSynchronizedWriter(ctx context.Context, output io.Writer) (*synchronized
 		ctx = context.Background()
 	}
 	w := &synchronizedWriter{writer: output, ctx: ctx, live: output == io.Discard}
+	w.terminal, _ = output.(*os.File)
 	bounded, cleanup, err := deadlineOutput(output)
 	if err != nil {
 		return nil, nil, err
@@ -174,14 +220,10 @@ func (l *lineController) read() {
 		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 		if line != "" && !l.human.Load() {
 			if kind, text, ok := parseControlText(line); ok {
-				c := l.agent.initControl()
-				c.mu.Lock()
-				active := c.active
-				c.mu.Unlock()
-				if active {
-					controlErr := l.agent.SubmitControl(kind, text)
+				controlErr := l.agent.SubmitControl(kind, text)
+				if !errors.Is(controlErr, ErrNoActiveTurn) {
 					if controlErr != nil {
-						fmt.Fprintln(l.output, "Control failed:", controlErr)
+						fmt.Fprintln(l.output, "Control failed:", sanitizeTerminalText(controlErr.Error()), "\nUnsubmitted input:", sanitizeTerminalText(line))
 					} else {
 						fmt.Fprintln(l.output, map[string]string{"steer": "Steering received", "queue": "Queued", "stop": "Stop requested", "mode": "Mode change requested"}[kind])
 					}
@@ -190,6 +232,8 @@ func (l *lineController) read() {
 					}
 					continue
 				}
+				// The turn may have ended while the line was read. Preserve the
+				// original input for the next ordinary request instead of losing it.
 			}
 		}
 		select {

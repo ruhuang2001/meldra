@@ -45,6 +45,13 @@ func TestManagedProcessHelper(t *testing.T) {
 	case "exit":
 		fmt.Print("hello\n\x1b[31mred\x1b[0m\n")
 		os.Exit(7)
+	case "quiet-tail":
+		fmt.Println("initial")
+		time.Sleep(20 * time.Millisecond)
+		fmt.Println("quiet-tail中")
+		for {
+			time.Sleep(time.Second)
+		}
 	case "wait":
 		fmt.Println("ready")
 		for {
