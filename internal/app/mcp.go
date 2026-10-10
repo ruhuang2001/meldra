@@ -125,13 +125,25 @@ func mcpTimeout(value *int, fallback int) time.Duration {
 	return time.Duration(fallback) * time.Second
 }
 
+// Count the encoded provider definition, including JSON escaping and metadata.
+func mcpDefinitionSize(definition ToolDefinition) (int, error) {
+	data, err := json.Marshal(struct {
+		Type        string         `json:"type"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  map[string]any `json:"parameters"`
+		Strict      bool           `json:"strict"`
+	}{"function", definition.Name, definition.Description, definition.Parameters, !definition.NonStrict})
+	return len(data), err
+}
+
 func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, selected string) (*mcpConnections, error) {
 	servers, err := loadMCPConfig(paths)
 	if err != nil {
 		return nil, err
 	}
 	connections := &mcpConnections{}
-	catalogBytes := 0
+	catalogBytes := 2 // Array brackets; each entry also reserves its separator.
 	names := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if selected != "" && name != selected {
@@ -153,8 +165,8 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		}
 		if err == nil {
 			for _, definition := range definitions {
-				schema, marshalErr := json.Marshal(definition.Parameters)
-				candidateBytes += len(schema) + len(definition.Description) + len(definition.Name)
+				size, marshalErr := mcpDefinitionSize(definition)
+				candidateBytes += size + 1
 				if marshalErr != nil || candidateBytes > 1<<20 {
 					err = fmt.Errorf("combined MCP catalog exceeds 1 MiB or has invalid schema")
 					break
@@ -230,7 +242,7 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 	}
 	var definitions []ToolDefinition
 	seen := map[string]bool{}
-	schemaBytes := 0
+	schemaBytes := 2
 	if caps := session.InitializeResult().Capabilities; caps != nil && caps.Tools != nil {
 		for remote, err := range session.Tools(startupCtx, nil) {
 			if err != nil {
@@ -248,10 +260,6 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			if err != nil {
 				return fail(fmt.Errorf("invalid tool schema"))
 			}
-			schemaBytes += len(data) + len(remote.Description)
-			if schemaBytes > 1<<20 {
-				return fail(fmt.Errorf("tool catalog exceeds 1 MiB"))
-			}
 			var parameters map[string]any
 			if json.Unmarshal(data, &parameters) != nil || parameters["type"] != "object" {
 				return fail(fmt.Errorf("tool schema must be an object"))
@@ -264,10 +272,16 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			if err != nil {
 				return fail(fmt.Errorf("tool schema has invalid or external references"))
 			}
-			definitions = append(definitions, ToolDefinition{Name: nameOnWire, Description: "External MCP tool from " + name + "/" + remote.Name + ". " + remote.Description,
+			definition := ToolDefinition{Name: nameOnWire, Description: "External MCP tool from " + name + "/" + remote.Name + ". " + remote.Description,
 				Parameters: parameters, NonStrict: true, Function: workspace.bindTool(func(input json.RawMessage) (string, error) {
 					return workspace.callMCP(session, name, remote.Name, config.ToolTimeout, resolved, input)
-				})})
+				})}
+			size, err := mcpDefinitionSize(definition)
+			schemaBytes += size + 1
+			if err != nil || schemaBytes > 1<<20 {
+				return fail(fmt.Errorf("tool catalog exceeds 1 MiB or has invalid schema"))
+			}
+			definitions = append(definitions, definition)
 		}
 	}
 	definitions = append(definitions, mcpCatalogTools(session, name, config, workspace)...)

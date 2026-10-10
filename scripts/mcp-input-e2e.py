@@ -95,8 +95,8 @@ def cancel_then_continue(binary, output, fixture):
         check_fixture_exit(wire)
         fixture.write(directory / 'provider-requests.json', server.provider_requests)
         assert any('followup-after-cancellation' in json.dumps(request.get('input')) for request in server.provider_requests), server.provider_requests
-        tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
-        detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True))
+        tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True, timeout=10))
+        detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True, timeout=10))
         fixture.write(directory / 'task.json', detail)
         assert len(detail['tool_calls']) == 1 and detail['tool_calls'][0]['status'] == 'succeeded', detail
         return {'name': 'cancel-then-continue', 'passed': True}
@@ -136,8 +136,8 @@ def main():
             assert process.returncode != 0 and 'unknown outcome' in stderr, (process.returncode, stderr)
             assert 'WARNING: DATA RACE' not in stderr
             check_fixture_exit(directory / 'wire.jsonl')
-            tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
-            detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True))
+            tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True, timeout=10))
+            detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True, timeout=10))
             fixture.write(directory / 'task.json', detail)
             assert len(detail['tool_calls']) == 1 and detail['tool_calls'][0]['status'] == 'unknown', detail
             reports.append({'name': mode, 'passed': True, 'elapsed_seconds': round(time.monotonic() - started, 2)})
@@ -191,8 +191,8 @@ def cancel_tui_approval(binary, output, fixture):
         process.wait(timeout=5)
         assert answered and stopped and process.returncode == 0 and b'WARNING: DATA RACE' not in transcript, transcript.decode(errors='replace')
         check_fixture_exit(wire)
-        tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
-        detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True))
+        tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True, timeout=10))
+        detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True, timeout=10))
         fixture.write(directory / 'task.json', detail)
         assert len(detail['tool_calls']) == 1 and detail['tool_calls'][0]['status'] == 'succeeded', detail
         return {'name': 'cancel-tui-approval', 'passed': True}

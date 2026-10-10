@@ -38,6 +38,8 @@ def serve(log):
             reply['result']['capabilities'] = {'resources': {}, 'prompts': {}}
         elif method == 'prompts/list':
             reply['result']['nextCursor'] = 'next-prompts'
+        elif method == 'resources/list' and log.parent.name == 'control-json':
+            reply['result']['resources'][0]['name'] = 'control-evidence:\u009b31m\u009dtitle\u009c'
         elif method == 'prompts/get':
             if request['params']['name'] == 'image':
                 reply['result'] = {'messages': [{'role': 'user', 'content': {'type': 'image', 'data': 'eA==', 'mimeType': 'image/png'}}]}
@@ -75,6 +77,7 @@ def run_case(binary, output, name):
     (home / 'config.toml').chmod(0o600)
     calls = {
         'resources': ['resources', 'selected'],
+        'control-json': ['resources', 'selected'],
         'pagination': ['resources', 'selected', 'second'],
         'opaque-cursor': ['resources', 'selected', '--', '-opaque-page'],
         'templates': ['templates', 'selected'],
@@ -131,6 +134,9 @@ def run_case(binary, output, name):
             data = json.loads(result.stdout)
             if name == 'resources':
                 assert data['nextCursor'] == 'second', data
+            elif name == 'control-json':
+                assert data['resources'][0]['name'] == 'control-evidence:\u009b31m\u009dtitle\u009c', data
+                assert not any(0x7f <= ord(char) <= 0x9f for char in result.stdout), 'terminal controls were printed verbatim'
             elif name == 'opaque-cursor':
                 assert any(row.get('params', {}).get('cursor') == '-opaque-page' for row in messages), messages
             elif name == 'pagination':
@@ -173,7 +179,7 @@ def main():
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True)
     checks = []
-    for name in ('resources', 'pagination', 'opaque-cursor', 'templates', 'read', 'prompts', 'prompt', 'image', 'run', 'run-auto', 'run-deny', 'run-image', 'disabled', 'unknown', 'invalid-pair', 'duplicate-pair', 'invalid-read', 'invalid-run', 'invalid-flag'):
+    for name in ('resources', 'control-json', 'pagination', 'opaque-cursor', 'templates', 'read', 'prompts', 'prompt', 'image', 'run', 'run-auto', 'run-deny', 'run-image', 'disabled', 'unknown', 'invalid-pair', 'duplicate-pair', 'invalid-read', 'invalid-run', 'invalid-flag'):
         if args.case and name != args.case:
             continue
         try:

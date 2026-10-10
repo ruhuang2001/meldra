@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -164,6 +165,7 @@ func mcpOAuthMCPClient(config mcpServerConfig, handler auth.OAuthHandler) *http.
 }
 
 type mcpOAuthHandler struct {
+	mu         sync.Mutex
 	base       *auth.AuthorizationCodeHandler
 	paths      ConfigPaths
 	name       string
@@ -171,9 +173,14 @@ type mcpOAuthHandler struct {
 	path       string
 	generation string
 	login      bool
+	pending    *mcpOAuthSession // Kept in memory until the MCP connection succeeds.
 }
 
 func (h *mcpOAuthHandler) Authorize(ctx context.Context, req *http.Request, resp *http.Response) error {
+	if !h.login {
+		_ = resp.Body.Close()
+		return fmt.Errorf("OAuth login required; run meldra mcp login %s", h.name)
+	}
 	return h.base.Authorize(ctx, req, resp)
 }
 
@@ -187,7 +194,54 @@ func (h *mcpOAuthHandler) TokenSource(ctx context.Context) (oauth2.TokenSource, 
 			return nil, err
 		}
 	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pending != nil {
+		return &mcpOAuthPendingTokenSource{ctx: ctx, paths: h.paths, name: h.name, config: h.config, generation: h.generation, token: h.pending.Token}, nil
+	}
 	return &mcpOAuthTokenSource{ctx: ctx, paths: h.paths, name: h.name, config: h.config, path: h.path, generation: h.generation, allowRefresh: true}, nil
+}
+
+type mcpOAuthPendingTokenSource struct {
+	ctx        context.Context
+	paths      ConfigPaths
+	name       string
+	config     mcpServerConfig
+	generation string
+	token      oauth2.Token
+}
+
+func (s *mcpOAuthPendingTokenSource) Token() (*oauth2.Token, error) {
+	if _, err := verifyConfigHome(s.paths); err != nil {
+		return nil, err
+	}
+	lock, err := acquireMCPOAuthLock(s.ctx, mcpOAuthLockPath(s.paths, s.name))
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := checkMCPOAuthBaseline(s.paths, s.name, s.generation, s.config); err != nil {
+		return nil, err
+	}
+	if !s.token.Valid() {
+		return nil, fmt.Errorf("OAuth login token expired; run meldra mcp login %s", s.name)
+	}
+	return &s.token, nil
+}
+
+func (h *mcpOAuthHandler) commit(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pending == nil {
+		return nil // A public endpoint did not require new credentials.
+	}
+	source, err := saveMCPToken(ctx, h.paths, h.name, h.generation, h.config, h.pending.Config, &h.pending.Token)
+	if err != nil {
+		return err
+	}
+	h.generation = source.generation
+	h.pending = nil
+	return nil
 }
 
 type mcpOAuthTokenSource struct {
@@ -208,11 +262,20 @@ func readMCPOAuthFile(path string) ([]byte, bool, error) {
 }
 
 func checkMCPOAuthGeneration(paths ConfigPaths, name, generation string, config mcpServerConfig) error {
+	if generation == "" {
+		return fmt.Errorf("OAuth session changed or was logged out; run meldra mcp login %s", name)
+	}
+	return checkMCPOAuthBaseline(paths, name, generation, config)
+}
+
+// An empty baseline permits the first login only while no generation exists.
+// Logout or another successful login invalidates every in-flight attempt.
+func checkMCPOAuthBaseline(paths ConfigPaths, name, generation string, config mcpServerConfig) error {
 	data, found, err := readMCPOAuthFile(mcpOAuthPath(paths, name) + ".generation")
 	if err != nil {
 		return err
 	}
-	if !found || generation == "" || string(data) != generation {
+	if found && (generation == "" || string(data) != generation) || !found && generation != "" {
 		return fmt.Errorf("OAuth session changed or was logged out; run meldra mcp login %s", name)
 	}
 	servers, err := loadMCPConfig(paths)
@@ -289,7 +352,7 @@ func (s *mcpOAuthTokenSource) Token() (*oauth2.Token, error) {
 	return token, nil
 }
 
-func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation string, config mcpServerConfig, cfg oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
+func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation string, config mcpServerConfig, cfg oauth2.Config, token *oauth2.Token) (*mcpOAuthTokenSource, error) {
 	if _, err := verifyConfigHome(paths); err != nil {
 		return nil, err
 	}
@@ -298,10 +361,12 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 		return nil, err
 	}
 	defer lock.Close()
-	if err := checkMCPOAuthGeneration(paths, name, generation, config); err != nil {
+	if err := checkMCPOAuthBaseline(paths, name, generation, config); err != nil {
 		return nil, err
 	}
-	if _, _, err := readMCPOAuthFile(mcpOAuthPath(paths, name)); err != nil {
+	path := mcpOAuthPath(paths, name)
+	previous, found, err := readMCPOAuthFile(path)
+	if err != nil {
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -310,13 +375,23 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 	if config.OAuth.ClientSecretEnv != "" {
 		cfg.ClientSecret = ""
 	}
+	generation = rand.Text()
 	session := mcpOAuthSession{Generation: generation, Binding: mcpOAuthBinding(config), Config: cfg, Token: *token}
 	encoded, err := json.Marshal(session)
 	if err != nil {
 		return nil, err
 	}
-	if err := atomicWriteFile(mcpOAuthPath(paths, name), encoded, 0o600); err != nil {
+	if err := atomicWriteFile(path, encoded, 0o600); err != nil {
 		return nil, err
+	}
+	if err := atomicWriteFile(path+".generation", []byte(generation), 0o600); err != nil {
+		var restoreErr error
+		if found {
+			restoreErr = atomicWriteFile(path, previous, 0o600)
+		} else {
+			restoreErr = os.Remove(path)
+		}
+		return nil, errors.Join(err, restoreErr, syncDirectory(paths.Home))
 	}
 	if err := syncDirectory(paths.Home); err != nil {
 		return nil, err
@@ -336,6 +411,13 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 	}
 	if err := validateMCPOAuthConfig(config); err != nil {
 		return nil, cleanup, err
+	}
+	var clientSecret string
+	if key := config.OAuth.ClientSecretEnv; key != "" {
+		clientSecret = os.Getenv(key)
+		if clientSecret == "" {
+			return nil, cleanup, fmt.Errorf("OAuth client secret environment variable is missing")
+		}
 	}
 	if _, err := verifyConfigHome(paths); err != nil {
 		return nil, cleanup, err
@@ -362,16 +444,10 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 	}
 	var generation string
 	if login {
-		generation = rand.Text()
-		generationPath := path + ".generation"
-		if _, _, err = readMCPOAuthFile(generationPath); err == nil {
-			err = atomicWriteFile(generationPath, []byte(generation), 0o600)
-		}
-		if err == nil && found {
-			err = os.Remove(path)
-		}
+		var data []byte
+		data, _, err = readMCPOAuthFile(path + ".generation")
 		if err == nil {
-			err = syncDirectory(paths.Home)
+			generation = string(data)
 		}
 	} else {
 		var saved mcpOAuthSession
@@ -388,6 +464,7 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 	if err != nil {
 		return nil, cleanup, err
 	}
+	h := &mcpOAuthHandler{paths: paths, name: name, config: config, path: path, generation: generation, login: login}
 	client := mcpOAuthHTTPClient(config)
 	loginAttempted := false
 	options := &auth.AuthorizationCodeHandlerConfig{RedirectURL: redirect, Client: client, RequestRefreshToken: true,
@@ -462,7 +539,13 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 			}
 		},
 		NewTokenSource: func(_ context.Context, cfg *oauth2.Config, token *oauth2.Token) (oauth2.TokenSource, error) {
-			return saveMCPToken(ctx, paths, name, generation, config, *cfg, token)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			h.mu.Lock()
+			h.pending = &mcpOAuthSession{Config: *cfg, Token: *token}
+			h.mu.Unlock()
+			return oauth2.StaticTokenSource(token), nil
 		}}
 	o := config.OAuth
 	if len(o.Scopes) > 0 {
@@ -471,12 +554,7 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 	if o.ClientID != "" {
 		options.PreregisteredClient = &oauthex.ClientCredentials{ClientID: o.ClientID, Issuer: o.Issuer}
 		if o.ClientSecretEnv != "" {
-			secret := os.Getenv(o.ClientSecretEnv)
-			if secret == "" {
-				cleanup()
-				return nil, func() {}, fmt.Errorf("OAuth client secret environment variable is missing")
-			}
-			options.PreregisteredClient.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: secret}
+			options.PreregisteredClient.ClientSecretAuth = &oauthex.ClientSecretAuth{ClientSecret: clientSecret}
 		}
 	} else if o.ClientIDMetadataURL != "" {
 		options.ClientIDMetadataDocumentConfig = &auth.ClientIDMetadataDocumentConfig{URL: o.ClientIDMetadataURL}
@@ -488,7 +566,8 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 		cleanup()
 		return nil, func() {}, err
 	}
-	return &mcpOAuthHandler{base: base, paths: paths, name: name, config: config, path: path, generation: generation, login: login}, cleanup, nil
+	h.base = base
+	return h, cleanup, nil
 }
 
 func runMCPLogin(ctx context.Context, paths ConfigPaths, name string, output io.Writer) error {
@@ -513,16 +592,18 @@ func runMCPLogin(ctx context.Context, paths ConfigPaths, name string, output io.
 		return fmt.Errorf("MCP OAuth login or connection failed: %s", mcpErrorKind(err))
 	}
 	defer session.Close()
+	if err := handler.(*mcpOAuthHandler).commit(ctx); err != nil {
+		return fmt.Errorf("save MCP OAuth login: %w", err)
+	}
 	fmt.Fprintf(output, "MCP server %s connected; OAuth session saved when authorization was required.\n", name)
 	return nil
 }
 func runMCPLogout(ctx context.Context, paths ConfigPaths, name string) error {
-	servers, err := loadMCPConfig(paths)
-	if err != nil {
-		return err
+	if name == "" || len(name) > 64 || !mcpNamePart.MatchString(name) {
+		return fmt.Errorf("invalid MCP server name")
 	}
-	if _, ok := servers[name]; !ok {
-		return fmt.Errorf("unknown MCP server")
+	if exists, err := verifyConfigHome(paths); err != nil || !exists {
+		return err
 	}
 	lock, err := acquireMCPOAuthLock(ctx, mcpOAuthLockPath(paths, name))
 	if err != nil {

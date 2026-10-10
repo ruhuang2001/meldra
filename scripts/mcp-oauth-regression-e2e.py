@@ -34,6 +34,8 @@ class Handler(base.Handler):
         server = self.server
         raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
         self.rfile = io.BytesIO(raw)
+        if self.path == '/register':
+            server.registrations += 1
         if self.path == '/register' and server.dynamic_secret:
             self.reply(dict(json.loads(raw), client_id='dynamic-fixture', client_secret=server.dynamic_secret, token_endpoint_auth_method='client_secret_basic'), 201)
             return
@@ -57,6 +59,9 @@ class Handler(base.Handler):
             if self.headers.get('Authorization') == 'Bearer fixture-access-' + str(server.token_serial) and server.token_serial:
                 method = body.get('method')
                 if method == 'initialize':
+                    if server.fail_initialize:
+                        self.reply({'jsonrpc': '2.0', 'id': body['id'], 'error': {'code': -32603, 'message': 'fixture connection failure after token exchange'}})
+                        return
                     self.reply({'jsonrpc': '2.0', 'id': body['id'], 'result': {'protocolVersion': '2025-11-25', 'serverInfo': {'name': 'regression', 'version': '1'}, 'capabilities': {'tools': {}}}})
                     return
                 if method == 'tools/list':
@@ -103,6 +108,8 @@ def prepare(binary, output, name):
     server.expected_secret = server.dynamic_secret = None
     server.secret_matches = []
     server.tool_delay = 0
+    server.registrations = 0
+    server.fail_initialize = False
     config = {'url': server.url + '/mcp', 'oauth': {}}
     base.set_config(home, config)
     assert base.login(binary, env, server, directory) == 0
@@ -223,6 +230,28 @@ def run_case(binary, output, name):
             assert login_process.returncode != 0, 'logged-out authorization was accepted'
             assert not path.exists(), 'pending browser login recreated credentials after logout'
             evidence['pending_login_rejected_after_logout'] = True
+        elif name in ('relogin-bad-issuer', 'relogin-bad-pkce', 'relogin-cancel', 'relogin-connection-failure'):
+            before = path.read_bytes()
+            generation_path = Path(str(path) + '.generation')
+            before_generation = generation_path.read_bytes()
+            server.bad_pkce = name == 'relogin-bad-pkce'
+            server.fail_initialize = name == 'relogin-connection-failure'
+            assert base.login(binary, env, server, directory, suffix='-failed', bad_issuer=name == 'relogin-bad-issuer', cancel=name == 'relogin-cancel') != 0
+            assert path.exists() and path.read_bytes() == before, 'failed re-login replaced or removed the active credentials'
+            assert generation_path.read_bytes() == before_generation, 'failed re-login invalidated active clients'
+            evidence['failed_relogin_preserved_session'] = True
+        elif name == 'logout-orphaned':
+            base.write(home / 'mcp.json', {'mcpServers': {}})
+            result = subprocess.run([str(binary), 'mcp', 'logout', 'fixture'], capture_output=True, text=True, env=env, timeout=10)
+            assert result.returncode == 0 and not path.exists(), result.stderr
+            evidence['orphaned_cache_removed'] = True
+        elif name == 'chat-reauthorization':
+            registrations = server.registrations
+            server.token_serial += 1  # Reject the valid but revoked cached token.
+            code, transcript = finish(start(binary, workspace, env), directory, 'reauthorization')
+            assert 'unavailable' in transcript, transcript
+            assert server.registrations == registrations, 'chat startup dynamically registered an unused OAuth client'
+            evidence['implicit_registration_rejected'] = True
         elif name in ('environment-secret', 'dynamic-secret'):
             secrets = ['environment-private-login-4321', 'environment-private-rotated-9876']
             if name == 'environment-secret':
@@ -241,6 +270,11 @@ def run_case(binary, output, name):
                 missing_env = dict(env)
                 del missing_env['MCP_FIXTURE_CLIENT_SECRET']
                 count = len(server.token_requests)
+                generation_path = Path(str(path) + '.generation')
+                before_generation = generation_path.read_bytes()
+                failed_login = subprocess.run([str(binary), 'mcp', 'login', 'fixture'], capture_output=True, text=True, env=missing_env, timeout=10)
+                assert failed_login.returncode != 0 and 'secret environment variable is missing' in failed_login.stderr, failed_login.stderr
+                assert path.exists() and path.read_bytes() == before and generation_path.read_bytes() == before_generation, 'missing secret destroyed the active login'
                 code, transcript = finish(start(binary, workspace, missing_env), directory, 'missing-secret')
                 assert 'secret environment variable is missing' in transcript, transcript
                 assert len(server.token_requests) == count and path.read_bytes() == before, 'missing environment secret reused persisted credentials'
@@ -313,12 +347,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--case', choices=['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool'])
+    cases = ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool', 'relogin-bad-issuer', 'relogin-bad-pkce', 'relogin-cancel', 'relogin-connection-failure', 'logout-orphaned', 'chat-reauthorization']
+    parser.add_argument('--case', choices=cases)
     args = parser.parse_args()
     args.binary, args.output = args.binary.resolve(), args.output.resolve()
     args.output.mkdir()
     checks = []
-    for name in ([args.case] if args.case else ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool']):
+    for name in ([args.case] if args.case else cases):
         checks.append(run_case(args.binary, args.output, name))
         base.write(args.output / 'report.json', checks)
         print(name + ': passed', flush=True)

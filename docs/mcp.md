@@ -106,7 +106,8 @@ HTTP 使用 HTTPS 或 loopback HTTP，拒绝 URL 内凭据/query/fragment 和重
 调用超时。配置最大 1 MiB、
 最多 16 个 server；每个工具目录最多 128 个工具、1 MiB schema/description。
 合计加载的外部工具最多 112 个、1 MiB 目录内容，为内置工具留出余量；超限
-server 会被关闭并显示 warning，不影响已经接入的 server。
+server 会被关闭并显示 warning，不影响已经接入的 server。目录大小按完整定义
+编码后的 JSON 计算，包含描述的转义和工具元数据。
 stdio 单帧和 HTTP 响应限制为 16 MiB。
 
 **配置授予启动信任**：stdio 进程在 runtime 初始化时启动，早于调用审批，使用
@@ -139,7 +140,7 @@ meldra mcp prompt SERVER NAME KEY=VALUE --run
 ```
 
 这些命令只连接指定服务器，可指定 `--workspace PATH`。`prompt` 默认输出完整
-JSON。若游标或参数以 `-` 开头，在它前面添加 `--`，例如
+JSON，终端控制字符使用 JSON 转义保留。若游标或参数以 `-` 开头，在它前面添加 `--`，例如
 `meldra mcp resources SERVER -- -opaque-cursor`。`--run` 展示文本提示并确认后
 启动模型工作流，角色只作为用户输入中的标签，
 不会变成系统权限。非文本 prompt 仍可查看，但不能交给当前文本工作流运行。
@@ -161,7 +162,8 @@ meldra mcp serve --workspace /path/to/project
 读写仍遵循 workspace 路径、`.git`、Meldra 配置目录保护及命令 allowlist；执行
 记录进入现有任务存储。需要批准的操作经上游 client 的 form elicitation 请求
 真人确认；client 不支持或拒绝交互时不执行。现代协议的批准状态绑定具体操作
-及参数且有有效期；旧协议使用服务回调。
+及参数且有有效期；撤销审批还绑定当时的最后一次修改，期间出现新修改或撤销
+后必须重新请求审批。验证和执行共用工作区锁；旧协议使用服务回调。
 
 `--auto-approve` 显式跳过所有工作区操作审批，包括修改和执行命令/验证，仅用于
 已授权的隔离环境。命令可能以 OS 用户权限运行工作区代码。这个模式目前只提供
@@ -203,6 +205,12 @@ python3 scripts/mcp-oauth-regression-e2e.py \
 这些检查证明所覆盖的本地集成路径，不能代替真实 OAuth 提供方、真实模型选择工具
 行为、所有第三方 MCP server 或完整规范的验收。证据包含本机路径及测试历史，
 留在忽略的 `dist`；测试脚本进入分支。
+
+官方 conformance targeted 验收也已运行：`server-initialize`、`tools-list`、
+`resources-list`、`prompts-list` 的基础场景全部通过。`server-stateless` 的剩余
+失败项需要 HTTP stateless、completion、订阅/通知或 server 发起 MRTR 等当前未实现
+能力，因此不能把该结果描述为完整 MCP 认证。真实第三方 OAuth 需要实际服务端账号、
+授权端点和浏览器登录；当前仓库只有本地 Codex MCP，没有可自动登录的第三方服务。
 
 ## 明确边界
 

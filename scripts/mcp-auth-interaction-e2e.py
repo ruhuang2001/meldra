@@ -86,6 +86,12 @@ def fixture(path, mode):
                 params['requestedSchema']['properties']['color'] = {'type': 'string', 'oneOf': [{'const': 'blue', 'title': 'Blue'}, {'const': 'green', 'title': 'Green'}]}
             if mode == 'titled-array':
                 params['requestedSchema']['properties']['color'] = {'type': 'array', 'items': {'anyOf': [{'const': 'blue', 'title': 'Blue'}, {'const': 'green', 'title': 'Green'}]}}
+            if mode in ('form-integer-exact', 'form-integer-exact-modern', 'form-integer-fraction', 'form-number-exact', 'format-password'):
+                field = {'type': 'number' if mode == 'form-number-exact' else 'string' if mode == 'format-password' else 'integer'}
+                if mode == 'format-password':
+                    field['format'] = 'password'
+                params['requestedSchema']['properties'] = {'value': field}
+                params['requestedSchema']['required'] = ['value']
             if mode.startswith('sampling'):
                 call = 'sampling/createMessage'
                 params = {'maxTokens': 17, 'systemPrompt': 'isolated-sampling-system', 'messages': [{'role': 'user', 'content': {'type': 'text', 'text': 'isolated-sampling-user'}}]}
@@ -97,7 +103,9 @@ def fixture(path, mode):
                     answer = request['params']['inputResponses']['interaction']
                 else:
                     print(json.dumps({'jsonrpc': '2.0', 'id': 'interaction', 'method': call, 'params': params}), flush=True)
-                    answer = json.loads(sys.stdin.readline())
+                    response_line = sys.stdin.readline()
+                    log(path, {'interaction_response_raw': response_line.rstrip('\n')})
+                    answer = json.loads(response_line)
                 log(path, {'interaction_response': answer})
                 result = {'content': [{'type': 'text', 'text': 'interaction-evidence: ' + json.dumps(answer)}]}
                 if mode.endswith('-modern'):
@@ -265,8 +273,19 @@ def interaction_case(binary, output, mode, stdin, expected):
         assert expected in json.dumps(answer), answer
         if mode == 'form-retry':
             assert result.stdout.count('Schema:') >= 2, 'retry hides the schema'
-        if mode in ('secret-camel', 'schema-additional', 'schema-pattern', 'schema-composition'):
+        if mode in ('secret-camel', 'schema-additional', 'schema-pattern', 'schema-composition', 'format-password'):
             assert 'Enter one JSON object' not in result.stdout, 'invalid schema reached user input'
+        if mode in ('form-integer-exact', 'form-integer-exact-modern', 'form-number-exact', 'form-integer-fraction'):
+            response = answer if mode.endswith('-modern') else answer['result']
+            assert response['action'] == 'accept', response
+            value = response['content']['value']
+            if mode.startswith('form-integer-exact'):
+                assert value == 9007199254740993, 'large integer changed on the wire'
+            elif mode == 'form-integer-fraction':
+                assert value == 42 and result.stdout.count('Schema:') >= 2, 'fractional integer was accepted'
+            else:
+                # Inspect the wire spelling too: Python's float parser also rounds decimals.
+                assert '0.1234567890123456789' in (directory / 'wire.jsonl').read_text(), 'decimal changed on the wire'
         samples = [r for r in server.provider_requests if r.get('instructions') == 'isolated-sampling-system']
         if mode.startswith('sampling-accept') or mode == 'sampling-share-decline':
             assert samples, 'sampling provider was not invoked'
@@ -280,7 +299,7 @@ def interaction_case(binary, output, mode, stdin, expected):
         server.server_close()
 
 
-def login(binary, env, server, directory, suffix='', wrong_state=False, bad_issuer=False):
+def login(binary, env, server, directory, suffix='', wrong_state=False, bad_issuer=False, cancel=False):
     process = subprocess.Popen([str(binary), 'mcp', 'login', 'fixture'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
     lines = queue.Queue()
     def reader():
@@ -299,6 +318,9 @@ def login(binary, env, server, directory, suffix='', wrong_state=False, bad_issu
                 continue
             output.append(line)
             if line.startswith(server.url + '/authorize?'):
+                if cancel:
+                    process.terminate()
+                    break
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(line.strip()).query)
                 assert query['resource'] == [server.url + '/mcp']
                 assert query['code_challenge_method'] == ['S256']
@@ -385,6 +407,8 @@ def main():
         write(args.output / 'report.json', checks)
     checks.append(oauth_case(args.binary, args.output))
     for mode, stdin, expected in [('secret-camel', '', 'sensitive elicitation'), ('schema-additional', '', 'flat elicitation'), ('schema-pattern', '', 'flat elicitation'), ('schema-composition', '', 'flat elicitation'), ('form-extra', '{"color":"blue","apiKey":"fixture-only"}\ndecline\n', 'decline'), ('titled-enum', '{"color":"blue"}\n', 'blue'), ('titled-array', '{"color":["blue"]}\n', 'blue')]:
+        checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
+    for mode, stdin, expected in [('format-password', '', 'unsupported format'), ('form-integer-exact', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-exact-modern', '{"value":9007199254740993}\n', '9007199254740993'), ('form-integer-fraction', '{"value":9007199254740993.5}\n{"value":42}\n', '42')]:
         checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
     write(args.output / 'report.json', checks)
     write(args.output / 'checksums.json', {str(p.relative_to(args.output)): hashlib.sha256(p.read_bytes()).hexdigest() for p in args.output.rglob('*') if p.is_file() and 'home' not in p.relative_to(args.output).parts})

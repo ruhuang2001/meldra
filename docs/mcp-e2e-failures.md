@@ -4,7 +4,7 @@ Written before the executable fixture. Use the real built meldra binary with iso
 
 | Failure | Independent observable check |
 | --- | --- |
-| stdio or HTTP transport unsupported | Real wire handshake, discovered schema, invocation log and succeeded durable call. |
+| stdio or HTTP transport support | Real wire handshake, discovered schema, invocation log and succeeded durable call. |
 | Optional schemas forced strict | Provider sees optional property and strict:false. |
 | Pagination ignored | Second-page tool is advertised and called. |
 | Names collide | Two servers with echo produce distinct advertised names and invocation logs. |
@@ -20,7 +20,8 @@ Written before the executable fixture. Use the real built meldra binary with iso
 | Huge output floods model | Bounded continuation and preserved full-result artifact. |
 | Process leaks | All recorded fixture PIDs are gone after CLI exit. |
 
-No unit tests are added. The protocol fixture implements only the methods needed by these scenarios.
+The protocol fixture implements only the methods needed by these scenarios; focused Go
+tests cover numeric elicitation precision, sensitive formats, and sampling deadlines.
 
 HTTP startup regression: a two-second initialize must succeed with a ten-second
 startup allowance even when the separate tool-call deadline is one second.
