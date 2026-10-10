@@ -14,7 +14,21 @@ import sys
 import time
 
 
+def record_pid(wire):
+    wire.with_suffix('.pid').write_text(str(os.getpid()))
+
+
+def check_fixture_exit(wire):
+    pid = int(wire.with_suffix('.pid').read_text())
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return
+    raise AssertionError(f'MCP fixture {pid} survived Meldra exit')
+
+
 def cancel_fixture(wire, url=False):
+    record_pid(wire)
     def send(value):
         print(json.dumps(dict(jsonrpc='2.0', **value)), flush=True)
 
@@ -78,6 +92,7 @@ def cancel_then_continue(binary, output, fixture):
         transcript.extend(stdout)
         transcript.extend(stderr)
         assert process.returncode == 0 and b'WARNING: DATA RACE' not in transcript, (process.returncode, transcript.decode())
+        check_fixture_exit(wire)
         fixture.write(directory / 'provider-requests.json', server.provider_requests)
         assert any('followup-after-cancellation' in json.dumps(request.get('input')) for request in server.provider_requests), server.provider_requests
         tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
@@ -111,7 +126,7 @@ def main():
         directory, home, workspace, server, env = fixture.setup(output, mode)
         process = None
         try:
-            fixture.set_config(home, {'command': sys.executable, 'args': [str(fixture_path), '--fixture', str(directory / 'wire.jsonl'), mode], 'sampling': mode.startswith('sampling'), 'tool_timeout_sec': 1})
+            fixture.set_config(home, {'command': sys.executable, 'args': [str(Path(__file__).resolve()), '--tracked-fixture', str(directory / 'wire.jsonl'), mode], 'sampling': mode.startswith('sampling'), 'tool_timeout_sec': 1})
             started = time.monotonic()
             process = subprocess.Popen([str(binary), '--workspace', str(workspace), '--prompt', 'request interaction', '--auto-approve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
             # Leave stdin open deliberately: communicate(input='') would hide the bug.
@@ -120,6 +135,7 @@ def main():
             (directory / 'transcript.txt').write_text(stdout + stderr)
             assert process.returncode != 0 and 'unknown outcome' in stderr, (process.returncode, stderr)
             assert 'WARNING: DATA RACE' not in stderr
+            check_fixture_exit(directory / 'wire.jsonl')
             tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
             detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True))
             fixture.write(directory / 'task.json', detail)
@@ -135,6 +151,7 @@ def main():
             server.server_close()
     reports.append(cancel_then_continue(binary, output, fixture))
     reports.append(cancel_tui_approval(binary, output, fixture))
+    reports.extend(stdin_sources(binary, output, fixture))
     fixture.write(output / 'report.json', reports)
     fixture.write(output / 'checksums.json', {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest() for p in output.rglob('*') if p.is_file() and 'home' not in p.relative_to(output).parts})
     print(json.dumps(reports, indent=2))
@@ -173,6 +190,7 @@ def cancel_tui_approval(binary, output, fixture):
                 break
         process.wait(timeout=5)
         assert answered and stopped and process.returncode == 0 and b'WARNING: DATA RACE' not in transcript, transcript.decode(errors='replace')
+        check_fixture_exit(wire)
         tasks = json.loads(subprocess.check_output([str(binary), 'tasks', '--json'], env=env, text=True))
         detail = json.loads(subprocess.check_output([str(binary), 'task', 'show', tasks[0]['id'], '--json'], env=env, text=True))
         fixture.write(directory / 'task.json', detail)
@@ -188,8 +206,41 @@ def cancel_tui_approval(binary, output, fixture):
         server.server_close()
 
 
+def stdin_sources(binary, output, fixture):
+    reports = []
+    for name in ('regular-file', 'dev-null', 'dev-zero'):
+        directory, home, workspace, server, env = fixture.setup(output, name)
+        try:
+            regular = directory / 'stdin.txt'
+            regular.write_text('')
+            source = regular if name == 'regular-file' else Path(os.devnull if name == 'dev-null' else '/dev/zero')
+            # --prompt avoids a blocking user read before the unsupported-device guard.
+            with source.open('rb') as stdin:
+                result = subprocess.run([str(binary), '--workspace', str(workspace), '--prompt', 'EOF fixture'], stdin=stdin, capture_output=True, timeout=8, env=env)
+            (directory / 'transcript.txt').write_bytes(result.stdout + result.stderr)
+            assert b'WARNING: DATA RACE' not in result.stderr
+            if name == 'dev-zero':
+                assert result.returncode != 0 and b'unsupported nonterminal character device' in result.stderr, result
+                assert not server.provider_requests, server.provider_requests
+            else:
+                assert result.returncode == 0 and b'E2E complete' in result.stdout, result
+            reports.append({'name': name, 'passed': True})
+        finally:
+            server.shutdown()
+            server.server_close()
+    return reports
+
+
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] in ('--cancel-fixture', '--cancel-url-fixture'):
         cancel_fixture(Path(sys.argv[2]), url=sys.argv[1] == '--cancel-url-fixture')
+    elif len(sys.argv) == 4 and sys.argv[1] == '--tracked-fixture':
+        wire = Path(sys.argv[2])
+        record_pid(wire)
+        fixture_path = Path(__file__).with_name('mcp-auth-interaction-e2e.py')
+        spec = importlib.util.spec_from_file_location('interaction_fixture', fixture_path)
+        fixture = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fixture)
+        fixture.fixture(wire, sys.argv[3])
     else:
         main()

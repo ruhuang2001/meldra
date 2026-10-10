@@ -63,7 +63,7 @@ Meldra 可以连接外部 MCP server，也能通过 `meldra mcp serve` 将自身
 
 先执行 `meldra config init`，再手动创建 `~/.meldra/mcp.json`；设置
 `MELDRA_HOME` 后改用 `$MELDRA_HOME/mcp.json`。目录须为 0700，文件须为 0600，
-不能是符号链接。缺少该文件时不启动 MCP server。
+不能是符号链接。缺少该文件时不启动外部 MCP server；`meldra mcp serve` 不依赖此文件。
 
 ```json
 {
@@ -105,6 +105,8 @@ HTTP 使用 HTTPS 或 loopback HTTP，拒绝 URL 内凭据/query/fragment 和重
 单独等待最多五分钟；OAuth metadata/token 请求最多 30 秒，MCP 请求遵循配置的
 调用超时。配置最大 1 MiB、
 最多 16 个 server；每个工具目录最多 128 个工具、1 MiB schema/description。
+合计加载的外部工具最多 112 个、1 MiB 目录内容，为内置工具留出余量；超限
+server 会被关闭并显示 warning，不影响已经接入的 server。
 stdio 单帧和 HTTP 响应限制为 16 MiB。
 
 **配置授予启动信任**：stdio 进程在 runtime 初始化时启动，早于调用审批，使用
@@ -137,7 +139,9 @@ meldra mcp prompt SERVER NAME KEY=VALUE --run
 ```
 
 这些命令只连接指定服务器，可指定 `--workspace PATH`。`prompt` 默认输出完整
-JSON；`--run` 展示文本提示并确认后启动模型工作流，角色只作为用户输入中的标签，
+JSON。若游标或参数以 `-` 开头，在它前面添加 `--`，例如
+`meldra mcp resources SERVER -- -opaque-cursor`。`--run` 展示文本提示并确认后
+启动模型工作流，角色只作为用户输入中的标签，
 不会变成系统权限。非文本 prompt 仍可查看，但不能交给当前文本工作流运行。
 资源订阅、目录变更通知和 prompt 参数自动补全尚未接入。
 
@@ -159,7 +163,8 @@ meldra mcp serve --workspace /path/to/project
 真人确认；client 不支持或拒绝交互时不执行。现代协议的批准状态绑定具体操作
 及参数且有有效期；旧协议使用服务回调。
 
-`--auto-approve` 显式跳过修改审批，仅用于已授权的隔离环境。这个模式目前只提供
+`--auto-approve` 显式跳过所有工作区操作审批，包括修改和执行命令/验证，仅用于
+已授权的隔离环境。命令可能以 OS 用户权限运行工作区代码。这个模式目前只提供
 stdio，没有监听 HTTP 端口、后台 daemon 或将其他 MCP server 转发出去。
 
 ## 可重复验证

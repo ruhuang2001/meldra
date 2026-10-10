@@ -7,19 +7,19 @@
     "go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./..."
   ],
   "result": "passed",
-  "coverage_percent": 82.4,
+  "coverage_percent": 82.6,
   "coverage_minimum_percent": 75.0,
   "suites": {
-    "mcp-e2e": 41,
-    "mcp-auth-interaction-e2e": 18,
-    "mcp-cli-e2e": 18,
-    "mcp-input-e2e": 5,
-    "mcp-oauth-regression-e2e": 8
+    "mcp-e2e": 46,
+    "mcp-auth-interaction-e2e": 25,
+    "mcp-cli-e2e": 19,
+    "mcp-input-e2e": 8,
+    "mcp-oauth-regression-e2e": 11
   },
-  "source_manifest_sha256": "816818b8ab37073ccdf9496840916980756cc7017dd2760c4a52f3306d2713e2",
-  "instrumented_binary_sha256": "45482e6e3abde6cfc54d0c2eaa79492d77485f971e5317219e86484ea2f9a795",
-  "report_sha256": "fe4476bef00027e94a8559546a260858f5b2da3d12b12292f659c66e841b743c",
-  "evidence_checksums_sha256": "120f2e746b70adc09b36f78bcfb8a67c2038918e2c132765cfbc59b043062753",
+  "source_manifest_sha256": "71de616eba4189e07a188e832fe55ad4a0f6fa1d1a0511948969a93c115c55aa",
+  "instrumented_binary_sha256": "122ec3e73789917b71aa22d292502fd74fc51ccd0fcee4d43f2310b082824be1",
+  "report_sha256": "b044141099b917c1b0445d6c0a964579198ca417ca5d6938a50b11052fa81c6b",
+  "evidence_checksums_sha256": "5b9cf696c6bbdad50262a37048c2bad646232ad155dfc5379292b744d4ad88a1",
   "real_codex_mcp": {
     "server": "node_repl",
     "tools_discovered": 4,

@@ -20,6 +20,8 @@ OAuth 与静态 `bearer_token_env` 不能同时配置，OAuth 仅适用于 HTTP 
 `oauth: {}` 使用官方 SDK 的动态客户端注册。若服务提供预注册客户端，配置
 `client_id`；需要 secret 时使用 `client_secret_env` 指定环境变量名，并设置
 `issuer` 将 secret 绑定到该授权服务器。也可使用 HTTPS 的 `client_id_metadata_url`。
+`client_secret_env` 的值不会复制进缓存，刷新时从当前进程环境重新读取；动态注册
+由授权服务器签发的 client secret 则保存在私有缓存中，以便后续刷新。
 可选 `scopes` 为字符串数组；默认使用服务公布的 scope；可选 `callback_port`
 固定本机回调端口（预注册客户端通常需要固定端口），默认使用临时端口。
 
@@ -63,7 +65,7 @@ sampling 已在 MCP `2026-07-28` 标准中标记废弃，目前保留本能力�
 CLI 和 TUI 均支持 form/URL 请求。form 显示服务器身份、说明和 JSON schema，
 用户输入一个 JSON 对象、`decline` 或 `cancel`。TUI 在下方输入框填写，Enter
 提交，Esc 取消。字段限扁平字符串、数值、整数、布尔值及字符串枚举数组，最多
-32 个字段；输入经 schema 验证，最多允许三次纠正。带明显密码、API key、token
+32 个字段；输入经 schema 验证，最多允许三次提交（包括首次）。带明显密码、API key、token
 等字段名称/描述的表单会被拒绝；这是额外拦截，不是通用秘密识别器。不要在 form
 输入凭据；这类交互必须使用 URL 模式。EOF 取消表单，自动审批不会
 伪造答案。form 输入直接交给请求它的 server，server 仍可能在后续结果中回显。

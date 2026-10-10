@@ -1135,9 +1135,19 @@ func (w *Workspace) confirmPrompt(prompt string) bool {
 	if w.autoApprove {
 		return true
 	}
-	fmt.Fprint(w.output, prompt)
 	for {
-		answer, err := w.input.ReadString('\n')
+		var answer string
+		var err error
+		if w.mcpInput != nil {
+			var ok bool
+			answer, ok = w.mcpInput(w.ctx, prompt)
+			if !ok {
+				return false
+			}
+		} else {
+			fmt.Fprint(w.output, prompt)
+			answer, err = w.input.ReadString('\n')
+		}
 		answer = strings.TrimSpace(answer)
 		answer = strings.TrimPrefix(answer, "\x1b[200~")
 		answer = strings.TrimSuffix(answer, "\x1b[201~")
@@ -1151,7 +1161,7 @@ func (w *Workspace) confirmPrompt(prompt string) bool {
 		if err != nil {
 			return false
 		}
-		fmt.Fprint(w.output, "Please enter y or n: ")
+		prompt = "Please enter y or n: "
 	}
 }
 

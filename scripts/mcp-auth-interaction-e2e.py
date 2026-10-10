@@ -2,6 +2,9 @@
 """Real-binary OAuth, sampling, elicitation checks; writes repeatable wire/report artifacts.
 Failure matrix: bad state/PKCE/issuer, unauthorized/token refresh/config binding,
 secret or malformed forms, decline/cancel, maxTokens and model-context isolation.
+Schema regressions: reject camelCase secrets, additional/pattern properties and
+object composition before prompting; reject undeclared answers; retain schema
+on retries; allow supported titled enums and string-enum arrays.
 """
 import argparse
 import base64
@@ -68,8 +71,21 @@ def fixture(path, mode):
             if mode == 'url-insecure':
                 params['url'] = 'http://example.com/insecure'
             if mode.startswith('secret'):
-                params['requestedSchema']['properties'] = {'password': {'type': 'string'}}
-                params['requestedSchema']['required'] = ['password']
+                key = 'apiKey' if mode == 'secret-camel' else 'password'
+                params['requestedSchema']['properties'] = {key: {'type': 'string'}}
+                params['requestedSchema']['required'] = [key]
+            if mode == 'schema-additional':
+                params['requestedSchema']['additionalProperties'] = {'type': 'object'}
+            if mode == 'schema-pattern':
+                params['requestedSchema']['patternProperties'] = {'.*': {'type': 'object'}}
+            if mode == 'schema-composition':
+                params['requestedSchema']['allOf'] = [{'properties': {'password': {'type': 'string'}}}]
+            if mode == 'form-extra':
+                params['requestedSchema'].pop('additionalProperties')
+            if mode == 'titled-enum':
+                params['requestedSchema']['properties']['color'] = {'type': 'string', 'oneOf': [{'const': 'blue', 'title': 'Blue'}, {'const': 'green', 'title': 'Green'}]}
+            if mode == 'titled-array':
+                params['requestedSchema']['properties']['color'] = {'type': 'array', 'items': {'anyOf': [{'const': 'blue', 'title': 'Blue'}, {'const': 'green', 'title': 'Green'}]}}
             if mode.startswith('sampling'):
                 call = 'sampling/createMessage'
                 params = {'maxTokens': 17, 'systemPrompt': 'isolated-sampling-system', 'messages': [{'role': 'user', 'content': {'type': 'text', 'text': 'isolated-sampling-user'}}]}
@@ -247,6 +263,10 @@ def interaction_case(binary, output, mode, stdin, expected):
         wire = [json.loads(line) for line in (directory / 'wire.jsonl').read_text().splitlines()]
         answer = next(m['interaction_response'] for m in wire if 'interaction_response' in m)
         assert expected in json.dumps(answer), answer
+        if mode == 'form-retry':
+            assert result.stdout.count('Schema:') >= 2, 'retry hides the schema'
+        if mode in ('secret-camel', 'schema-additional', 'schema-pattern', 'schema-composition'):
+            assert 'Enter one JSON object' not in result.stdout, 'invalid schema reached user input'
         samples = [r for r in server.provider_requests if r.get('instructions') == 'isolated-sampling-system']
         if mode.startswith('sampling-accept') or mode == 'sampling-share-decline':
             assert samples, 'sampling provider was not invoked'
@@ -364,8 +384,10 @@ def main():
         checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
         write(args.output / 'report.json', checks)
     checks.append(oauth_case(args.binary, args.output))
+    for mode, stdin, expected in [('secret-camel', '', 'sensitive elicitation'), ('schema-additional', '', 'flat elicitation'), ('schema-pattern', '', 'flat elicitation'), ('schema-composition', '', 'flat elicitation'), ('form-extra', '{"color":"blue","apiKey":"fixture-only"}\ndecline\n', 'decline'), ('titled-enum', '{"color":"blue"}\n', 'blue'), ('titled-array', '{"color":["blue"]}\n', 'blue')]:
+        checks.append(interaction_case(args.binary, args.output, mode, stdin, expected))
     write(args.output / 'report.json', checks)
-    write(args.output / 'checksums.json', {str(p.relative_to(args.output)): hashlib.sha256(p.read_bytes()).hexdigest() for p in args.output.rglob('*') if p.is_file() and '/home/' not in str(p)})
+    write(args.output / 'checksums.json', {str(p.relative_to(args.output)): hashlib.sha256(p.read_bytes()).hexdigest() for p in args.output.rglob('*') if p.is_file() and 'home' not in p.relative_to(args.output).parts})
     print(json.dumps(checks, indent=2))
 
 

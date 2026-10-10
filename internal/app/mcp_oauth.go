@@ -252,8 +252,18 @@ func (s *mcpOAuthTokenSource) Token() (*oauth2.Token, error) {
 	if !s.allowRefresh && !saved.Token.Valid() {
 		return nil, fmt.Errorf("OAuth notification requires a valid cached token")
 	}
+	refreshConfig := saved.Config
+	scrubbedSecret := false
+	if key := s.config.OAuth.ClientSecretEnv; key != "" {
+		refreshConfig.ClientSecret = os.Getenv(key)
+		if refreshConfig.ClientSecret == "" {
+			return nil, fmt.Errorf("OAuth client secret environment variable is missing")
+		}
+		scrubbedSecret = saved.Config.ClientSecret != ""
+		saved.Config.ClientSecret = ""
+	}
 	refreshContext := context.WithValue(s.ctx, oauth2.HTTPClient, mcpOAuthHTTPClient(s.config))
-	token, err := saved.Config.TokenSource(refreshContext, &saved.Token).Token()
+	token, err := refreshConfig.TokenSource(refreshContext, &saved.Token).Token()
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return nil, s.ctx.Err()
@@ -263,7 +273,7 @@ func (s *mcpOAuthTokenSource) Token() (*oauth2.Token, error) {
 	if err := s.ctx.Err(); err != nil {
 		return nil, err
 	}
-	if token.AccessToken != saved.Token.AccessToken || token.RefreshToken != saved.Token.RefreshToken || !token.Expiry.Equal(saved.Token.Expiry) {
+	if scrubbedSecret || token.AccessToken != saved.Token.AccessToken || token.RefreshToken != saved.Token.RefreshToken || !token.Expiry.Equal(saved.Token.Expiry) {
 		saved.Token = *token
 		data, err = json.Marshal(saved)
 		if err != nil {
@@ -297,6 +307,9 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if config.OAuth.ClientSecretEnv != "" {
+		cfg.ClientSecret = ""
+	}
 	session := mcpOAuthSession{Generation: generation, Binding: mcpOAuthBinding(config), Config: cfg, Token: *token}
 	encoded, err := json.Marshal(session)
 	if err != nil {
@@ -311,8 +324,13 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 	return &mcpOAuthTokenSource{ctx: ctx, paths: paths, name: name, config: config, path: mcpOAuthPath(paths, name), generation: generation, allowRefresh: true}, nil
 }
 
-func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcpServerConfig, output io.Writer, login bool) (auth.OAuthHandler, func(), error) {
-	cleanup := func() {}
+func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcpServerConfig, output io.Writer, login bool) (handler auth.OAuthHandler, cleanup func(), err error) {
+	cleanup = func() {}
+	defer func() {
+		if err != nil {
+			cleanup()
+		}
+	}()
 	if config.OAuth == nil {
 		return nil, cleanup, nil
 	}
@@ -321,6 +339,16 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 	}
 	if _, err := verifyConfigHome(paths); err != nil {
 		return nil, cleanup, err
+	}
+	redirect := "http://127.0.0.1:1/callback"
+	var listener net.Listener
+	if login {
+		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.OAuth.CallbackPort))
+		if err != nil {
+			return nil, cleanup, err
+		}
+		cleanup = func() { _ = listener.Close() }
+		redirect = "http://" + listener.Addr().String() + "/callback"
 	}
 	path := mcpOAuthPath(paths, name)
 	lock, err := acquireMCPOAuthLock(ctx, mcpOAuthLockPath(paths, name))
@@ -361,16 +389,6 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 		return nil, cleanup, err
 	}
 	client := mcpOAuthHTTPClient(config)
-	redirect := "http://127.0.0.1:1/callback"
-	var listener net.Listener
-	if login {
-		listener, err = net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.OAuth.CallbackPort))
-		if err != nil {
-			return nil, cleanup, err
-		}
-		cleanup = func() { _ = listener.Close() }
-		redirect = "http://" + listener.Addr().String() + "/callback"
-	}
 	loginAttempted := false
 	options := &auth.AuthorizationCodeHandlerConfig{RedirectURL: redirect, Client: client, RequestRefreshToken: true,
 		AuthorizationCodeFetcher: func(ctx context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {

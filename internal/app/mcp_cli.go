@@ -23,6 +23,10 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 	var options ChatOptions
 	run := false
 	for index := 0; index < len(args); index++ {
+		if args[index] == "--" {
+			positional = append(positional, args[index+1:]...)
+			break
+		}
 		switch argument := args[index]; {
 		case argument == "--workspace":
 			index++
