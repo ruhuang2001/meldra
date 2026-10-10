@@ -141,6 +141,9 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			return err
 		}
 		server.AddTool(&mcp.Tool{Name: definition.Name, Description: definition.Description, InputSchema: definition.Parameters}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if len(req.Params.Arguments) == 0 {
+				req.Params.Arguments = json.RawMessage(`{}`)
+			}
 			var arguments map[string]any
 			if len(req.Params.Arguments) > maxApprovalPreviewBytes || json.Unmarshal(req.Params.Arguments, &arguments) != nil || arguments == nil || resolved.Validate(arguments) != nil {
 				return mcpServeResult("invalid tool arguments", true), nil

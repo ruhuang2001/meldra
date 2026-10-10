@@ -473,6 +473,8 @@ def run_serve_case(binary, output, name):
             return {'name': name, 'passed': True, 'exit_code': process.returncode}
         tools = request('tools/list', {})['result']['tools']
         assert {'read_file', 'edit_file', 'git_review'} <= {t['name'] for t in tools}
+        response = request('tools/call', {'name': 'git_review'})
+        assert 'result' in response and 'invalid tool arguments' not in json.dumps(response), response
         response = request('tools/call', {'name': 'read_file', 'arguments': {'path': 'hello.txt', 'offset': None, 'limit': None}})
         assert 'server-read-evidence' in json.dumps(response), response
         response = request('tools/call', {'name': 'read_file', 'arguments': {'path': '../outside', 'offset': None, 'limit': None}})

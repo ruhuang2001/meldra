@@ -109,6 +109,10 @@ def main():
         environment = os.environ.copy()
         for name in git('rev-parse', '--local-env-vars').decode().splitlines():
             environment.pop(name, None)
+        # MCP coverage fingerprints enumerate indexed sources. Give the
+        # exported snapshot its own index without changing the user's checkout.
+        subprocess.run(['git', 'init', '--quiet', str(snapshot)], env=environment, check=True)
+        subprocess.run(['git', '-C', str(snapshot), 'add', '--all'], env=environment, check=True)
         print(f'Local CI: {label}; running make check on this computer.', flush=True)
         return run_local_check(snapshot, environment)
 
