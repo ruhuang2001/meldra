@@ -78,7 +78,9 @@ jobs:
       # CHECK_DIR. Keep both outside GoReleaser's dist directory for repairs.
       - name: Validate release source
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
-        run: make check DIST_DIR=.artifacts/checks CHECK_DIR=.artifacts/checks
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
 
       - uses: goreleaser/goreleaser-action@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
