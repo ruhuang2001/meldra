@@ -139,3 +139,18 @@ func TestMergeRetainsDistinctAssistantMessages(t *testing.T) {
 		}
 	}
 }
+
+func TestMergePreservesAssistantOutputPositions(t *testing.T) {
+	message := func(id, text string) responses.ResponseOutputItemUnion {
+		raw, _ := json.Marshal(map[string]any{"type": "message", "id": id, "role": "assistant", "content": []map[string]any{{"type": "output_text", "text": text}}})
+		var item responses.ResponseOutputItemUnion
+		if err := json.Unmarshal(raw, &item); err != nil {
+			t.Fatal(err)
+		}
+		return item
+	}
+	merged, err := mergeCompletedStreamOutput([]responses.ResponseOutputItemUnion{message("later", "conclusion")}, []responses.ResponseOutputItemUnion{message("earlier", "explanation")}, []int64{0})
+	if err != nil || len(merged) != 2 || merged[0].ID != "earlier" || merged[1].ID != "later" {
+		t.Fatalf("incorrect output order: %+v %v", merged, err)
+	}
+}
