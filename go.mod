@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/joho/godotenv v1.5.1
 	github.com/openai/openai-go/v3 v3.71.2
+	go.yaml.in/yaml/v3 v3.0.5
 	modernc.org/sqlite v1.60.1
 )
 

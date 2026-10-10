@@ -89,6 +89,32 @@ meldra version
 - Session files are bounded and validated while loading; conflicting saves from another process are rejected instead of silently overwriting newer state. Task execution also holds advisory locks for the task and canonical workspace, preventing concurrent Meldra writers in the same workspace across configurations. Persistent ownership lives in `~/.meldra-locks`; cache locks remain for older-build compatibility. These locks do not block your editor or other programs. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
 - Repository contents and tool output are treated as untrusted data, not instructions.
 
+## Skills (experimental)
+
+Meldra discovers immediate `<name>/SKILL.md` packages in these locations, in
+priority order: workspace `.meldra/skills`, workspace `.agents/skills`,
+`$MELDRA_HOME/skills` (default `~/.meldra/skills`), and `~/.agents/skills`.
+Duplicate names keep the first valid package and produce a warning.
+
+```bash
+meldra skills --workspace /path/to/project --json
+meldra --workspace /path/to/project --prompt 'Use $review-checklist to review this change.'
+```
+
+Each package requires YAML `name` and `description` fields followed by Markdown
+instructions. The initial model request includes only catalog metadata; the
+`read_skill` tool loads instructions and relative text resources on demand.
+`$name` is a prompt convention that asks the model to load the skill, not a
+frontend slash command. Restart or resume to discover changed metadata.
+
+Skill content cannot grant permissions: scripts still use approved workspace
+tools. User packages are read-only through `read_skill`; configuration, task
+storage, execution locks, symlinks, path traversal and non-text resources remain
+blocked. Only install skills whose contents you have reviewed.
+
+See [Skills research and prototype](docs/skills.md) for the comparison with other
+agents, exact limits, compatibility boundaries and repeatable E2E verification.
+
 ## Tasks and recovery
 
 The first request records a task ID. Each attempt has a separate Run; tool

@@ -204,7 +204,7 @@ func toolEffect(name string) task.Effect {
 		return task.Write
 	case "run_command", "verify":
 		return task.Command
-	case "read_file", "list_files", "search_files", "session_status", "git_review":
+	case "read_file", "read_skill", "list_files", "search_files", "session_status", "git_review":
 		return task.Read
 	default:
 		return task.Command
