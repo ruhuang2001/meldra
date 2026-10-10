@@ -140,7 +140,14 @@ func mcpDefinitionSize(definition ToolDefinition) (int, error) {
 	return len(data), err
 }
 
-func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, selected string) (*mcpConnections, error) {
+func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, selected string, localToolCounts ...int) (*mcpConnections, error) {
+	limit := 112
+	if len(localToolCounts) > 0 {
+		limit = 128 - localToolCounts[0]
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("local tool catalog exceeds 128 tools")
+	}
 	servers, err := loadMCPConfig(paths)
 	if err != nil {
 		return nil, err
@@ -163,8 +170,8 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		session, definitions, err := connectMCPServer(ctx, paths, name, server, workspace)
 		candidateBytes := catalogBytes
 		// Leave room for the built-in tools in providers with a 128-tool limit.
-		if err == nil && len(connections.tools)+len(definitions) > 112 {
-			err = fmt.Errorf("combined MCP catalog exceeds 112 tools")
+		if err == nil && len(connections.tools)+len(definitions) > limit {
+			err = fmt.Errorf("combined MCP catalog exceeds %d tools", limit)
 		}
 		if err == nil {
 			for _, definition := range definitions {
@@ -192,7 +199,7 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		}
 		catalogBytes = candidateBytes
 		connections.sessions = append(connections.sessions, session)
-		connections.tools = append(connections.tools, definitions...)
+		connections.tools = append(connections.tools, workspace.guardedDefinitions(definitions)...)
 	}
 	return connections, nil
 }

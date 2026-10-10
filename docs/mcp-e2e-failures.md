@@ -46,6 +46,6 @@ Additional security/lifecycle cases, specified before fixture changes:
 - Cancelling a resource request before dispatch must persist cancelled, not unknown,
   and send no resource request on the wire.
 - Opaque cursors beginning with "-" must be accepted after a "--" option terminator.
-- Individually valid servers whose combined catalogs exceed 112 external tools or
+- Individually valid servers whose combined catalogs exceed the available external-tool allowance or
   1 MiB schema/description must not overflow the model request; offending servers
   are skipped with a warning and closed while accepted servers remain usable.

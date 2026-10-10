@@ -6,9 +6,8 @@ Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-
 
 > **Early stage:** Meldra is experimental. Review every change it makes and avoid running it in directories with sensitive or irreplaceable files.
 
-This branch implements the upcoming **0.2.0 foreground task runtime**. It is
-under integration; the latest published binary may not include the skills and task
-commands below.
+This source tree implements the **0.2.x foreground task runtime**. The latest
+published binary may not include all capabilities described below.
 
 ## Requirements
 
@@ -38,6 +37,30 @@ commands below.
 Press `Ctrl-C` to exit.
 
 In a supported interactive terminal, Meldra opens a full-screen TUI and streams assistant responses. Non-interactive and unsupported terminals retain the line-based interface.
+
+## Project context and task control
+
+Meldra loads scoped `AGENTS.md` instructions and accepts explicit file references.
+Use Plan to inspect a project before allowing implementation:
+
+```sh
+meldra --mode plan --prompt 'Review @src/main.go:10-40 and propose a change.'
+meldra context --path src/main.go --json
+meldra --permissions workspace-edit --command-timeout 900
+```
+
+Plan permits reads and saved plans/summaries while blocking project writes and
+program execution, including with `--auto-approve`. It does not start configured
+external MCP servers. The `workspace-edit` permission profile grants checked file
+edits while retaining confirmation for programs that execute project code.
+
+Use `/plan` and `/build` to change mode, `/steer TEXT` to correct active work,
+`/queue TEXT` to save a follow-up, and `/stop` to stop the current turn without
+quitting the application. Commands can stream output and run beyond two minutes;
+managed process handles remain owned by the current Run.
+
+See [Project context, execution modes, and foreground control](docs/capabilities.md)
+for reference syntax, limits, permission boundaries, and recovery behavior.
 
 ## Configuration
 
@@ -110,12 +133,12 @@ by Meldra's file-tool boundary.
 ## Safety
 
 - File tools are constrained to the workspace root (resolves `..`, symlinks, absolute paths) and block access to `.git` and Meldra's own config/session directory.
-- Every edit prints a diff and waits for confirmation before writing.
+- Every edit prints a diff. The default `interactive` policy waits for confirmation; `--permissions workspace-edit` grants checked built-in file edits and records that policy decision.
 - Command execution is allowlisted. Commands that compile or execute workspace code require explicit approval; restricted read-only Git commands and `gofmt -d` do not. Approved commands run as your OS user and may access the filesystem and network; environment filtering is not a sandbox. Use `--auto-approve` only inside an isolated container or VM.
 - The `verify` tool detects root project markers and selects bounded presets for Make, Go, Python/pytest, Node/npm or pnpm, and Rust/Cargo projects. A Makefile's explicit `check` or `test` target takes priority, and the complete command plan is approved once before execution.
 - Custom providers have a 4 MiB replay-context budget; older tool results are compacted first when needed.
 - Session files are bounded and validated while loading; conflicting saves from another process are rejected instead of silently overwriting newer state. Task execution also holds advisory locks for the task and canonical workspace, preventing concurrent Meldra writers in the same workspace across configurations. Persistent ownership lives in `~/.meldra-locks`; cache locks remain for older-build compatibility. These locks do not block your editor or other programs. The TUI keeps at most 200 rendered history entries in memory without applying that display limit to session persistence.
-- Repository contents and tool output are treated as untrusted data, not instructions.
+- Ordinary repository contents and tool output are untrusted data. Scoped `AGENTS.md` files and explicitly loaded Skills provide guidance subordinate to user instructions and runtime permissions.
 
 ## Skills (experimental)
 

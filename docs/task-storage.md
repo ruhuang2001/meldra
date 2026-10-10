@@ -1,7 +1,10 @@
-# Foreground task storage contract (0.2.0)
+# Foreground task storage contract (0.2.x)
 
-Status: implemented schema 1. The database stores execution evidence; opening
-it never resumes a model, a tool, a command, or a pending approval.
+Status: database schema 2; the event envelope remains schema 1. Schema 1 databases
+are migrated transactionally to add process records, preserving existing history.
+Older binaries reject the newer database rather than rewriting it. The database
+stores execution evidence; opening it never resumes a model, a tool, a command,
+or a pending approval.
 
 ## Driver and layout
 
@@ -40,6 +43,7 @@ contain secrets, so users must protect ledger backups as project data.
 | ToolCall | Raw bounded arguments and digest, effect, execution phase and result |
 | Approval | Exact call/parameters, operation, workspace evidence and decision |
 | Event | Stable event ID, task-local sequence, schema, status/reason and associations |
+| Process | Run-owned command identity, lifecycle, effects, exit evidence and output artifacts |
 | ArtifactRef | Content digest, name and length of an immutable output blob |
 
 Task status is `queued`, `running`, `waiting_approval`, `completed`, `failed`,
@@ -64,6 +68,22 @@ Ordinary execution cannot transition out of `unknown`. The separate
 records `tool.reconciled`, and never executes the operation. It never rewrites
 the original Run's terminal state. New Runs are rejected while any outcome
 remains unknown. A missing result is not evidence of failure or success.
+
+Managed process start calls complete independently of the command itself. Process
+records keep lifecycle state and effect certainty separate: a stopped process can
+have unknown effects. Run completion waits for owned-process cleanup and evidence
+persistence before releasing the workspace lease. Recovery never signals a stored
+PID or automatically restarts a process. `task resolve-process` records the user's
+evidence without inventing an exit code or changing an earlier Run.
+
+User controls are journaled as received and applied events with stable request
+identities. Queued reference snapshots are captured before acknowledgment. A
+selected queue request binds its identity and references to `turn.started` so a
+crash before the conversation snapshot cannot duplicate it. Pending requests are
+shown on recovery and require `/continue-queue` before they are applied.
+
+Run configuration records the mode, permission profile, policy generation and
+available approved-plan digest; these describe that attempt, not a reusable grant.
 
 Approvals are scoped to one ToolCall and its exact raw argument digest. They
 cannot be reused by a new call or Run. A pending decision can be consumed once

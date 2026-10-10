@@ -25,8 +25,20 @@ import (
 func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
 	var root string
 	autoApprove := false
+	mode, permissions := ModeBuild, PermissionInteractive
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--mode", "--permissions":
+			key := args[i]
+			i++
+			if i == len(args) {
+				return fmt.Errorf("%s requires a value", key)
+			}
+			if key == "--mode" {
+				mode = ExecutionMode(args[i])
+			} else {
+				permissions = PermissionProfile(args[i])
+			}
 		case "--workspace":
 			i++
 			if i == len(args) || strings.HasPrefix(args[i], "-") || root != "" {
@@ -62,7 +74,14 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			return err
 		}
 	}
+	policy, err := newRuntimePolicy(mode, permissions)
+	if err != nil {
+		return err
+	}
+	workspace.policy = policy
+	workspace.projectContext = NewProjectContext(workspace)
 	definitions := workspace.ToolDefinitions()
+	definitions = append(definitions, workspace.projectContext.ContextTool())
 	registry, err := tool.New(definitions)
 	if err != nil {
 		return err
@@ -148,6 +167,9 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			if len(req.Params.Arguments) > maxApprovalPreviewBytes || json.Unmarshal(req.Params.Arguments, &arguments) != nil || arguments == nil || resolved.Validate(arguments) != nil {
 				return mcpServeResult("invalid tool arguments", true), nil
 			}
+			if _, err := policy.invocation(ctx, definition.Name, req.Params.Arguments); err != nil {
+				return mcpServeResult(err.Error(), true), nil
+			}
 			// Keep state validation and execution under the same lock so another
 			// call cannot change the undo target between approval and invocation.
 			if !operation.TryLock() {
@@ -157,7 +179,19 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			var approve ApprovalFunc
 			declined := false
 			if !autoApprove && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
+				instructionDigest, err := workspace.mcpApprovalContextDigest(definition.Name, req.Params.Arguments)
+				if err != nil {
+					// A failed redemption consumes its token even if instructions
+					// are later reverted to the previously approved bytes.
+					if req.Params.RequestState != "" {
+						approvalMu.Lock()
+						delete(pending, req.Params.RequestState)
+						approvalMu.Unlock()
+					}
+					return mcpServeResult(err.Error()+"; read_project_context for affected paths before requesting approval", true), nil
+				}
 				fingerprintData := append([]byte(definition.Name), req.Params.Arguments...)
+				fingerprintData = fmt.Appendf(fingerprintData, "\nproject instructions: %s", instructionDigest)
 				if definition.Name == "undo_last_change" {
 					fingerprintData = fmt.Appendf(fingerprintData, "\nundo generation: %d", undoGeneration)
 				}

@@ -226,7 +226,7 @@ func TestAgentRunCompletesToolLoopWithInstructions(t *testing.T) {
 		t.Fatalf("request count = %d, want 2", len(requests))
 	}
 	for index, request := range requests {
-		if !request.Instructions.Valid() || request.Instructions.Value != agentInstructions {
+		if !request.Instructions.Valid() || (!strings.HasPrefix(request.Instructions.Value, agentInstructions) || !strings.Contains(request.Instructions.Value, "Runtime mode: build. Permission profile: interactive.") || request.Instructions.Value != requests[0].Instructions.Value) {
 			t.Fatalf("request %d did not include stable agent instructions", index+1)
 		}
 	}

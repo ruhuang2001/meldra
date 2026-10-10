@@ -25,6 +25,8 @@ type UIMetrics struct {
 type UIEventKind string
 
 const (
+	UIEventMode             UIEventKind = "mode"
+	UIEventCommandOutput    UIEventKind = "command_output"
 	UIEventStatus           UIEventKind = "status"
 	UIEventUserMessage      UIEventKind = "user_message"
 	UIEventAssistantDelta   UIEventKind = "assistant_delta"
@@ -37,6 +39,8 @@ const (
 	UIEventError            UIEventKind = "error"
 )
 
+// UIEventSink implementations must return promptly; slow consumers should buffer
+// or coalesce updates rather than blocking execution and cancellation.
 type UIEventSink interface {
 	Emit(UIEvent)
 }
@@ -57,6 +61,7 @@ const (
 // ApprovalRequest contains the complete user-visible operation before it is
 // applied. UI implementations must default to rejection when unavailable.
 type ApprovalRequest struct {
+	Source         string          `json:"source,omitempty"`
 	WorkspaceState json.RawMessage `json:"workspace_state,omitempty"`
 	Kind           ApprovalKind
 	Title          string
