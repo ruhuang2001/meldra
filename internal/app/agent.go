@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -446,12 +447,18 @@ func (a *Agent) executeToolCalls(output []provider.OutputItem) provider.Items {
 func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.OutputItem, responseIDs ...string) provider.Items {
 	if a.execution != nil {
 		a.execution.replayScope = ""
+		a.execution.legacyReplayScope = ""
 		if a.customProvider {
 			identity := a.execution.run.ID
 			if len(responseIDs) > 0 && responseIDs[0] != "" {
 				identity = responseIDs[0]
 			}
 			a.execution.replayScope = digest([]byte(a.execution.config.Provider + "\x00" + a.modelName() + "\x00" + identity))
+			endpoint, parseErr := url.Parse(a.execution.config.Provider)
+			if parseErr == nil {
+				a.execution.legacyProvider = endpoint.Scheme + "://" + endpoint.Host
+				a.execution.legacyReplayScope = digest([]byte(a.execution.legacyProvider + "\x00" + a.modelName() + "\x00" + identity))
+			}
 		}
 	}
 
