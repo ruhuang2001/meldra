@@ -5,6 +5,28 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.3.0](https://github.com/ruhuang2001/meldra/compare/v0.2.0...v0.3.0) (2026-10-10)
+
+
+### Features
+
+* **agent:** add bounded skills discovery and loading ([91a71e4](https://github.com/ruhuang2001/meldra/commit/91a71e4c30fbef7f076c0eb7f6d9c5af141ece33))
+* **agent:** add MCP client and server workflows ([0d2a825](https://github.com/ruhuang2001/meldra/commit/0d2a8259d7870625f534ed6134f473da3cd8eecf))
+
+
+### Bug Fixes
+
+* **agent:** address skills and runtime review findings ([ac350bb](https://github.com/ruhuang2001/meldra/commit/ac350bbc24e3c62efd91b3d553366547eda6d48e))
+* **agent:** close remaining MCP validation and dispatch gaps ([81eefa6](https://github.com/ruhuang2001/meldra/commit/81eefa6da5ca8de970e54330f3bf2fa048940f8e))
+* **agent:** enforce MCP numeric and credential limits ([eaa77de](https://github.com/ruhuang2001/meldra/commit/eaa77de90dc30e866970234b02ae7a190b6d8419))
+* **agent:** finish OAuth callback responses before shutdown ([2f13483](https://github.com/ruhuang2001/meldra/commit/2f134836622a7a7fc179121395d702280d7f4a43))
+* **agent:** harden MCP authorization and runtime boundaries ([ec3d58d](https://github.com/ruhuang2001/meldra/commit/ec3d58da0dbee58a39fec42c0c58eb3205a46827))
+* **agent:** harden MCP review boundaries and record verification ([18f1794](https://github.com/ruhuang2001/meldra/commit/18f1794f67924b14923b1db48a34d6cbe033463f))
+* **cli:** preserve unpollable stdin on Linux ([fbc96d1](https://github.com/ruhuang2001/meldra/commit/fbc96d1735dbc0bba92dc206f05647d5a47a3c56))
+* **session:** preserve legacy provider replay identities ([e89f90b](https://github.com/ruhuang2001/meldra/commit/e89f90b246d09c8e1fd21d1fac6c4c0e87a96b3d))
+* **stream:** adapt tool output and events to updated SDK ([b097886](https://github.com/ruhuang2001/meldra/commit/b097886d9778234c41ad6ed03a472ef770687de6))
+* **stream:** preserve recovered assistant output positions ([a12b1f3](https://github.com/ruhuang2001/meldra/commit/a12b1f30b191a6f733eefde387163412b47c8737))
+
 ## [0.2.0](https://github.com/ruhuang2001/meldra/compare/v0.1.0...v0.2.0) (2026-10-09)
 
 
