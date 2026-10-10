@@ -208,9 +208,42 @@ tests; building the binary itself requires only Go.
 
 ```bash
 make check       # formatting, vet, modules, race tests, coverage, and build
+make install-hooks
+make check-staged    # quick checks of staged whitespace and Go formatting
+make check-local-ci  # full make check in a temporary copy of the index
 ```
 
 The test suite must maintain at least 75% statement coverage.
+
+The Git hooks run quick staged checks before each commit and full local checks
+before pushing. The push check uses the exact committed revisions being pushed;
+the manual `make check-local-ci` command uses staged contents, so stage new or
+modified files first. Temporary checks exclude untracked projects and do not
+rewrite working files. These commands consume no GitHub Actions minutes.
+
+Skills E2E verification stays manual:
+
+```bash
+python3 scripts/skills-e2e.py --output dist/skills-e2e-new-run
+```
+
+Choose a new output directory for each run. Use `act` only when debugging the
+GitHub Actions workflow itself; it is not required by the local hooks.
+
+Remote CI uses one Linux job for all race tests, the build and a vulnerability
+scan (`make check-ci` plus `govulncheck`). Formatting, dependency tidiness,
+standalone vet and coverage remain in full local checks; `go test` also runs its
+default vet checks remotely. Core CI runs for Go, module and check configuration
+changes, skips draft PRs and documentation-only changes, and runs when a draft
+is marked ready for review. Direct pushes to `main` retain this safety check.
+
+The four native platform checks run manually through **Actions → Platform
+smoke → Run workflow** before a release or when investigating platform behavior.
+Select one platform for a focused check (the default is `linux-amd64`), or choose
+`all` to verify all four release platforms.
+Release configuration checks run only for ready PRs changing that configuration
+or a manual request; release builds still run the full `make check` through
+GoReleaser. PR test archives remain on demand.
 
 See [Architecture](docs/architecture.md) for runtime boundaries,
 [Task storage](docs/task-storage.md) for persistence contracts. The M1–M4

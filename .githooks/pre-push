@@ -1,0 +1,18 @@
+#!/bin/sh
+
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+checked_revisions=""
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in
+    *[!0]*) ;;
+    *) continue ;;
+  esac
+  case " $checked_revisions " in
+    *" $local_sha "*) continue ;;
+  esac
+  python3 "$repo_root/scripts/check-local-ci.py" --ref "$local_sha"
+  checked_revisions="$checked_revisions $local_sha"
+done

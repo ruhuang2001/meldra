@@ -1,15 +1,18 @@
 name: Platform smoke
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '**.go'
-      - go.mod
-      - go.sum
-      - Makefile
-      - .github/workflows/platform-smoke.yml
   workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform to verify; choose all before a release
+        type: choice
+        default: linux-amd64
+        options:
+          - linux-amd64
+          - linux-arm64
+          - darwin-amd64
+          - darwin-arm64
+          - all
 
 permissions:
   contents: read
@@ -23,17 +26,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-latest
-            target: linux-amd64
-          - runner: ubuntu-24.04-arm
-            target: linux-arm64
-          - runner: macos-15-intel
-            target: darwin-amd64
-          - runner: macos-15
-            target: darwin-arm64
+        target: ${{ fromJSON(inputs.platform == 'all' && '["linux-amd64","linux-arm64","darwin-amd64","darwin-arm64"]' || format('["{0}"]', inputs.platform)) }}
     name: Native ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ${{ fromJSON('{"linux-amd64":"ubuntu-latest","linux-arm64":"ubuntu-24.04-arm","darwin-amd64":"macos-15-intel","darwin-arm64":"macos-15"}')[matrix.target] }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7

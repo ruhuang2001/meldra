@@ -9,7 +9,7 @@ VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage build check release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage build check check-ci check-staged check-local-ci release-check release-snapshot install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -38,6 +38,16 @@ check:
 	go mod tidy -diff
 	$(MAKE) test-coverage
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
+
+check-ci:
+	$(MAKE) test-race
+	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
+
+check-staged:
+	python3 scripts/check-local-ci.py --quick
+
+check-local-ci:
+	python3 scripts/check-local-ci.py --staged
 
 release-check: check
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
