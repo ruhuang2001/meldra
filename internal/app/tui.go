@@ -82,11 +82,13 @@ func tuiInputStyles(darkBackground *bool) textarea.Styles {
 // Bubble Tea's event loop. Agent and workspace goroutines never mutate the UI
 // model directly.
 type tuiController struct {
-	messages chan string
-	done     chan struct{}
-	ready    chan struct{}
-	cancel   context.CancelFunc
-	program  *tea.Program
+	messages       chan string
+	submitControl  func(string, string) error
+	referenceFiles func() (referenceCandidateList, error)
+	done           chan struct{}
+	ready          chan struct{}
+	cancel         context.CancelFunc
+	program        *tea.Program
 
 	readyOnce   sync.Once
 	closeOnce   sync.Once
@@ -115,6 +117,29 @@ type tuiMCPInputCancelMsg struct{ answer chan string }
 
 type tuiApprovalPreviewMsg struct {
 	request ApprovalRequest
+}
+
+type tuiControlResultMsg struct {
+	normalMessage bool
+	text          string
+	kind          string
+	err           error
+}
+
+// The UI can still be showing the last turn while the agent has already closed
+// its control journal. Route late input through the ordinary input owner instead
+// of requiring the user to retype it; this is not a durable control acknowledgment.
+func (t *tuiController) submitUserControl(kind, value, original string) tuiControlResultMsg {
+	err := t.submitControl(kind, value)
+	if errors.Is(err, ErrNoActiveTurn) {
+		select {
+		case t.messages <- original:
+			return tuiControlResultMsg{normalMessage: true}
+		case <-t.done:
+			err = errors.New("chat closed before input was submitted")
+		}
+	}
+	return tuiControlResultMsg{kind: kind, text: original, err: err}
 }
 
 type tuiAgentStoppedMsg struct {
@@ -312,7 +337,18 @@ func (t *tuiController) presentApproval(request ApprovalRequest) {
 	t.send(tuiApprovalPreviewMsg{request: request})
 }
 
-func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writer, initial tuiInitialState, startAgent func()) error {
+func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writer, initial tuiInitialState, startAgent func()) (runErr error) {
+	boundedOutput, closeOutput, err := newSynchronizedWriter(ctx, output)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		closeOutput()
+		if ctx.Err() == nil {
+			runErr = errors.Join(runErr, boundedOutput.Err())
+		}
+	}()
+	output = boundedOutput
 	model := newTUIModel(t, initial)
 	t.program = tea.NewProgram(
 		model,
@@ -348,7 +384,7 @@ func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writ
 		return err
 	}
 
-	err := <-result
+	err = <-result
 	t.stop()
 	if errors.Is(err, tea.ErrProgramKilled) || errors.Is(err, tea.ErrInterrupted) {
 		return nil
@@ -364,6 +400,7 @@ const (
 	tuiEntryTool
 	tuiEntryNotice
 	tuiEntryError
+	tuiEntryProcess
 )
 
 type tuiEntry struct {
@@ -371,6 +408,7 @@ type tuiEntry struct {
 	text        string
 	stream      []byte
 	name        string
+	processID   string
 	detail      string
 	active      bool
 	cachedWidth int
@@ -399,10 +437,12 @@ func (e *tuiEntry) finishStream() {
 }
 
 type tuiModel struct {
-	controller *tuiController
-	workspace  string
-	sessionID  string
-	modelName  string
+	executionMode     string
+	permissionProfile string
+	controller        *tuiController
+	workspace         string
+	sessionID         string
+	modelName         string
 
 	width  int
 	height int
@@ -423,6 +463,8 @@ type tuiModel struct {
 	stopped           bool
 	pending           *tuiApprovalMsg
 	mcpPending        *tuiMCPInputMsg
+	correcting        bool
+	referencePicker   *tuiReferencePicker
 
 	completedPrefix        string
 	completedPrefixWidth   int
@@ -505,9 +547,37 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		darkBackground := msg.IsDark()
 		m.input.SetStyles(tuiInputStyles(&darkBackground))
 		return m, nil
+	case tuiControlResultMsg:
+		if msg.normalMessage {
+			return m, nil
+		}
+		if msg.err != nil {
+			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: "Control failed: " + msg.err.Error()})
+			if msg.text != "" {
+				if m.input.Value() == "" && m.pending == nil && m.mcpPending == nil {
+					m.input.SetValue(msg.text)
+					m.resize()
+				} else {
+					m.addEntry(tuiEntry{kind: tuiEntryNotice, text: "Unsubmitted input:\n" + msg.text})
+				}
+			}
+		} else {
+			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: map[string]string{"steer": "Steering received", "queue": "Queued", "stop": "Stop requested", "mode": "Mode change requested"}[msg.kind]})
+		}
+		m.refreshViewport()
+		return m, nil
+	case tuiReferencesLoadedMsg:
+		if m.referencePicker == msg.picker {
+			m.referencePicker.files = msg.list.Files
+			m.referencePicker.truncated = msg.list.Truncated
+			m.referencePicker.err = msg.err
+			m.referencePicker.loading = false
+		}
+		return m, nil
 	case tuiEventMsg:
 		return m, m.applyEvent(msg.event)
 	case tuiMCPInputMsg:
+		m.referencePicker = nil
 		if m.pending != nil || m.mcpPending != nil {
 			msg.answer <- "cancel"
 			return m, nil
@@ -525,6 +595,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tuiApprovalMsg:
+		m.referencePicker = nil
 		if m.pending != nil || m.mcpPending != nil {
 			msg.answer <- false
 			return m, nil
@@ -578,7 +649,14 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, command
 	}
 
-	if (!m.busy || m.mcpPending != nil) && m.pending == nil && !m.stopped {
+	if m.referencePicker != nil {
+		if paste, ok := message.(tea.PasteMsg); ok {
+			m.referencePicker.query = truncateUTF8(m.referencePicker.query+paste.Content, 256, "")
+			m.referencePicker.cursor = 0
+		}
+		return m, nil
+	}
+	if (m.pending == nil || m.correcting) && !m.stopped {
 		var command tea.Cmd
 		m.input, command = m.input.Update(message)
 		if _, pasted := message.(tea.PasteMsg); pasted {
@@ -592,6 +670,45 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
+	if m.referencePicker != nil && key.String() != "ctrl+c" && key.String() != "ctrl+x" {
+		return m.referencePickerKey(key)
+	}
+	if key.String() == "ctrl+f" {
+		return m.openReferencePicker()
+	}
+	if key.String() == "ctrl+g" && m.busy && m.controller.submitControl != nil {
+		m.correcting = true
+		m.input.Reset()
+		m.status = "Enter a correction; Escape returns to the pending interaction"
+		return m.input.Focus()
+	}
+	if m.correcting {
+		switch key.String() {
+		case "esc":
+			m.correcting = false
+			m.input.Reset()
+			return nil
+		case "enter":
+			text := m.input.Value()
+			if strings.TrimSpace(text) == "" {
+				return nil
+			}
+			m.correcting = false
+			m.input.Reset()
+			return func() tea.Msg {
+				return m.controller.submitUserControl("steer", text, text)
+			}
+		case "ctrl+c", "ctrl+x":
+		default:
+			var command tea.Cmd
+			m.input, command = m.input.Update(key)
+			m.resize()
+			return command
+		}
+	}
+	if key.String() == "ctrl+x" && m.busy && m.controller.submitControl != nil {
+		return func() tea.Msg { return m.controller.submitUserControl("stop", "", "/stop") }
+	}
 	if key.String() == "ctrl+c" {
 		m.resolveApproval(false)
 		m.resolveMCPInput("cancel")
@@ -627,7 +744,7 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	}
-	if m.busy || m.stopped {
+	if m.stopped {
 		return nil
 	}
 
@@ -636,6 +753,17 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		message := m.input.Value()
 		if strings.TrimSpace(message) == "" {
 			return nil
+		}
+		if m.busy && m.controller.submitControl != nil {
+			kind, value, ok := parseControlText(message)
+			if !ok {
+				kind, value = "steer", message
+			}
+			m.input.Reset()
+			m.resize()
+			return func() tea.Msg {
+				return m.controller.submitUserControl(kind, value, message)
+			}
 		}
 		m.input.Reset()
 		m.resize()
@@ -701,7 +829,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		}
 		m.busy = event.Text != "Ready"
 		if m.busy {
-			m.input.Blur()
+			return m.input.Focus()
 		}
 	case UIEventUserMessage:
 		m.activeAssistant = -1
@@ -710,7 +838,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		m.submissionPending = false
 		m.status = "Streaming"
 		m.busy = true
-		m.input.Blur()
+		_ = m.input.Focus()
 		if m.activeAssistant < 0 {
 			m.appendEntry(tuiEntry{kind: tuiEntryAssistant, stream: make([]byte, 0, len(event.Text)), active: true})
 			m.activeAssistant = len(m.entries) - 1
@@ -729,6 +857,11 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		m.activeAssistant = -1
 		m.invalidateCompletedPrefix()
 		m.refreshViewport()
+	case UIEventMode:
+		m.executionMode = event.Text
+		m.permissionProfile = event.Detail
+	case UIEventCommandOutput:
+		m.appendCommandOutput(event)
 	case UIEventToolStarted:
 		m.submissionPending = false
 		m.activeAssistant = -1
@@ -752,7 +885,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		// update the visible state here.
 		m.status = "Thinking"
 		m.busy = true
-		m.input.Blur()
+		_ = m.input.Focus()
 		m.refreshViewport()
 	case UIEventMetrics:
 		if event.Metrics != nil {
@@ -900,6 +1033,12 @@ func (m *tuiModel) renderEntryUnwrapped(entry *tuiEntry) string {
 			output.WriteString("\n")
 			output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.detail)))
 		}
+	case tuiEntryProcess:
+		output.WriteString(tuiToolStyle.Render("process  " + sanitizeTerminalText(entry.processID)))
+		if entry.detail != "" {
+			output.WriteString("\n")
+			output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.detail)))
+		}
 	case tuiEntryNotice:
 		output.WriteString(tuiDimStyle.Render(sanitizeTerminalText(entry.content())))
 	case tuiEntryError:
@@ -926,6 +1065,9 @@ func (m *tuiModel) renderPending() string {
 }
 
 func (m *tuiModel) View() tea.View {
+	if m.referencePicker != nil {
+		return m.referencePickerView()
+	}
 	if m.width == 0 || m.height == 0 {
 		view := tea.NewView("Starting Meldra...")
 		view.AltScreen = true
@@ -943,9 +1085,14 @@ func (m *tuiModel) View() tea.View {
 		header += tuiDimStyle.Render("  session " + ansi.Truncate(label, 9, "…"))
 	}
 
+	if m.executionMode != "" {
+		header += " | " + m.executionMode + " / " + m.permissionProfile
+	}
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""
 	switch {
+	case m.correcting:
+		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	case m.mcpPending != nil:
 		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	case m.pending != nil:
@@ -953,7 +1100,7 @@ func (m *tuiModel) View() tea.View {
 	case m.stopped:
 		composer = tuiDimStyle.Render("The agent stopped. Press Ctrl-C to exit.")
 	case m.busy:
-		composer = tuiDimStyle.Render("Working... Ctrl-C cancels and saves the session.")
+		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	default:
 		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	}
@@ -961,11 +1108,13 @@ func (m *tuiModel) View() tea.View {
 	footerText := sanitizeTerminalText(m.status)
 	if m.pending != nil {
 		footerText += "  Approval: y approve · n/Enter reject"
+	} else if m.mcpPending == nil && !m.stopped {
+		footerText += "  Ctrl-F attach file"
 	}
 	footer := tuiDimStyle.Render(footerText)
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
 	view := tea.NewView(content)
-	if m.pending == nil && (!m.busy || m.mcpPending != nil) && !m.stopped && m.input.Focused() {
+	if (m.pending == nil || m.correcting) && !m.stopped && m.input.Focused() {
 		if cursor := m.input.Cursor(); cursor != nil {
 			cursor.Position.X += tuiInputStyle.GetBorderLeftSize() + tuiInputStyle.GetPaddingLeft()
 			cursor.Position.Y += tuiHeaderHeight + m.viewport.Height() + tuiInputStyle.GetBorderTopSize() + tuiInputStyle.GetPaddingTop()
@@ -1019,6 +1168,8 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	defer runtime.deleteEmptyNewSession()
 	defer runtime.mcp.close()
 	runtime.workspace.mcpInput = controller.mcpInput
+	controller.submitControl = runtime.agent.SubmitControl
+	controller.referenceFiles = referenceFileLoader(chatCtx, runtime.workspace)
 	runtime.workspace.SetApprovalFunc(controller.approve)
 	runtime.workspace.SetApprovalPresenter(controller.presentApproval)
 	runtime.agent.events = controller
@@ -1052,8 +1203,15 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		return agentErr
 	}
 	if started && chatCtx.Err() != nil {
-		_, err := fmt.Fprintf(stdout, "Interrupted. Session %s was saved; resume with: meldra resume %s\n", runtime.session.ID, runtime.session.ID)
-		return err
+		noticeCtx, noticeCancel := context.WithTimeout(context.Background(), time.Second)
+		defer noticeCancel()
+		bounded, closeOutput, err := newSynchronizedWriter(noticeCtx, stdout)
+		if err != nil {
+			return err
+		}
+		defer closeOutput()
+		_, err = fmt.Fprintf(bounded, "Interrupted. Session %s was saved; resume with: meldra resume %s\n", runtime.session.ID, runtime.session.ID)
+		return errors.Join(err, bounded.Close())
 	}
 	return nil
 }

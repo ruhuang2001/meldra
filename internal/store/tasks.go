@@ -210,9 +210,18 @@ func (s *Store) StartRun(ctx context.Context, l *Lease, r task.Run) (task.Run, e
 	if len(r.Config.Model) > 4096 || !cleanProvider(r.Config.Provider) || len(r.Executor) > 4096 {
 		return r, task.ErrLimit
 	}
+	if r.Config.Mode != "" && r.Config.Mode != "plan" && r.Config.Mode != "build" {
+		return r, fmt.Errorf("invalid run mode")
+	}
+	if r.Config.Permissions != "" && r.Config.Permissions != "interactive" && r.Config.Permissions != "workspace-edit" {
+		return r, fmt.Errorf("invalid run permission profile")
+	}
+	if r.Config.ApprovedPlanDigest != "" && !validDigest(r.Config.ApprovedPlanDigest) {
+		return r, fmt.Errorf("invalid approved plan digest")
+	}
 	err := s.owned(ctx, l, r.TaskID, func(tx *sql.Tx) error {
 		var unresolved, active int
-		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM tool_calls WHERE task_id=? AND status='unknown'", r.TaskID).Scan(&unresolved); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT (SELECT COUNT(*) FROM tool_calls WHERE task_id=? AND status='unknown') + (SELECT COUNT(*) FROM processes WHERE task_id=? AND effects='unknown')", r.TaskID, r.TaskID).Scan(&unresolved); err != nil {
 			return err
 		}
 		if unresolved > 0 {
@@ -276,6 +285,9 @@ func (s *Store) finishRun(ctx context.Context, tx *sql.Tx, r task.Run, status ta
 		return err
 	}
 	if status == task.RunSucceeded {
+		if err := requireSettledProcesses(ctx, tx, r.ID); err != nil {
+			return err
+		}
 		var count int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM tool_calls WHERE run_id=? AND status IN ('planned','running','unknown')", r.ID).Scan(&count); err != nil {
 			return err
@@ -285,6 +297,11 @@ func (s *Store) finishRun(ctx context.Context, tx *sql.Tx, r task.Run, status ta
 		}
 	} else if err := s.interruptCalls(ctx, tx, r); err != nil {
 		return err
+	}
+	if status != task.RunSucceeded {
+		if err := s.interruptProcesses(ctx, tx, r.ID); err != nil {
+			return err
+		}
 	}
 	if err := s.expireApprovals(ctx, tx, r); err != nil {
 		return err

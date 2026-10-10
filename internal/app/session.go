@@ -36,22 +36,28 @@ const (
 )
 
 type SessionMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	ControlID  string              `json:"control_id,omitempty"`
+	Role       string              `json:"role"`
+	Content    string              `json:"content"`
+	References []ReferenceSnapshot `json:"references,omitempty"`
 }
 
 type Session struct {
-	ID                                string           `json:"id"`
-	Workspace                         string           `json:"workspace"`
-	CreatedAt                         time.Time        `json:"created_at"`
-	UpdatedAt                         time.Time        `json:"updated_at"`
-	PreviousResponseID                string           `json:"previous_response_id,omitempty"`
-	LastRequestSequence               int64            `json:"last_request_sequence,omitzero"`
-	RequestsReplayedWithoutCheckpoint bool             `json:"requests_replayed_without_checkpoint,omitzero"`
-	Messages                          []SessionMessage `json:"messages,omitempty"`
-	Plan                              []string         `json:"plan,omitempty"`
-	Summary                           string           `json:"summary,omitempty"`
-	WorkspaceUnavailable              bool             `json:"-"`
+	PolicyGeneration                  uint64            `json:"policy_generation,omitzero"`
+	ApprovedPlanDigest                string            `json:"approved_plan_digest,omitempty"`
+	Mode                              ExecutionMode     `json:"mode,omitempty"`
+	Permissions                       PermissionProfile `json:"permissions,omitempty"`
+	ID                                string            `json:"id"`
+	Workspace                         string            `json:"workspace"`
+	CreatedAt                         time.Time         `json:"created_at"`
+	UpdatedAt                         time.Time         `json:"updated_at"`
+	PreviousResponseID                string            `json:"previous_response_id,omitempty"`
+	LastRequestSequence               int64             `json:"last_request_sequence,omitzero"`
+	RequestsReplayedWithoutCheckpoint bool              `json:"requests_replayed_without_checkpoint,omitzero"`
+	Messages                          []SessionMessage  `json:"messages,omitempty"`
+	Plan                              []string          `json:"plan,omitempty"`
+	Summary                           string            `json:"summary,omitempty"`
+	WorkspaceUnavailable              bool              `json:"-"`
 	resumed                           bool
 	taskSnapshot                      bool
 	savedRevision                     [sha256.Size]byte
@@ -392,11 +398,17 @@ func readSessionFile(path string) ([]byte, error) {
 }
 
 func validateSession(session *Session, expectedID string) error {
+	if _, err := newRuntimePolicy(session.Mode, session.Permissions); err != nil {
+		return err
+	}
 	if session.ID != expectedID || len(session.ID) > maxSessionIDBytes || session.Workspace == "" || len(session.Workspace) > maxSessionPathBytes {
 		return fmt.Errorf("invalid identity or workspace")
 	}
 	if session.LastRequestSequence < 0 {
 		return fmt.Errorf("invalid request checkpoint")
+	}
+	if session.ApprovedPlanDigest != "" && len(session.ApprovedPlanDigest) != 64 {
+		return fmt.Errorf("invalid approved plan digest")
 	}
 	if len(session.PreviousResponseID) > maxSessionProviderIDBytes || len(session.Summary) > maxSessionSummaryBytes {
 		return fmt.Errorf("oversized metadata")
@@ -405,8 +417,11 @@ func validateSession(session *Session, expectedID string) error {
 		return fmt.Errorf("too many messages or plan steps")
 	}
 	for _, message := range session.Messages {
-		if (message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes {
+		if (message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes || len(message.ControlID) > 256 {
 			return fmt.Errorf("invalid message")
+		}
+		if err := validateReferences(message.References); err != nil {
+			return err
 		}
 	}
 	for _, step := range session.Plan {
@@ -446,6 +461,14 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 		}
 		seen[key] = true
 		switch key {
+		case "policy_generation":
+			err = decoder.Decode(&session.PolicyGeneration)
+		case "approved_plan_digest":
+			err = decoder.Decode(&session.ApprovedPlanDigest)
+		case "mode":
+			err = decoder.Decode(&session.Mode)
+		case "permissions":
+			err = decoder.Decode(&session.Permissions)
 		case "id":
 			err = decoder.Decode(&session.ID)
 		case "workspace":
@@ -477,8 +500,11 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 				var message SessionMessage
 				err = decoder.Decode(&message)
 				messageCount++
-				if err == nil && ((message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes || messageCount > maxSessionMessages) {
+				if err == nil && ((message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes || len(message.ControlID) > 256 || messageCount > maxSessionMessages) {
 					err = fmt.Errorf("invalid message")
+				}
+				if err == nil {
+					err = validateReferences(message.References)
 				}
 				if err == nil && message.Role == "user" {
 					latestUser, latestUserIndex = message, messageCount

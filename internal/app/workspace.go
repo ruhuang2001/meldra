@@ -37,7 +37,8 @@ const (
 	maxEditableFileBytes    = 4 << 20
 	maxChangeContentBytes   = 8 << 20
 	maxApprovalPreviewBytes = 1 << 20
-	defaultTimeout          = 60
+	defaultTimeout          = 600
+	maxCommandTimeout       = 86400
 )
 
 var errWalkBounded = errors.New("workspace walk bounded")
@@ -74,22 +75,28 @@ func validateChangeCount(count int) error {
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
-	toolMu           sync.Mutex
-	mcpInteractionMu sync.Mutex
-	mcpActiveServer  atomic.Pointer[mcpInteraction]
-	mcpInput         func(context.Context, string) (string, bool)
-	root             string
-	input            *bufio.Reader
-	output           io.Writer
-	autoApprove      bool
-	approve          ApprovalFunc
-	approvalRecord   func(context.Context, ApprovalRequest, bool) error
-	approvalPending  func(context.Context, ApprovalRequest) error
-	present          ApprovalPresenter
-	ctx              context.Context
-	last             []fileChange
-	protected        []string
-	syncDir          func(string) error
+	processes          *processManager
+	commandTimeout     int
+	commandOutput      func(CommandOutput)
+	commandExecutables map[string]string
+	policy             *RuntimePolicy
+	projectContext     *ProjectContext
+	toolMu             sync.Mutex
+	mcpInteractionMu   sync.Mutex
+	mcpActiveServer    atomic.Pointer[mcpInteraction]
+	mcpInput           func(context.Context, string) (string, bool)
+	root               string
+	input              *bufio.Reader
+	output             io.Writer
+	autoApprove        bool
+	approve            ApprovalFunc
+	approvalRecord     func(context.Context, ApprovalRequest, bool) error
+	approvalPending    func(context.Context, ApprovalRequest) error
+	present            ApprovalPresenter
+	ctx                context.Context
+	last               []fileChange
+	protected          []string
+	syncDir            func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -249,17 +256,17 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 	nullableInteger := func(desc string) map[string]any {
 		return map[string]any{"type": []string{"integer", "null"}, "description": desc}
 	}
-	return []ToolDefinition{
+	return w.guardedDefinitions([]ToolDefinition{
 		{Name: "read_file", Description: "Read a file inside the workspace (never .git), with numbered, bounded line chunks.", Parameters: objectSchema(map[string]any{"path": str("Workspace-relative path, or an absolute path inside the workspace."), "offset": nullableInteger("Optional 1-based starting line; use null for 1."), "limit": nullableInteger("Optional line count; use null for 200 and values are capped.")}, []string{"path", "offset", "limit"}), Function: w.bindTool(w.readFile)},
 		{Name: "list_files", Description: "Recursively list relative paths inside the workspace without following symlink directories or entering .git.", Parameters: objectSchema(map[string]any{"path": nullableString("Directory inside the workspace; use null for workspace root.")}, []string{"path"}), Function: w.bindTool(w.listFiles)},
 		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text to find."), "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results"}), Function: w.bindTool(w.searchFiles)},
 		{Name: "edit_file", Description: "Replace exact text once, or create a missing file with empty old_str. Prints a unified diff and requires [y/N] confirmation unless auto-approved. Paths must stay in the workspace and outside .git.", Parameters: objectSchema(map[string]any{"path": str("Target path inside workspace."), "old_str": str("Exact text occurring once; empty only to create."), "new_str": str("Replacement or new file contents.")}, []string{"path", "old_str", "new_str"}), Function: w.bindTool(w.editFile)},
 		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.bindTool(w.applyPatch)},
 		{Name: "undo_last_change", Description: "Undo the last successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
-		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout is capped at 120 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; use null for 60, maximum 120.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
+		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout defaults to the configured command deadline (600 seconds) and is capped at 86400 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; null uses the configured default (600), maximum 86400.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
 		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.bindTool(w.verify)},
 		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
-	}
+	})
 }
 
 func (w *Workspace) resolve(name string, write bool) (string, error) {
@@ -342,6 +349,9 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 	}
 	p, err := w.resolve(in.Path, false)
 	if err != nil {
+		return "", err
+	}
+	if err := w.contextObservePath(p); err != nil {
 		return "", err
 	}
 	pathInfo, err := os.Lstat(p)
@@ -531,6 +541,9 @@ func (w *Workspace) listFiles(raw json.RawMessage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := w.contextObservePath(p); err != nil {
+		return "", err
+	}
 	var items []string
 	truncated := false
 	errListStop := errors.New("list bounded")
@@ -574,6 +587,9 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 	}
 	p, err := w.resolve(in.Path, false)
 	if err != nil {
+		return "", err
+	}
+	if err := w.contextObservePath(p); err != nil {
 		return "", err
 	}
 	max := in.MaxResults
@@ -622,6 +638,9 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 		}
 		if !info.Mode().IsRegular() {
 			return nil
+		}
+		if err := w.contextObservePath(path); err != nil {
+			return err
 		}
 		filesScanned++
 		if filesScanned > maxSearchFiles {
@@ -1048,6 +1067,9 @@ func validatePreparedChanges(changes []fileChange) error {
 }
 
 func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
+	if err := w.contextBeforeChanges(changes); err != nil {
+		return "", err
+	}
 	if err := validatePreparedChanges(changes); err != nil {
 		return "", err
 	}
@@ -1064,6 +1086,9 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	}) {
 		return "Declined; no files changed.", nil
 	}
+	if err := w.contextBeforeChanges(changes); err != nil {
+		return "", err
+	}
 	if err := w.writeChanges(changes, false); err != nil {
 		return "", err
 	}
@@ -1072,6 +1097,32 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 }
 
 func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
+	request.Source = "human"
+	_, permissionProfile, _ := w.policy.snapshot()
+	if w.autoApprove {
+		request.Source = "auto-approve"
+	} else if permissionProfile == PermissionWorkspaceEdit && request.Kind == ApprovalChanges {
+		request.Source = "workspace-edit-policy"
+	}
+	// Arbitrary commands and remote operations have no reliable per-file write
+	// set. They still require the last presented root/active rules to be current.
+	checkProjectContext := func() error {
+		if request.Kind == ApprovalChanges || w.projectContext == nil {
+			return nil
+		}
+		return w.projectContext.BeforeWrite(nil)
+	}
+	if err := checkProjectContext(); err != nil {
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+		return false
+	}
+	if c := controlFromContext(w.ctx); c != nil {
+		ctx, done := c.approvalContext(w.ctx)
+		defer done()
+		previous := w.ctx
+		w.ctx = ctx
+		defer func() { w.ctx = previous }()
+	}
 	if w.approvalPending != nil && w.contextErr() == nil {
 		if err := w.approvalPending(w.ctx, request); err != nil {
 			tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
@@ -1100,6 +1151,22 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 			})
 		}
 	}()
+	defer func() {
+		if approved {
+			if err := w.admitOperation(w.ctx); err != nil {
+				approved = false
+				if w.ctx.Err() == nil {
+					tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+				}
+			}
+			if approved {
+				if err := checkProjectContext(); err != nil {
+					approved = false
+					tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+				}
+			}
+		}
+	}()
 	// Approval data can include workspace content and command arguments.
 	request.Title = sanitizeTerminalText(request.Title)
 	request.Detail = sanitizeTerminalText(request.Detail)
@@ -1107,7 +1174,8 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 	if w.contextErr() != nil {
 		return false
 	}
-	if w.autoApprove {
+	_, permissions, _ := w.policy.snapshot()
+	if w.autoApprove || permissions == PermissionWorkspaceEdit && request.Kind == ApprovalChanges {
 		w.presentApproval(request)
 		return true
 	}
@@ -1166,6 +1234,12 @@ func (w *Workspace) confirmPrompt(prompt string) bool {
 }
 
 func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
+	if err := w.admitOperation(w.ctx); err != nil {
+		return err
+	}
+	if err := w.processWriteConflict("apply_patch", nil); err != nil {
+		return err
+	}
 	if err := w.validateChangePreimages(changes, reverse); err != nil {
 		return err
 	}
@@ -1398,6 +1472,9 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	if len(w.last) == 0 {
 		return "", fmt.Errorf("no successful change to undo")
 	}
+	if err := w.contextBeforeChanges(w.last); err != nil {
+		return "", err
+	}
 	for _, c := range w.last {
 		b, exists, _, err := readEditableFile(c.path)
 		matches := c.afterExists && err == nil && exists && bytes.Equal(b, c.after)
@@ -1423,6 +1500,9 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
+	}
+	if err := w.contextBeforeChanges(w.last); err != nil {
+		return "", err
 	}
 	if e := w.writeChanges(w.last, true); e != nil {
 		return "", e
@@ -1876,26 +1956,34 @@ func (w *Workspace) execute(command string, args []string, seconds int) (string,
 	return w.executeWithApproval(command, args, seconds, true)
 }
 
-func (w *Workspace) executeWithApproval(command string, args []string, seconds int, requestApproval bool) (string, error) {
-	if !allowed(command, args) {
-		return "", fmt.Errorf("command is not allowlisted")
+func (w *Workspace) prepareCommand(command string, args []string, seconds int) (commandSpec, error) {
+	args = slices.Clone(args)
+	configured, custom := w.commandExecutables[command]
+	if !custom && !allowed(command, args) {
+		return commandSpec{}, fmt.Errorf("command is not allowlisted")
 	}
 	if command == "python3" && len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
 		if err := w.validatePytestArgs(args[2:]); err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 	}
 	executable, err := w.trustedExecutable(command)
-	if err != nil {
-		return "", err
+	if custom {
+		executable, err = w.trustedExecutable(configured)
 	}
-	if command == "git" {
+	if err != nil {
+		return commandSpec{}, err
+	}
+	if filepath.Base(executable) == "git" && custom && !allowedGit(args) {
+		return commandSpec{}, fmt.Errorf("configured git still requires read-only allowlisted arguments")
+	}
+	if command == "git" || filepath.Base(executable) == "git" {
 		topLevel, err := gitTopLevel(w.ctx, w.root, executable)
 		if err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 		if topLevel != w.root {
-			return "", fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
+			return commandSpec{}, fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
 		}
 		gitArgs := []string{"-c", "core.fsmonitor=false"}
 		if len(args) > 0 && (args[0] == "diff" || args[0] == "show" || args[0] == "log") {
@@ -1909,14 +1997,14 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 		for _, argument := range args[1:] {
 			path, err := w.resolve(argument, false)
 			if err != nil {
-				return "", err
+				return commandSpec{}, err
 			}
 			info, err := os.Stat(path)
 			if err != nil {
-				return "", err
+				return commandSpec{}, err
 			}
 			if !info.Mode().IsRegular() || filepath.Ext(path) != ".go" {
-				return "", fmt.Errorf("gofmt paths must be Go files inside the workspace")
+				return commandSpec{}, fmt.Errorf("gofmt paths must be Go files inside the workspace")
 			}
 		}
 		args = append([]string{"-d", "--"}, args[1:]...)
@@ -1924,108 +2012,48 @@ func (w *Workspace) executeWithApproval(command string, args []string, seconds i
 	if command == "go" && len(args) == 2 && args[0] == "run" {
 		path, err := w.resolve(args[1], false)
 		if err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 		if !info.IsDir() && (!info.Mode().IsRegular() || filepath.Ext(path) != ".go") {
-			return "", fmt.Errorf("go run target must be a workspace directory or Go file")
+			return commandSpec{}, fmt.Errorf("go run target must be a workspace directory or Go file")
 		}
 	}
 	if command == "python3" && !(len(args) >= 2 && args[0] == "-m" && args[1] == "pytest") {
 		path, err := w.resolve(args[0], false)
 		if err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			return "", err
+			return commandSpec{}, err
 		}
 		if !info.Mode().IsRegular() || strings.ToLower(filepath.Ext(path)) != ".py" {
-			return "", fmt.Errorf("python3 target must be a workspace Python file")
+			return commandSpec{}, fmt.Errorf("python3 target must be a workspace Python file")
 		}
 	}
 	if seconds == 0 {
-		seconds = defaultTimeout
-	}
-	if seconds < 1 || seconds > 120 {
-		return "", fmt.Errorf("timeout must be 1..120 seconds")
-	}
-	if w.contextErr() != nil {
-		tool.Observe(w.ctx, func(o *tool.Observation) {
-			if o.Result.Status != tool.Unknown {
-				o.Result.Status = tool.Cancelled
-			}
-		})
-		return "Command cancelled before start.\n[cancelled]", nil
-	}
-	if requestApproval && commandRequiresApproval(command) && !w.confirmCommand(command, args) {
-		return "Declined; command not run.", nil
-	}
-	parent := w.ctx
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, time.Duration(seconds)*time.Second)
-	defer cancel()
-	environment, cleanupEnvironment, err := newCommandEnvironment()
-	if err != nil {
-		return "", err
-	}
-	defer cleanupEnvironment()
-	cmd := exec.CommandContext(ctx, executable, args...)
-	cmd.Dir = w.root
-	cmd.Env = environment
-	var b limitedBuffer
-	b.limit = maxToolOutput
-	var log limitedBuffer
-	log.limit = 16 << 20
-	combined := io.MultiWriter(&b, &log)
-	cmd.Stdout = combined
-	cmd.Stderr = combined
-	processStarted := false
-	e := runCommandProcess(ctx, cmd, func() {
-		processStarted = true
-		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
-	})
-	status := 0
-	if e != nil {
-		if ee, ok := errors.AsType[*exec.ExitError](e); ok {
-			status = ee.ExitCode()
-		} else if ctx.Err() != nil {
-			status = -1
-		} else {
-			if !processStarted {
-				tool.Observe(w.ctx, func(o *tool.Observation) { o.Result.Status = tool.Failed })
-			}
-			return "", e
+		seconds = w.commandTimeout
+		if seconds == 0 {
+			seconds = defaultTimeout
 		}
 	}
-	suffix := ""
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		suffix = "\n[timed out]"
-	} else if errors.Is(ctx.Err(), context.Canceled) {
-		suffix = "\n[cancelled]"
+	if seconds < 1 || seconds > maxCommandTimeout {
+		return commandSpec{}, fmt.Errorf("timeout must be 1..86400 seconds")
 	}
-	tool.Observe(w.ctx, func(o *tool.Observation) {
-		if o.Result.ExitCode == nil || *o.Result.ExitCode == 0 {
-			o.Result.ExitCode = new(status)
+	if len(args) > 256 {
+		return commandSpec{}, fmt.Errorf("command has too many arguments")
+	}
+	for _, arg := range args {
+		if strings.ContainsRune(arg, 0) || len(arg) > 64<<10 {
+			return commandSpec{}, fmt.Errorf("invalid command argument")
 		}
-		o.Result.Truncated = o.Result.Truncated || b.truncated
-		o.Result.Attachments = append(o.Result.Attachments, tool.OutputArtifact{Name: fmt.Sprintf("command-%d.log", len(o.Result.Attachments)+1), Content: []byte(log.String()), Truncated: log.truncated})
-		if ctx.Err() != nil {
-			if processStarted {
-				o.Result.Status = tool.Unknown
-			} else {
-				o.Result.Status = tool.Cancelled
-			}
-		} else if status != 0 {
-			o.Result.Status = tool.Failed
-		}
-	})
-	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", command, strings.Join(args, " "), status, b.String()) + suffix, nil
+	}
+	mode, permissions, generation := w.policy.snapshot()
+	return commandSpec{Mode: mode, PermissionPolicy: permissions, Generation: generation, Executable: executable, Arguments: args, Directory: w.root, TimeoutSeconds: seconds, EnvironmentPolicy: "isolated-home-v1", ApprovalRequired: custom || commandRequiresApproval(command), DisplayCommand: command}, nil
 }
 
 func (w *Workspace) trustedExecutable(command string) (string, error) {
@@ -2164,26 +2192,34 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 	}
 	needsApproval := false
 	var plan strings.Builder
+	specs := make([]commandSpec, 0, len(commands))
 	for _, command := range commands {
-		if commandRequiresApproval(command.command) {
+		spec, err := w.prepareCommand(command.command, command.args, 0)
+		if err != nil {
+			return "", err
+		}
+		specs = append(specs, spec)
+		if spec.ApprovalRequired {
 			needsApproval = true
 		}
 		if plan.Len() > 0 {
 			plan.WriteByte('\n')
 		}
-		plan.WriteString(renderCommand(command.command, command.args))
+		plan.WriteString(renderCommand(spec.Executable, spec.Arguments))
 	}
+	state, _ := json.Marshal(map[string]any{"commands": specs})
 	if needsApproval && !w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalCommand,
-		Title:  "Run verification plan with OS user privileges",
-		Detail: plan.String() + "\n\nThese commands run repository code with your OS user privileges and may access the filesystem and network.",
-		Prompt: fmt.Sprintf("Run verification plan with OS-user privileges?\n%s\nApprove %d command(s)? [y/N] ", plan.String(), len(commands)),
+		Kind:           ApprovalCommand,
+		WorkspaceState: state,
+		Title:          "Run verification plan with OS user privileges",
+		Detail:         plan.String() + "\n\nThese commands run repository code with your OS user privileges and may access the filesystem and network.",
+		Prompt:         fmt.Sprintf("Run verification plan with OS-user privileges?\n%s\nApprove %d command(s)? [y/N] ", plan.String(), len(commands)),
 	}) {
 		return "Declined; verification not run.", nil
 	}
 
 	var output strings.Builder
-	for index, command := range commands {
+	for index, spec := range specs {
 		// Completed earlier commands do not make a later unstarted process
 		// uncertain. Keep accumulated exit codes and output, reset the boundary.
 		previousFailure := false
@@ -2192,7 +2228,7 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 			o.Started = false
 			o.Result.Status = ""
 		})
-		result, err := w.executeWithApproval(command.command, command.args, 120, false)
+		result, err := w.executePreparedCommand(spec, false)
 		if err != nil {
 			return "", err
 		}

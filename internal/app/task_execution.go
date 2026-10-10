@@ -20,23 +20,25 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
-	requestSequence   int64
-	paused            bool
-	paths             ConfigPaths
-	workspace         *Workspace
-	session           *Session
-	config            task.Config
-	db                *taskstore.Store
-	lease             *taskstore.Lease
-	run               task.Run
-	current           *task.ToolCall
-	pendingApprovalID string
-	err               error
-	resume            bool
-	context           string
-	replayScope       string
-	legacyReplayScope string
-	legacyProvider    string
+	requestControlID   string
+	requestControlRefs []ReferenceSnapshot
+	requestSequence    int64
+	paused             bool
+	paths              ConfigPaths
+	workspace          *Workspace
+	session            *Session
+	config             task.Config
+	db                 *taskstore.Store
+	lease              *taskstore.Lease
+	run                task.Run
+	current            *task.ToolCall
+	pendingApprovalID  string
+	err                error
+	resume             bool
+	context            string
+	replayScope        string
+	legacyReplayScope  string
+	legacyProvider     string
 }
 
 type executionContextKey struct{}
@@ -128,13 +130,29 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 			return err
 		}
 	}
+	// Snapshot the admitted policy for this Run. Later mode changes never rewrite
+	// an earlier Run's execution configuration.
+	if e.workspace.policy != nil {
+		e.session.Mode, e.session.Permissions, e.session.PolicyGeneration = e.workspace.policy.snapshot()
+	}
+	if e.session.Mode == "" {
+		e.session.Mode = ModeBuild
+	}
+	if e.session.Permissions == "" {
+		e.session.Permissions = PermissionInteractive
+	}
+	e.config.Mode = string(e.session.Mode)
+	e.config.Permissions = string(e.session.Permissions)
+	e.config.PolicyGeneration = e.session.PolicyGeneration
+	e.config.ApprovedPlanDigest = e.session.ApprovedPlanDigest
 	e.run, err = e.db.StartRun(ctx, e.lease, task.Run{TaskID: record.ID, Config: e.config, Executor: fmt.Sprintf("foreground:%d", os.Getpid())})
 	if err != nil {
 		return err
 	}
 	e.resume = false
+	e.session.taskSnapshot = true
 	started = true
-	if err = e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal)}); err != nil {
+	if err = e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal), "control_id": e.requestControlID, "references": e.requestControlRefs}); err != nil {
 		return err
 	}
 	event, err := e.db.LatestRequestEvent(ctx, record.ID)
@@ -206,7 +224,7 @@ func toolEffect(name string) task.Effect {
 		return task.Write
 	case "run_command", "verify":
 		return task.Command
-	case "read_file", "read_skill", "list_files", "search_files", "session_status", "git_review":
+	case "read_project_context", "read_file", "read_skill", "list_files", "search_files", "session_status", "git_review", "process_status", "wait_process":
 		return task.Read
 	default:
 		return task.Command
@@ -339,7 +357,8 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 		return nil
 	}
 	e.pendingApprovalID = ""
-	detail, _ := json.Marshal(map[string]string{"title": request.Title, "detail": truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]")})
+	mode, permissions, generation := e.workspace.policy.snapshot()
+	detail, _ := json.Marshal(map[string]any{"title": request.Title, "detail": truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]"), "source": request.Source, "mode": mode, "permissions": permissions, "generation": generation})
 	approval, err := e.db.RecordApproval(ctx, e.lease, task.Approval{TaskID: e.session.ID, RunID: e.run.ID, ToolCallID: e.current.ID, Operation: string(request.Kind), ParameterHash: e.current.ParameterHash, WorkspaceState: request.WorkspaceState, Detail: detail, Decision: task.Pending, Scope: "single_call"})
 	if err != nil {
 		return e.recordingError(ctx, err)
@@ -403,7 +422,7 @@ func (e *taskExecution) reconcile(ctx context.Context) error {
 					reason = "operation was declined"
 					break
 				}
-				if approval.Decision == task.Approved && len(approval.WorkspaceState) > 0 {
+				if approval.Decision == task.Approved && approval.Operation == string(ApprovalChanges) && len(approval.WorkspaceState) > 0 {
 					state, checkErr := e.workspace.reconcileFiles(approval.WorkspaceState)
 					if checkErr != nil {
 						return fmt.Errorf("reconcile %s: %w", call.ID, checkErr)
@@ -444,6 +463,11 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	for _, call := range calls {
 		fmt.Fprintf(&b, "%s %s: %s\n%s\n", call.ID, call.Name, call.Status, truncateUTF8(call.Result.Output, 2048, " [truncated]"))
 	}
+	processEvidence, err := e.processRecoveryContext(ctx, record.ID)
+	if err != nil {
+		return "", err
+	}
+	b.WriteString(processEvidence)
 	b.WriteString("Do not repeat confirmed completed actions. Verify current files before new edits.\n")
 	return b.String(), nil
 }
@@ -463,7 +487,9 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 		}
 		for _, event := range events {
 			var input struct {
-				Request string `json:"request"`
+				Request    string              `json:"request"`
+				ControlID  string              `json:"control_id"`
+				References []ReferenceSnapshot `json:"references"`
 			}
 			if err := json.Unmarshal(event.Data, &input); err != nil {
 				return fmt.Errorf("decode recorded request: %w", err)
@@ -472,6 +498,11 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			// prove which requests were saved. Replay once rather than drop intent.
 			e.session.RequestsReplayedWithoutCheckpoint = e.session.RequestsReplayedWithoutCheckpoint || upgrading
 			e.session.appendMessage("user", input.Request)
+			e.session.Messages[len(e.session.Messages)-1].ControlID = input.ControlID
+			e.session.Messages[len(e.session.Messages)-1].References = input.References
+			if err := e.restoreRequestReferences(ctx, event.Sequence, &e.session.Messages[len(e.session.Messages)-1]); err != nil {
+				return err
+			}
 			e.session.PreviousResponseID = ""
 			e.session.resumed = true
 			e.session.LastRequestSequence = event.Sequence

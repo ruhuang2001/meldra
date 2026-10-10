@@ -466,6 +466,78 @@ def run_serve_case(binary, output, name):
         assert 'result' in response, response
         if not latest:
             send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
+        if name == 'serve-latest-context-state':
+            def call(tool, arguments, state=None):
+                params = {'name': tool, 'arguments': arguments}
+                if state:
+                    params.update(requestState=state, inputResponses={'approval': {'action': 'accept', 'content': {'approve': True}}})
+                return request('tools/call', params, handle_approval=False)['result']
+
+            def context(path=None):
+                result = call('read_project_context', {'path': path})
+                assert not result.get('isError'), result
+
+            def challenge(tool, arguments):
+                result = call(tool, arguments)
+                assert result.get('resultType') == 'input_required', result
+                return result['requestState']
+
+            def accepted(tool, arguments):
+                result = call(tool, arguments, challenge(tool, arguments))
+                assert not result.get('isError'), result
+
+            (workspace / 'AGENTS.md').write_text('Root revision one.\n')
+            context()
+            arguments = {'path': 'hello.txt', 'old_str': 'server-read-evidence', 'new_str': 'current-write'}
+            state = challenge('edit_file', arguments)
+            (workspace / 'AGENTS.md').write_text('Root revision two.\n')
+            context()
+            stale = call('edit_file', arguments, state)
+            assert stale.get('isError'), 'context reread revived stale approval: ' + json.dumps(stale)
+            assert (workspace / 'hello.txt').read_text() == 'server-read-evidence\n'
+            accepted('edit_file', arguments)
+
+            replacement = {'path': 'hello.txt', 'old_str': 'current-write', 'new_str': 'must-not-revive'}
+            consumed = challenge('edit_file', replacement)
+            (workspace / 'AGENTS.md').write_text('Temporarily changed during approval.\n')
+            assert call('edit_file', replacement, consumed).get('isError'), 'changed rules accepted before context read'
+            (workspace / 'AGENTS.md').write_text('Root revision two.\n')
+            context()
+            assert call('edit_file', replacement, consumed).get('isError'), 'reverted rules revived consumed approval'
+            assert (workspace / 'hello.txt').read_text() == 'current-write\n'
+
+            for path in ('left', 'right'):
+                (workspace / path).mkdir()
+                (workspace / path / 'AGENTS.md').write_text(path + ' scoped instructions.\n')
+            patch = {'patch': None, 'changes': [{'path': 'left/new.txt', 'old_str': '', 'new_str': 'left\n'}, {'path': 'right/new.txt', 'old_str': '', 'new_str': 'right\n'}]}
+            unseen = call('apply_patch', patch)
+            assert unseen.get('isError') and not unseen.get('requestState'), 'approval issued before target instructions were loaded: ' + json.dumps(unseen)
+            context('left/new.txt')
+            context('right/new.txt')
+            accepted('apply_patch', patch)
+
+            deletion = {'patch': '--- a/left/new.txt\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-left\n-\n', 'changes': None}
+            state = challenge('apply_patch', deletion)
+            (workspace / 'left/AGENTS.md').write_text('Left changed during delete approval.\n')
+            context('left/new.txt')
+            stale = call('apply_patch', deletion, state)
+            assert stale.get('isError') and (workspace / 'left/new.txt').exists(), stale
+            accepted('apply_patch', deletion)
+            assert not (workspace / 'left/new.txt').exists()
+
+            state = challenge('undo_last_change', {})
+            (workspace / 'left/AGENTS.md').write_text('Left changed during undo approval.\n')
+            context('left/new.txt')
+            stale = call('undo_last_change', {}, state)
+            assert stale.get('isError') and not (workspace / 'left/new.txt').exists(), stale
+            accepted('undo_last_change', {})
+            assert (workspace / 'left/new.txt').read_text() == 'left\n'
+            process.stdin.close()
+            process.wait(timeout=10)
+            stderr = process.stderr.read().decode()
+            (directory / 'stderr.txt').write_text(stderr)
+            assert process.returncode == 0 and 'DATA RACE' not in stderr, stderr
+            return {'name': name, 'passed': True, 'stale_context_approvals_rejected': 3, 'failed_redemption_consumed': True, 'multi_scope_discovery_before_approval': True}
         if name == 'serve-cancel':
             process.terminate()
             process.wait(timeout=5)
@@ -581,6 +653,7 @@ def main():
     scenarios += [('serve-approve', {}), ('serve-deny', {}), ('serve-latest-approve', {}), ('serve-latest-deny', {}), ('serve-cancel', {})]
     scenarios += [('http-slow-startup', {'transport': 'http'})]
     scenarios += [('catalog-count', {}), ('catalog-bytes', {}), ('catalog-escaped-bytes', {}), ('serve-command-failed', {}), ('serve-approval-budget', {}), ('serve-latest-undo-state', {}), ('serve-latest-undo-decline', {})]
+    scenarios += [('serve-latest-context-state', {})]
     reports = []
     for name, options in scenarios:
         if args.case and name != args.case:

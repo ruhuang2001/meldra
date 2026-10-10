@@ -80,8 +80,8 @@ func TestHeadlessTurnCancelsActiveTool(t *testing.T) {
 	agent := NewAgent(inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
 		return provider.Result{Response: &provider.Response{ID: "call", Status: "completed", Output: []provider.OutputItem{{Type: "function_call", Name: "wait", CallID: "one", Arguments: "{}"}}}}, nil
 	}), nil, []ToolDefinition{{Name: "wait", Function: func(got context.Context, _ json.RawMessage) (string, error) {
-		if got != ctx {
-			t.Error("tool did not receive turn context")
+		if got.Done() == nil {
+			t.Error("tool did not receive cancellable turn context")
 		}
 		close(started)
 		<-got.Done()

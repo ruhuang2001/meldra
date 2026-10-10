@@ -67,7 +67,7 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	out = checked
 	defer func() { err = errors.Join(err, checked.err) }()
 	if len(args) < 2 {
-		return fmt.Errorf("usage: meldra task show|events|resume|resolve TASK_ID [options]")
+		return fmt.Errorf("usage: meldra task show|events|resume|resolve|resolve-process TASK_ID [options]")
 	}
 	action, id := args[0], args[1]
 	if !validSessionID(id) {
@@ -87,6 +87,33 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		return err
 	}
 	switch action {
+	case "resolve-process":
+		if len(args) != 5 || args[3] != "--reason" || strings.TrimSpace(args[4]) == "" {
+			return fmt.Errorf("usage: meldra task resolve-process TASK_ID PROCESS_ID --reason TEXT")
+		}
+		lease, err := db.Acquire(ctx, id, record.Workspace)
+		if err != nil {
+			return err
+		}
+		defer lease.Close()
+		process, err := db.GetProcess(ctx, args[2])
+		if err != nil {
+			return err
+		}
+		if process.TaskID != id {
+			return fmt.Errorf("process belongs to another task")
+		}
+		if process.State.Terminal() && process.Effects != "unknown" {
+			return task.ErrTransition
+		}
+		if err := db.RecoverInterrupted(ctx, lease, id); err != nil {
+			return err
+		}
+		if err := db.ResolveProcess(ctx, lease, args[2], args[4]); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "Process effects resolved; resume the task explicitly.")
+		return nil
 	case "show":
 		if len(args) > 3 || len(args) == 3 && args[2] != "--json" {
 			return fmt.Errorf("usage: meldra task show TASK_ID [--json]")
@@ -103,14 +130,19 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		if err != nil {
 			return err
 		}
+		processes, err := db.Processes(ctx, id)
+		if err != nil {
+			return err
+		}
 		if len(args) == 3 {
 			return json.NewEncoder(out).Encode(struct {
+				Processes     []task.Process  `json:"processes"`
 				SchemaVersion int             `json:"schema_version"`
 				Task          task.Task       `json:"task"`
 				Runs          []task.Run      `json:"runs"`
 				Calls         []task.ToolCall `json:"tool_calls"`
 				Approvals     []task.Approval `json:"approvals"`
-			}{task.SchemaVersion, record, runs, calls, approvals})
+			}{processes, task.SchemaVersion, record, runs, calls, approvals})
 		}
 		fmt.Fprintf(out, "Task: %s\nStatus: %s\nWorkspace: %s\nGoal: %s\n", record.ID, record.Status, sanitizeTerminalText(record.Workspace), sanitizeTerminalText(record.Goal))
 		if record.Status == task.Running || record.Status == task.WaitingApproval {
@@ -124,6 +156,9 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 			if call.Result.Error != "" {
 				fmt.Fprintln(out, sanitizeTerminalText(call.Result.Error))
 			}
+		}
+		for _, process := range processes {
+			fmt.Fprintf(out, "Process %s: %s (effects: %s)\n", process.ID, process.State, process.Effects)
 		}
 		for _, approval := range approvals {
 			fmt.Fprintf(out, "Approval %s for %s: %s\n", approval.ID, approval.ToolCallID, approval.Decision)

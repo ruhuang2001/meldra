@@ -700,6 +700,7 @@ func TestTUIControllerDeliversAgentEventsInOrder(t *testing.T) {
 
 	controller.messages <- "reply"
 	want := []UIEventKind{
+		UIEventMode,
 		UIEventStatus,
 		UIEventUserMessage,
 		UIEventStatus,
