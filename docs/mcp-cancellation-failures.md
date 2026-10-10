@@ -9,3 +9,5 @@ Recorded before implementing the input fix:
 - Cancellation must not leave a reader goroutine consuming a future chat input.
 - Preserve already-buffered lines through the resume picker and MCP approvals.
 - TUI cancellation joins its reader before closing descriptors; no race warning.
+- Linux regular-file or /dev/null stdin must work without epoll registration;
+  existing real-process shutdown/EOF checks cover this path.
