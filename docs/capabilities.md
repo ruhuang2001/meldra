@@ -31,8 +31,10 @@ edits. Arbitrary programs may affect files outside their working directory, so
 per-file instruction discovery cannot determine a program's complete write set.
 
 Applicable instruction files must be regular UTF-8 text files without symbolic
-links. Each file is limited to 32 KiB, with 128 KiB of active instruction content.
-Invalid or oversized instructions produce a visible error.
+links. Each file is limited to 32 KiB. The active project-instruction payload is
+limited to 128 KiB, including its explanatory prefix, JSON-encoded paths, scopes,
+digests, and escaped content. Invalid or oversized instructions produce a visible
+error before they are acknowledged or sent to the model.
 
 ## Explicit file references
 

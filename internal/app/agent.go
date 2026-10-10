@@ -135,17 +135,17 @@ func (a *Agent) Run(ctx context.Context) error {
 				if err := a.ackIdleControl(*pending); err != nil {
 					return err
 				}
-				a.control.selected = nil
+				a.clearSelected(pending)
 				a.emitNotice("Turn stopped")
 				continue
 			case "mode":
-				if err := a.applyMode(ExecutionMode(pending.Text)); err != nil {
+				if err := a.handleModeRequest(ExecutionMode(pending.Text)); err != nil {
 					return err
 				}
 				if err := a.ackIdleControl(*pending); err != nil {
 					return err
 				}
-				a.control.selected = nil
+				a.clearSelected(pending)
 				continue
 			default:
 				userInput, ok = pending.Text, true
@@ -172,7 +172,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		if kind, value, control := parseControlText(userInput); control && pending == nil {
 			switch kind {
 			case "mode":
-				if err := a.applyMode(ExecutionMode(value)); err != nil {
+				if err := a.handleModeRequest(ExecutionMode(value)); err != nil {
 					return err
 				}
 				continue
@@ -215,6 +215,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		return ErrAgentBusy
 	}
 	defer a.turnMu.Unlock()
+	c := a.initControl()
+	c.mu.Lock()
+	selected := c.selected
+	c.mu.Unlock()
+	defer a.clearSelected(selected)
 	if a.modeError != nil {
 		return a.modeError
 	}
@@ -246,13 +251,12 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	a.toolFailure = nil
 	if a.execution != nil {
-		c := a.initControl()
 		c.mu.Lock()
 		a.execution.requestControlID = ""
 		a.execution.requestControlRefs = nil
-		if c.selected != nil {
-			a.execution.requestControlID = c.selected.ID
-			a.execution.requestControlRefs = c.selected.References
+		if selected != nil {
+			a.execution.requestControlID = selected.ID
+			a.execution.requestControlRefs = selected.References
 		}
 		c.mu.Unlock()
 		if a.session != nil {
@@ -282,9 +286,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	var requestInput string
 	var references []ReferenceSnapshot
-	c := a.initControl()
 	c.mu.Lock()
-	selected := c.selected
 	if selected != nil {
 		requestInput, references, err = a.prepareControlReferences(ctx, *selected)
 	} else {

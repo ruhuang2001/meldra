@@ -175,6 +175,77 @@ func TestProjectContextRejectsAggregateQuotaAndAncestorSymlink(t *testing.T) {
 	}
 }
 
+func TestProjectContextLimitsEncodedInstructions(t *testing.T) {
+	for _, source := range []string{"escaped content", "path metadata"} {
+		t.Run(source, func(t *testing.T) {
+			w := contextWorkspace(t)
+			var paths []string
+			if source == "escaped content" {
+				writeContextFixture(t, w, "AGENTS.md", strings.Repeat("<", maxProjectRuleBytes))
+			} else {
+				for i := range 300 {
+					dir := fmt.Sprintf("%03d-%s", i, strings.Repeat("x", 200))
+					writeContextFixture(t, w, dir+"/AGENTS.md", "")
+					paths = append(paths, dir+"/new.txt")
+				}
+			}
+			for _, path := range paths {
+				if err := w.projectContext.ObservePath(path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := w.projectContext.Instructions(); err == nil || !strings.Contains(err.Error(), "total limit") {
+				t.Fatalf("oversized encoded instructions accepted: %v", err)
+			}
+			if w.projectContext.presented != "" {
+				t.Error("rejected instructions changed acknowledged context")
+			}
+			if _, err := w.projectContext.ContextTool().Function(t.Context(), json.RawMessage(`{"path":"."}`)); err == nil {
+				t.Error("context tool bypassed encoded instruction limit")
+			}
+			if err := w.projectContext.BeforeWrite([]string{"new.txt"}); err == nil {
+				t.Error("write gate bypassed encoded instruction limit")
+			}
+		})
+	}
+}
+
+func TestProjectContextEncodedInstructionLimitBoundary(t *testing.T) {
+	w := contextWorkspace(t)
+	var paths []string
+	for i := range 4 {
+		path := fmt.Sprintf("area%d/AGENTS.md", i)
+		writeContextFixture(t, w, path, "")
+		paths = append(paths, path)
+	}
+	snapshot, err := w.projectContext.Inspect(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remaining := maxProjectContextBytes - len(snapshot.Instructions())
+	var lastSize int
+	for _, path := range paths {
+		lastSize = min(remaining, maxProjectRuleBytes)
+		writeContextFixture(t, w, path, strings.Repeat("r", lastSize))
+		remaining -= lastSize
+	}
+	if remaining != 0 || lastSize >= maxProjectRuleBytes {
+		t.Fatal("fixture cannot reach the precise encoded context limit")
+	}
+	instructions, err := w.projectContext.Instructions()
+	if err != nil || len(instructions) != maxProjectContextBytes {
+		t.Fatalf("exact-limit instructions: size = %d, err = %v", len(instructions), err)
+	}
+	presented := w.projectContext.presented
+	writeContextFixture(t, w, paths[len(paths)-1], strings.Repeat("r", lastSize+1))
+	if _, err := w.projectContext.Instructions(); err == nil || !strings.Contains(err.Error(), "total limit") {
+		t.Fatalf("one-byte overflow accepted: %v", err)
+	}
+	if w.projectContext.presented != presented {
+		t.Error("failed refresh changed acknowledged context")
+	}
+}
+
 func TestContextCommandShowsExactApplicableSources(t *testing.T) {
 	w := contextWorkspace(t)
 	writeContextFixture(t, w, "AGENTS.md", "root")

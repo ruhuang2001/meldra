@@ -3,9 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 
+	"meldra/internal/provider"
 	"meldra/internal/tool"
 )
 
@@ -61,5 +64,81 @@ func TestSteeringContextRetainsGoalCompletedToolAndOriginalReference(t *testing.
 	}
 	if strings.Contains(input, "changed after attachment") {
 		t.Fatal("steering reread historical attachment")
+	}
+}
+
+func TestSteeringReferencesAppearOnceAndKeepAcceptedSnapshots(t *testing.T) {
+	for _, durable := range []bool{false, true} {
+		for _, custom := range []bool{false, true} {
+			t.Run(fmt.Sprintf("durable=%t/custom=%t", durable, custom), func(t *testing.T) {
+				w := contextWorkspace(t)
+				a := NewAgent(nil, nil, nil)
+				if durable {
+					a, _ = recordedAgent(t, nil, nil)
+					w = a.execution.workspace
+					w.projectContext = NewProjectContext(w)
+				}
+				a.projectContext, a.customProvider = w.projectContext, custom
+				a.output = io.Discard
+				contents := map[string]string{
+					"original.txt": "ORIGINAL_SNAPSHOT_" + strings.Repeat("o", 32<<10-18),
+					"first.txt":    "FIRST_CORRECTION_" + strings.Repeat("f", 64<<10-17),
+					"second.txt":   "SECOND_CORRECTION_" + strings.Repeat("s", 32<<10-18),
+					"queued.txt":   "QUEUED_SNAPSHOT",
+				}
+				for path, content := range contents {
+					writeContextFixture(t, w, path, content)
+				}
+				requests := 0
+				a.backend = inferenceFunc(func(_ context.Context, request provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+					requests++
+					input := fmt.Sprintf("%+v", request.Input)
+					switch requests {
+					case 1:
+						for _, text := range []string{"Use @first.txt", "Also inspect @second.txt"} {
+							if err := a.SubmitControl("steer", text); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if err := a.SubmitControl("queue", "Later inspect @queued.txt"); err != nil {
+							t.Fatal(err)
+						}
+						for path := range contents {
+							writeContextFixture(t, w, path, "CHANGED_AFTER_ACCEPTANCE")
+						}
+					case 2:
+						for _, marker := range []string{"ORIGINAL_SNAPSHOT_", "FIRST_CORRECTION_", "SECOND_CORRECTION_"} {
+							if count := strings.Count(input, marker); count != 1 {
+								t.Errorf("corrected input contains %q %d times; want exactly once", marker, count)
+							}
+						}
+						if strings.Contains(input, "QUEUED_SNAPSHOT") || strings.Contains(input, "CHANGED_AFTER_ACCEPTANCE") {
+							t.Error("steering attached queued work or reread accepted files")
+						}
+					case 3:
+						if strings.Count(input, "QUEUED_SNAPSHOT") != 1 || strings.Contains(input, "CHANGED_AFTER_ACCEPTANCE") {
+							t.Error("queued request lost its original accepted attachment")
+						}
+					default:
+						t.Fatalf("unexpected request %d", requests)
+					}
+					return provider.Result{Response: finishResponse()}, nil
+				})
+				provided := false
+				a.getUserMessage = func() (string, bool) {
+					if provided {
+						return "", false
+					}
+					provided = true
+					return "Start with @original.txt", true
+				}
+				if err := a.Run(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if requests != 3 {
+					t.Fatalf("requests = %d; want 3", requests)
+				}
+			})
+		}
 	}
 }

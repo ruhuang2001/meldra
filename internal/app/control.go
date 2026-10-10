@@ -32,6 +32,8 @@ type ControlRequest struct {
 
 var errTurnStopped = errors.New("turn stopped by user")
 
+var ErrNoActiveTurn = errors.New("no active turn; submit the text as a normal message")
+
 // turnControl owns concurrent input. The Agent remains the sole conversation
 // writer; control callbacks only journal requests and cancel bounded operations.
 type turnControl struct {
@@ -83,7 +85,7 @@ func (a *Agent) SubmitControl(kind, text string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.active {
-		return ErrAgentBusy
+		return ErrNoActiveTurn
 	}
 	if len(c.pending) >= 32 {
 		return fmt.Errorf("control queue is full")
@@ -204,6 +206,8 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 			if err := a.store.Save(a.session); err != nil {
 				return "", err
 			}
+			// Durable referenceHistory adds these snapshots once when rebuilding.
+			augmented = r.Text
 		}
 		if err := c.record("control.applied", r); err != nil {
 			return "", err
@@ -423,4 +427,28 @@ func (a *Agent) continueRecovered() bool {
 	c.pending = append(c.pending, c.recovered...)
 	c.recovered = nil
 	return true
+}
+
+// A selected request is local execution state, not a durable claim of application.
+// Keep its journal record on errors, but never let it replace a later user input.
+func (a *Agent) clearSelected(selected *ControlRequest) {
+	c := a.initControl()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.selected == selected {
+		c.selected = nil
+	}
+}
+
+func (a *Agent) handleModeRequest(mode ExecutionMode) error {
+	err := a.applyMode(mode)
+	if err == nil {
+		return nil
+	}
+	if _, fatal := errors.AsType[*persistenceError](err); fatal {
+		return err
+	}
+	a.emit(UIEvent{Kind: UIEventStatus, Text: "Mode change failed"})
+	a.emitNotice("Mode change failed: " + sanitizeTerminalText(err.Error()))
+	return nil
 }

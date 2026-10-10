@@ -126,7 +126,7 @@ func (w *Workspace) executePreparedCommand(spec commandSpec, requestApproval boo
 		started = true
 		tool.Observe(ctx, func(o *tool.Observation) { o.Started = true })
 	})
-	log.flush()
+	log.finish()
 	status := 0
 	if err != nil {
 		if exit, ok := errors.AsType[*exec.ExitError](err); ok {
@@ -196,6 +196,10 @@ type commandLog struct {
 	processID  string
 	lastEmit   time.Time
 	emitCursor int64
+	tailState  terminalStream
+	emitTimer  *time.Timer
+	finished   bool
+	closed     bool
 }
 
 func newCommandLog(callback func(CommandOutput), processID string) (*commandLog, error) {
@@ -208,11 +212,18 @@ func newCommandLog(callback func(CommandOutput), processID string) (*commandLog,
 
 func (l *commandLog) Write(p []byte) (int, error) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed || l.finished {
+		return len(p), nil
+	}
 	l.total += int64(len(p))
 	if len(p) >= maxToolOutput {
+		l.tailState.append(l.tail, false, nil)
+		l.tailState.append(p[:len(p)-maxToolOutput], false, nil)
 		l.tail = append(l.tail[:0], p[len(p)-maxToolOutput:]...)
 	} else {
 		if overflow := len(l.tail) + len(p) - maxToolOutput; overflow > 0 {
+			l.tailState.append(l.tail[:overflow], false, nil)
 			copy(l.tail, l.tail[overflow:])
 			l.tail = l.tail[:len(l.tail)-overflow]
 		}
@@ -227,10 +238,19 @@ func (l *commandLog) Write(p []byte) (int, error) {
 	if keep < int64(len(p)) || l.err != nil {
 		l.truncated = true
 	}
-	emit := l.callback != nil && time.Since(l.lastEmit) >= 100*time.Millisecond
-	l.mu.Unlock()
-	if emit {
-		l.flush()
+	if l.callback != nil {
+		if time.Since(l.lastEmit) >= 100*time.Millisecond {
+			l.flushLocked()
+		} else if l.emitTimer == nil {
+			l.emitTimer = time.AfterFunc(time.Until(l.lastEmit.Add(100*time.Millisecond)), func() {
+				l.mu.Lock()
+				defer l.mu.Unlock()
+				l.emitTimer = nil
+				if !l.closed && !l.finished {
+					l.flushLocked()
+				}
+			})
+		}
 	}
 	return len(p), nil
 }
@@ -244,24 +264,63 @@ func (l *commandLog) read(cursor int64) (string, int64, bool, error) {
 	start := l.total - int64(len(l.tail))
 	truncated := cursor < start
 	cursor = max(cursor, start)
-	end := min(l.total, cursor+64<<10)
-	return sanitizeTerminalText(string(l.tail[cursor-start : end-start])), end, truncated, nil
+	text, next := l.readLocked(cursor, min(l.total, cursor+64<<10))
+	return text, next, truncated, nil
 }
 
-func (l *commandLog) flush() {
-	l.mu.Lock()
+// Replay the retained prefix from its bounded decoder checkpoint. This keeps
+// independently polled raw-byte cursors meaningful even inside escape sequences,
+// and avoids exposing their payload when the retained tail starts mid-sequence.
+func (l *commandLog) readLocked(cursor, end int64) (string, int64) {
+	if cursor == l.total {
+		return "", cursor
+	}
+	start := l.total - int64(len(l.tail))
+	decoder := l.tailState
+	decoder.append(l.tail[:cursor-start], false, nil)
+	var output strings.Builder
+	final := l.finished && end == l.total
+	decoder.append(l.tail[cursor-start:end-start], final, &output)
+	if !final {
+		// Return a cursor before an incomplete rune so the next observation can
+		// emit it exactly once after its remaining bytes arrive.
+		end = max(cursor, end-int64(decoder.pendingLen))
+	}
+	return output.String(), end
+}
+
+// Callbacks must enqueue promptly. Serialize them with close so no callback can
+// outlive log ownership, including a timer that has already started firing.
+func (l *commandLog) flushLocked() {
 	if l.callback == nil || l.emitCursor == l.total {
-		l.mu.Unlock()
 		return
 	}
-	start := max(l.emitCursor, l.total-int64(len(l.tail)))
-	// A single update remains small even when the consumer is a slow terminal.
-	start = max(start, l.total-8192)
-	update := CommandOutput{ProcessID: l.processID, Text: sanitizeTerminalText(string(l.tail[start-(l.total-int64(len(l.tail))):])), Cursor: l.total, Truncated: start > l.emitCursor}
-	l.lastEmit, l.emitCursor = time.Now(), l.total
-	callback := l.callback
-	l.mu.Unlock()
-	callback(update)
+	start := max(l.emitCursor, l.total-int64(len(l.tail)), l.total-8192)
+	text, next := l.readLocked(start, l.total)
+	if next == l.emitCursor && text == "" {
+		return
+	}
+	update := CommandOutput{ProcessID: l.processID, Text: text, Cursor: next, Truncated: start > l.emitCursor}
+	l.lastEmit, l.emitCursor = time.Now(), next
+	l.callback(update)
+}
+
+func (l *commandLog) finish() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.finishLocked()
+}
+
+func (l *commandLog) finishLocked() {
+	if l.finished || l.closed {
+		return
+	}
+	l.finished = true
+	if l.emitTimer != nil {
+		l.emitTimer.Stop()
+		l.emitTimer = nil
+	}
+	l.flushLocked()
 }
 
 func (l *commandLog) artifact() ([]byte, bool, error) {
@@ -274,4 +333,11 @@ func (l *commandLog) artifact() ([]byte, bool, error) {
 	return data, l.truncated, errors.Join(l.err, err)
 }
 
-func (l *commandLog) close() { _ = l.file.Close(); _ = os.Remove(l.file.Name()) }
+func (l *commandLog) close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.finishLocked()
+	l.closed = true
+	_ = l.file.Close()
+	_ = os.Remove(l.file.Name())
+}
