@@ -89,7 +89,7 @@ func TestSchemaOneWithoutProviderIndexRemainsReadable(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 1 {
+	if err := s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != task.DatabaseSchemaVersion {
 		t.Fatal("index upgrade changed semantic schema")
 	}
 }

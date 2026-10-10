@@ -114,8 +114,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
-	if version > task.SchemaVersion {
-		return fmt.Errorf("task database schema %d is newer than supported schema %d", version, task.SchemaVersion)
+	if version > task.DatabaseSchemaVersion {
+		return fmt.Errorf("task database schema %d is newer than supported schema %d", version, task.DatabaseSchemaVersion)
 	}
 	// Check schema first, then cap all schema/index writes before they can grow
 	// the file. SQLite may otherwise accept an oversized effective page limit.
@@ -153,6 +153,14 @@ CREATE TABLE legacy_imports (source_id TEXT NOT NULL, content_hash TEXT NOT NULL
 PRAGMA user_version = 1;`)
 		if err != nil {
 			return fmt.Errorf("migrate task database: %w", err)
+		}
+	}
+	if version < 2 {
+		if _, err := tx.ExecContext(ctx, `CREATE TABLE processes (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), run_id TEXT NOT NULL REFERENCES runs(id), call_id TEXT NOT NULL REFERENCES tool_calls(id), state TEXT NOT NULL, effects TEXT NOT NULL, record BLOB NOT NULL);
+CREATE UNIQUE INDEX processes_call ON processes(call_id);
+CREATE INDEX processes_task ON processes(task_id,state,effects);
+PRAGMA user_version = 2;`); err != nil {
+			return fmt.Errorf("migrate managed processes: %w", err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
