@@ -532,7 +532,14 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 				}
 			})
 			server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-			defer server.Close()
+			defer func() {
+				// Finish the callback response before closing active connections.
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := server.Shutdown(shutdownCtx); err != nil {
+					_ = server.Close()
+				}
+			}()
 			go func() {
 				if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 					select {
