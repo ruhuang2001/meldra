@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -507,7 +508,13 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 		if match < 0 && completedItem.Type == "function_call" && len(positions) > 0 && completedIndex < len(positions[0]) {
 			position := positions[0][completedIndex]
 			if position >= 0 && position < int64(len(output)) && output[position].Type == "function_call" {
-				match = int(position)
+				original := output[position]
+				for index, existing := range merged {
+					if existing.Type == "function_call" && (original.ID != "" && original.ID == existing.ID || original.CallID != "" && original.CallID == existing.CallID) {
+						match = index
+						break
+					}
+				}
 			}
 		}
 		if match >= 0 {
@@ -537,6 +544,13 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 				}
 			}
 			if duplicate {
+				continue
+			}
+		}
+		if completedItem.Type == "message" && len(positions) > 0 && completedIndex < len(positions[0]) {
+			position := positions[0][completedIndex]
+			if position >= 0 && position <= int64(len(merged)) {
+				merged = slices.Insert(merged, int(position), completedItem)
 				continue
 			}
 		}
