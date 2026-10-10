@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -73,19 +74,22 @@ func validateChangeCount(count int) error {
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
-	toolMu          sync.Mutex
-	root            string
-	input           *bufio.Reader
-	output          io.Writer
-	autoApprove     bool
-	approve         ApprovalFunc
-	approvalRecord  func(context.Context, ApprovalRequest, bool) error
-	approvalPending func(context.Context, ApprovalRequest) error
-	present         ApprovalPresenter
-	ctx             context.Context
-	last            []fileChange
-	protected       []string
-	syncDir         func(string) error
+	toolMu           sync.Mutex
+	mcpInteractionMu sync.Mutex
+	mcpActiveServer  atomic.Pointer[mcpInteraction]
+	mcpInput         func(context.Context, string) (string, bool)
+	root             string
+	input            *bufio.Reader
+	output           io.Writer
+	autoApprove      bool
+	approve          ApprovalFunc
+	approvalRecord   func(context.Context, ApprovalRequest, bool) error
+	approvalPending  func(context.Context, ApprovalRequest) error
+	present          ApprovalPresenter
+	ctx              context.Context
+	last             []fileChange
+	protected        []string
+	syncDir          func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {

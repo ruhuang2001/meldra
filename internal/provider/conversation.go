@@ -137,6 +137,9 @@ func UserInput(text string) Input {
 func UserItems(text string) Items {
 	return Items{{value: responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleUser)}}
 }
+func MessageItems(role, text string) Items {
+	return Items{{value: responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))}}
+}
 func ToolOutput(callID, output string) Item {
 	return Item{value: functionCallOutput(callID, output)}
 }

@@ -15,6 +15,7 @@ type Definition struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	NonStrict   bool // External schemas retain their optional properties.
 	Function    func(context.Context, json.RawMessage) (string, error)
 }
 

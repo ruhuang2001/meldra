@@ -16,3 +16,11 @@ func runCommandProcess(_ context.Context, command *exec.Cmd, onStart ...func()) 
 	}
 	return command.Wait()
 }
+
+func prepareMCPProcess(_ *exec.Cmd) {}
+
+func stopMCPProcess(command *exec.Cmd) {
+	if command.Process != nil {
+		_ = command.Process.Kill()
+	}
+}

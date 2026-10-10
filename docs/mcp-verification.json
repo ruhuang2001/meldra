@@ -1,0 +1,40 @@
+{
+  "date": "2026-10-09",
+  "platform": "darwin-arm64",
+  "baseline_main": "b097886d9778234c41ad6ed03a472ef770687de6",
+  "commands": [
+    "make check",
+    "go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./..."
+  ],
+  "result": "passed",
+  "coverage_percent": 82.4,
+  "coverage_minimum_percent": 75.0,
+  "suites": {
+    "mcp-e2e": 41,
+    "mcp-auth-interaction-e2e": 18,
+    "mcp-cli-e2e": 18,
+    "mcp-input-e2e": 5,
+    "mcp-oauth-regression-e2e": 8
+  },
+  "source_manifest_sha256": "816818b8ab37073ccdf9496840916980756cc7017dd2760c4a52f3306d2713e2",
+  "instrumented_binary_sha256": "45482e6e3abde6cfc54d0c2eaa79492d77485f971e5317219e86484ea2f9a795",
+  "report_sha256": "fe4476bef00027e94a8559546a260858f5b2da3d12b12292f659c66e841b743c",
+  "evidence_checksums_sha256": "120f2e746b70adc09b36f78bcfb8a67c2038918e2c132765cfbc59b043062753",
+  "real_codex_mcp": {
+    "server": "node_repl",
+    "tools_discovered": 4,
+    "calls": 1,
+    "result": {
+      "meldra_mcp_smoke": true,
+      "answer": 42
+    },
+    "model_provider": "local deterministic Responses fixture"
+  },
+  "limits": [
+    "Not full MCP conformance certification",
+    "Sampling and prompt --run currently text-only",
+    "MCP server transport is stdio",
+    "OAuth real-account login not tested; loopback authorization and refresh tested"
+  ],
+  "reproduce": "make check; each run writes a fresh dist/mcp-check-* directory"
+}
