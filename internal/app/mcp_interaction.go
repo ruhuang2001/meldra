@@ -31,6 +31,7 @@ func mcpClientOptions(w *Workspace, name string, config mcpServerConfig) *mcp.Cl
 			return nil, fmt.Errorf("unsolicited MCP interaction rejected")
 		}
 		ctx, cancel := context.WithCancel(ctx)
+		ctx = context.WithValue(ctx, controlContextKey{}, controlFromContext(active.ctx))
 		stop := context.AfterFunc(active.ctx, cancel)
 		defer stop()
 		defer cancel()
@@ -48,6 +49,7 @@ func mcpClientOptions(w *Workspace, name string, config mcpServerConfig) *mcp.Cl
 				return nil, fmt.Errorf("unsolicited MCP sampling rejected")
 			}
 			ctx, cancel := context.WithCancel(ctx)
+			ctx = context.WithValue(ctx, controlContextKey{}, controlFromContext(active.ctx))
 			stop := context.AfterFunc(active.ctx, cancel)
 			defer stop()
 			defer cancel()
@@ -63,6 +65,11 @@ func mcpClientOptions(w *Workspace, name string, config mcpServerConfig) *mcp.Cl
 }
 
 func (w *Workspace) mcpHumanInput(ctx context.Context, prompt string) (string, bool) {
+	if control := controlFromContext(ctx); control != nil {
+		var done func()
+		ctx, done = control.approvalContext(ctx)
+		defer done()
+	}
 	if ctx.Err() != nil {
 		return "", false
 	}
@@ -81,6 +88,11 @@ func (w *Workspace) mcpHumanInput(ctx context.Context, prompt string) (string, b
 	return strings.TrimSpace(line), true
 }
 func (w *Workspace) mcpExplicitApproval(ctx context.Context, title, detail string) bool {
+	if control := controlFromContext(ctx); control != nil {
+		var done func()
+		ctx, done = control.approvalContext(ctx)
+		defer done()
+	}
 	request := ApprovalRequest{Kind: ApprovalCommand, Title: sanitizeTerminalText(title), Detail: sanitizeTerminalText(detail), Prompt: sanitizeTerminalText(detail + "\nAllow? [y/N] ")}
 	if ctx.Err() != nil {
 		return false

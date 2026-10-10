@@ -3,6 +3,8 @@ package app
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,6 +61,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "context":
+			return runContextCommand(ctx, args[1:], stdout)
 		case "skills":
 			return runSkillsCommand(ctx, args[1:], stdout)
 		case "mcp":
@@ -223,13 +227,18 @@ func runConfigCommand(args []string, stdout io.Writer) error {
 }
 
 type ChatOptions struct {
-	MCPServer         string // Limit a user-selected prompt to its own MCP server.
-	Workspace         string
-	Resume            string
-	Prompt            string
-	AutoApprove       bool
-	workspaceExplicit bool
-	selectResume      bool
+	Mode               ExecutionMode
+	Permissions        PermissionProfile
+	CommandTimeout     int
+	AllowedExecutables []string
+	RemotePrompt       bool
+	MCPServer          string // Limit a user-selected prompt to its own MCP server.
+	Workspace          string
+	Resume             string
+	Prompt             string
+	AutoApprove        bool
+	workspaceExplicit  bool
+	selectResume       bool
 }
 
 func parseChatOptions(args []string) (ChatOptions, error) {
@@ -237,6 +246,35 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch {
+		case argument == "--mode" || argument == "--permissions" || argument == "--command-timeout" || argument == "--allow-executable":
+			index++
+			if index >= len(args) {
+				return ChatOptions{}, fmt.Errorf("%s requires a value", argument)
+			}
+			switch argument {
+			case "--mode":
+				options.Mode = ExecutionMode(args[index])
+			case "--permissions":
+				options.Permissions = PermissionProfile(args[index])
+			case "--command-timeout":
+				value, err := strconv.Atoi(args[index])
+				if err != nil || value < 1 || value > 86400 {
+					return ChatOptions{}, fmt.Errorf("command timeout must be 1..86400 seconds")
+				}
+				options.CommandTimeout = value
+			case "--allow-executable":
+				options.AllowedExecutables = append(options.AllowedExecutables, args[index])
+			}
+		case strings.HasPrefix(argument, "--mode="):
+			options.Mode = ExecutionMode(strings.TrimPrefix(argument, "--mode="))
+			if options.Mode == "" {
+				return ChatOptions{}, fmt.Errorf("--mode requires plan or build")
+			}
+		case strings.HasPrefix(argument, "--permissions="):
+			options.Permissions = PermissionProfile(strings.TrimPrefix(argument, "--permissions="))
+			if options.Permissions == "" {
+				return ChatOptions{}, fmt.Errorf("--permissions requires a profile")
+			}
 		case argument == "--auto-approve":
 			options.AutoApprove = true
 		case argument == "--workspace":
@@ -278,6 +316,9 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 			return ChatOptions{}, fmt.Errorf("unknown command or option %q\n\n%s", argument, usageText)
 		}
 	}
+	if _, err := newRuntimePolicy(options.Mode, options.Permissions); err != nil {
+		return ChatOptions{}, err
+	}
 	return options, nil
 }
 
@@ -286,7 +327,7 @@ func parseResumeOptions(args []string) (ChatOptions, error) {
 	var sessionID string
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
-		if argument == "--workspace" || argument == "--resume" || argument == "--prompt" {
+		if argument == "--workspace" || argument == "--resume" || argument == "--prompt" || argument == "--mode" || argument == "--permissions" || argument == "--command-timeout" || argument == "--allow-executable" {
 			optionArgs = append(optionArgs, argument)
 			if index+1 < len(args) {
 				index++
@@ -650,6 +691,36 @@ func newChatRuntime(
 			return nil, err
 		}
 	}
+	mode, permissions := options.Mode, options.Permissions
+	if mode == "" {
+		mode = session.Mode
+	}
+	if permissions == "" {
+		permissions = session.Permissions
+	}
+	policy, err := newRuntimePolicy(mode, permissions)
+	if err != nil {
+		return nil, err
+	}
+	policy.generation = session.PolicyGeneration
+	if options.Mode != "" && options.Mode != session.Mode {
+		policy.generation++
+	}
+	workspace.policy = policy
+	if options.CommandTimeout != 0 {
+		if err := workspace.SetCommandTimeout(options.CommandTimeout); err != nil {
+			return nil, err
+		}
+	}
+	if err := workspace.SetCommandExecutables(options.AllowedExecutables); err != nil {
+		return nil, err
+	}
+	session.Mode, session.Permissions, session.PolicyGeneration = policy.snapshot()
+	if options.Mode == ModeBuild && len(session.Plan) > 0 {
+		raw, _ := json.Marshal(session.Plan)
+		session.ApprovedPlanDigest = digest(raw)
+	}
+	workspace.projectContext = NewProjectContext(workspace)
 	// Task-era snapshots never overwrite the imported 0.1.x JSON source.
 	if !session.taskSnapshot {
 		session.hasSavedRevision = false
@@ -657,6 +728,8 @@ func newChatRuntime(
 	store = newTaskSessionStore(paths)
 	backend := provider.Connect(provider.Connection{APIKey: settings.APIKey, BaseURL: settings.BaseURL})
 	tools := workspace.ToolDefinitions()
+	tools = append(tools, workspace.projectContext.ContextTool())
+	tools = append(tools, workspace.ProcessToolDefinitions()...)
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
 	skills, err := discoverSkills(ctx, workspace, paths)
 	if err != nil {
@@ -665,13 +738,38 @@ func newChatRuntime(
 	if len(skills.Skills) > 0 {
 		tools = append(tools, skills.definition())
 	}
-	external, err := connectMCP(ctx, paths, workspace, options.MCPServer)
-	if err != nil {
-		return nil, err
+	external := &mcpConnections{}
+	if session.Mode != ModePlan {
+		external, err = connectMCP(ctx, paths, workspace, options.MCPServer, len(tools))
+		if err != nil {
+			return nil, err
+		}
 	}
 	tools = append(tools, external.tools...)
 	agent := NewAgent(backend, getUserMessage, tools)
+	connected := session.Mode != ModePlan
+	agent.connectExternal = func() error {
+		if connected {
+			return nil
+		}
+		remote, err := connectMCP(ctx, paths, workspace, options.MCPServer, len(agent.tools))
+		if err != nil {
+			return err
+		}
+		*external = *remote
+		agent.tools = append(agent.tools, remote.tools...)
+		agent.registry = nil
+		connected = true
+		for _, warning := range remote.warnings {
+			agent.emitNotice(warning)
+		}
+		return nil
+	}
 	agent.skills = skills
+	agent.policy = policy
+	agent.workspace = workspace
+	agent.projectContext = workspace.projectContext
+	agent.suppressNextReferences = options.RemotePrompt
 	agent.model = settings.Model
 	agent.customProvider = isCustomBaseURL(settings.BaseURL)
 	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
@@ -680,6 +778,11 @@ func newChatRuntime(
 	agent.session = session
 	agent.store = store
 	agent.execution = &taskExecution{paths: paths, workspace: workspace, session: session, resume: options.Resume != "", config: task.Config{Model: settings.Model, Provider: providerIdentity(settings.BaseURL), Workspace: workspace.root}}
+	if options.Resume != "" && session.taskSnapshot {
+		if err := agent.loadPendingControls(); err != nil {
+			return nil, err
+		}
+	}
 	workspace.approvalRecord = agent.execution.approval
 	workspace.approvalPending = agent.execution.pendingApproval
 	return &chatRuntime{
@@ -718,6 +821,12 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
 	}
 
+	boundedOutput, closeOutput, err := newSynchronizedWriter(ctx, stdout)
+	if err != nil {
+		return err
+	}
+	defer closeOutput()
+	stdout = boundedOutput
 	input, cleanup, err := newMCPCLIInput(stdin)
 	if err != nil {
 		return err
@@ -752,6 +861,18 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if err != nil {
 		return err
 	}
+	controller := newLineController(ctx, input, runtime.agent, stdout)
+	defer controller.close()
+	runtime.workspace.mcpInput = controller.humanInput
+	runtime.workspace.SetApprovalFunc(controller.approve)
+	runtime.agent.getUserMessage = func() (string, bool) {
+		if initialPrompt != "" {
+			prompt := initialPrompt
+			initialPrompt = ""
+			return prompt, true
+		}
+		return controller.next(ctx)
+	}
 	defer runtime.deleteEmptyNewSession()
 	defer runtime.mcp.close()
 	for _, warning := range runtime.mcp.warnings {
@@ -762,7 +883,10 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if err := runtime.agent.Run(ctx); err != nil {
 		return err
 	}
-	return readErr
+	if readErr != nil {
+		return readErr
+	}
+	return errors.Join(controller.inputError(), boundedOutput.Err())
 }
 
 func effectiveSettings(settings Settings) (Settings, error) {
@@ -834,6 +958,9 @@ const usageText = `Usage:
   meldra mcp resources|templates|prompts <server> [cursor]
   meldra mcp read <server> <uri>
   meldra mcp prompt <server> <name> [KEY=VALUE ...] [--run]
+  meldra context --workspace <path> --path <file> [--json]
+  meldra [--mode plan|build] [--permissions interactive|workspace-edit]
+         [--command-timeout <seconds>] [--allow-executable <absolute-path>]
   meldra [options]               Start a chat in a bounded workspace.
   meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.

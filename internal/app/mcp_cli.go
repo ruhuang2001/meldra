@@ -28,6 +28,16 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 			break
 		}
 		switch argument := args[index]; {
+		case argument == "--mode" || argument == "--permissions":
+			index++
+			if index == len(args) {
+				return fmt.Errorf("%s requires a value", argument)
+			}
+			if argument == "--mode" {
+				options.Mode = ExecutionMode(args[index])
+			} else {
+				options.Permissions = PermissionProfile(args[index])
+			}
 		case argument == "--workspace":
 			index++
 			if index == len(args) || args[index] == "" || strings.HasPrefix(args[index], "-") || options.Workspace != "" {
@@ -48,6 +58,12 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 		default:
 			positional = append(positional, argument)
 		}
+	}
+	if _, err := newRuntimePolicy(options.Mode, options.Permissions); err != nil {
+		return err
+	}
+	if options.Mode == ModePlan {
+		return fmt.Errorf("MCP catalog operations are unavailable in local Plan mode")
 	}
 	if len(positional) < 2 || positional[1] == "" || len(positional[1]) > 64 || !mcpNamePart.MatchString(positional[1]) {
 		return fmt.Errorf("MCP catalog command requires a configured server name")
@@ -173,6 +189,7 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 		return err
 	}
 	options.Prompt = selected.String()
+	options.RemotePrompt = true
 	options.MCPServer = name
 	return runChat(ctx, reader, output, options)
 }
