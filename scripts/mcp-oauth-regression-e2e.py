@@ -34,6 +34,10 @@ class Handler(base.Handler):
         server = self.server
         raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
         self.rfile = io.BytesIO(raw)
+        if self.path == '/token' and server.oversized_token:
+            server.token_serial += 1
+            self.reply({'access_token': 'fixture-access-' + str(server.token_serial), 'refresh_token': 'x' * ((1 << 20) - 512), 'token_type': 'Bearer', 'expires_in': 3600})
+            return
         if self.path == '/register':
             server.registrations += 1
         if self.path == '/register' and server.dynamic_secret:
@@ -110,6 +114,7 @@ def prepare(binary, output, name):
     server.tool_delay = 0
     server.registrations = 0
     server.fail_initialize = False
+    server.oversized_token = False
     config = {'url': server.url + '/mcp', 'oauth': {}}
     base.set_config(home, config)
     assert base.login(binary, env, server, directory) == 0
@@ -240,6 +245,22 @@ def run_case(binary, output, name):
             assert path.exists() and path.read_bytes() == before, 'failed re-login replaced or removed the active credentials'
             assert generation_path.read_bytes() == before_generation, 'failed re-login invalidated active clients'
             evidence['failed_relogin_preserved_session'] = True
+        elif name in ('oversized-login-cache', 'oversized-refresh-cache'):
+            server.dynamic_secret = server.expected_secret = 's' * 4096
+            assert base.login(binary, env, server, directory, suffix='-large-client') == 0
+            if name == 'oversized-refresh-cache':
+                expire(home)
+            before = path.read_bytes()
+            generation_path = Path(str(path) + '.generation')
+            before_generation = generation_path.read_bytes()
+            server.oversized_token = True
+            if name == 'oversized-login-cache':
+                assert base.login(binary, env, server, directory, suffix='-oversized') != 0, 'oversized login reported success'
+            else:
+                code, transcript = finish(start(binary, workspace, env), directory, 'oversized-refresh')
+                assert 'unavailable' in transcript, transcript
+            assert path.read_bytes() == before and generation_path.read_bytes() == before_generation, 'oversized session destroyed the existing cache'
+            evidence['oversized_cache_rejected_without_write'] = True
         elif name == 'logout-orphaned':
             base.write(home / 'mcp.json', {'mcpServers': {}})
             result = subprocess.run([str(binary), 'mcp', 'logout', 'fixture'], capture_output=True, text=True, env=env, timeout=10)
@@ -347,7 +368,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    cases = ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool', 'relogin-bad-issuer', 'relogin-bad-pkce', 'relogin-cancel', 'relogin-connection-failure', 'logout-orphaned', 'chat-reauthorization']
+    cases = ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool', 'relogin-bad-issuer', 'relogin-bad-pkce', 'relogin-cancel', 'relogin-connection-failure', 'logout-orphaned', 'chat-reauthorization', 'oversized-login-cache', 'oversized-refresh-cache']
     parser.add_argument('--case', choices=cases)
     args = parser.parse_args()
     args.binary, args.output = args.binary.resolve(), args.output.resolve()

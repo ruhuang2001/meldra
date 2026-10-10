@@ -23,6 +23,11 @@ func TestMCPFormExactNumbers(t *testing.T) {
 		{"maximum unsigned integer", "integer", "18446744073709551615", true},
 		{"out of range integer", "integer", "18446744073709551616", false},
 		{"fraction rounded by float64", "integer", "9007199254740993.5", false},
+		{"exact binary decimal", "number", "0.125", true},
+		{"ordinary decimal", "number", "0.1", true},
+		{"inexact decimal", "number", "0.1234567890123456789", false},
+		{"underflow", "number", "1e-400", false},
+		{"overflow", "number", "1e400", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			answer := `{"value":` + tc.value + `}`

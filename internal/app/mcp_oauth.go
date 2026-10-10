@@ -85,6 +85,19 @@ type mcpOAuthSession struct {
 	Token      oauth2.Token  `json:"token"`
 }
 
+const maxMCPOAuthFile = 1 << 20
+
+func marshalMCPOAuthSession(session mcpOAuthSession) ([]byte, error) {
+	data, err := json.Marshal(session)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxMCPOAuthFile {
+		return nil, fmt.Errorf("OAuth cache exceeds 1 MiB")
+	}
+	return data, nil
+}
+
 type mcpOAuthTransport struct{ allowLoopback bool }
 
 func (t mcpOAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -255,7 +268,7 @@ type mcpOAuthTokenSource struct {
 }
 
 func readMCPOAuthFile(path string) ([]byte, bool, error) {
-	if info, err := os.Lstat(path); err == nil && info.Size() > 1<<20 {
+	if info, err := os.Lstat(path); err == nil && info.Size() > maxMCPOAuthFile {
 		return nil, false, fmt.Errorf("OAuth cache exceeds 1 MiB")
 	}
 	return readPrivateFile(path)
@@ -338,7 +351,7 @@ func (s *mcpOAuthTokenSource) Token() (*oauth2.Token, error) {
 	}
 	if scrubbedSecret || token.AccessToken != saved.Token.AccessToken || token.RefreshToken != saved.Token.RefreshToken || !token.Expiry.Equal(saved.Token.Expiry) {
 		saved.Token = *token
-		data, err = json.Marshal(saved)
+		data, err = marshalMCPOAuthSession(saved)
 		if err != nil {
 			return nil, err
 		}
@@ -377,7 +390,7 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 	}
 	generation = rand.Text()
 	session := mcpOAuthSession{Generation: generation, Binding: mcpOAuthBinding(config), Config: cfg, Token: *token}
-	encoded, err := json.Marshal(session)
+	encoded, err := marshalMCPOAuthSession(session)
 	if err != nil {
 		return nil, err
 	}
