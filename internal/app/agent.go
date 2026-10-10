@@ -53,6 +53,7 @@ func NewAgent(backend provider.Inference, getUserMessage func() (string, bool), 
 }
 
 type Agent struct {
+	skills             *skillCatalog
 	execution          *taskExecution
 	toolFailure        error
 	turnMu             sync.Mutex
@@ -79,6 +80,16 @@ type Agent struct {
 func (a *Agent) Run(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if a.skills != nil {
+		for _, warning := range a.skills.Warnings {
+			text := skillDisplayLine(warning)
+			if a.events == nil {
+				fmt.Fprintln(a.writer(), "Warning: "+text)
+			} else {
+				a.emit(UIEvent{Kind: UIEventNotice, Text: text})
+			}
+		}
 	}
 
 	if a.events == nil {

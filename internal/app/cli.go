@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"meldra/internal/provider"
-	taskstore "meldra/internal/store"
 	"meldra/internal/task"
 
 	tea "charm.land/bubbletea/v2"
@@ -60,6 +59,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 	}
 	if len(args) > 0 {
 		switch args[0] {
+		case "skills":
+			return runSkillsCommand(ctx, args[1:], stdout)
 		case "tasks":
 			return runTasksCommand(ctx, args[1:], stdout)
 		case "task":
@@ -598,18 +599,8 @@ func newChatRuntime(
 	if err != nil {
 		return nil, err
 	}
-	if err := workspace.ProtectPath(paths.Home); err != nil {
+	if err := protectRuntimePaths(workspace, paths); err != nil {
 		return nil, err
-	}
-	// Protect both persistent and legacy shared execution lock namespaces.
-	lockDirs, err := taskstore.OwnershipDirectories()
-	if err != nil {
-		return nil, err
-	}
-	for _, dir := range lockDirs {
-		if err := workspace.ProtectPath(dir); err != nil {
-			return nil, err
-		}
 	}
 	workspace.SetContext(ctx)
 	if session != nil {
@@ -636,7 +627,15 @@ func newChatRuntime(
 	backend := provider.Connect(provider.Connection{APIKey: settings.APIKey, BaseURL: settings.BaseURL})
 	tools := workspace.ToolDefinitions()
 	tools = append(tools, NewSessionTools(session, store).ToolDefinitions()...)
+	skills, err := discoverSkills(ctx, workspace, paths)
+	if err != nil {
+		return nil, err
+	}
+	if len(skills.Skills) > 0 {
+		tools = append(tools, skills.definition())
+	}
 	agent := NewAgent(backend, getUserMessage, tools)
+	agent.skills = skills
 	agent.model = settings.Model
 	agent.customProvider = isCustomBaseURL(settings.BaseURL)
 	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
@@ -782,6 +781,7 @@ const usageText = `Usage:
   meldra [options]               Start a chat in a bounded workspace.
   meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.
+  meldra skills [--json]         List skills; accepts --workspace PATH.
   meldra tasks [--json]           List recorded tasks.
   meldra task show ID [--json]    Inspect task runs, tools and approvals.
   meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.
