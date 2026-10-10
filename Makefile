@@ -24,7 +24,7 @@ test-race:
 	go test -race ./...
 
 test-coverage:
-	go test -race -coverpkg=./... -coverprofile=$(COVERAGE_FILE) ./...
+	python3 scripts/mcp-check.py --coverage "$(COVERAGE_FILE)" --dist "$(DIST_DIR)"
 	@coverage="$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ { print $$3 }' | tr -d '%')"; \
 		awk -v coverage="$$coverage" -v minimum="$(COVERAGE_MIN)" 'BEGIN { if (coverage < minimum) { printf "coverage %.1f%% is below %.1f%%\n", coverage, minimum; exit 1 }; printf "coverage %.1f%% meets %.1f%% minimum\n", coverage, minimum }'
 

@@ -64,12 +64,14 @@ type Tool struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
+	NonStrict   bool
 }
 type Request struct {
 	Model              string
 	Instructions       string
 	Input              Input
 	PreviousResponseID string
+	MaxOutputTokens    int64
 	Tools              []Tool
 }
 
@@ -115,12 +117,15 @@ func (c *Client) StreamingUnsupported() bool { return c.streamUnsupported }
 
 func (c *Client) Infer(ctx context.Context, request Request, options Options, observer Observer) (Result, error) {
 	params := responses.ResponseNewParams{Model: request.Model, Instructions: openai.String(request.Instructions), Input: request.Input.value}
+	if request.MaxOutputTokens > 0 {
+		params.MaxOutputTokens = openai.Int(request.MaxOutputTokens)
+	}
 	if request.PreviousResponseID != "" {
 		params.PreviousResponseID = openai.String(request.PreviousResponseID)
 	}
 	for _, tool := range request.Tools {
 		params.Tools = append(params.Tools, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
-			Name: tool.Name, Description: openai.String(tool.Description), Parameters: tool.Parameters, Strict: openai.Bool(true),
+			Name: tool.Name, Description: openai.String(tool.Description), Parameters: tool.Parameters, Strict: openai.Bool(!tool.NonStrict),
 		}})
 	}
 

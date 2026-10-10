@@ -44,6 +44,7 @@ In a supported interactive terminal, Meldra opens a full-screen TUI and streams 
 ```text
 ~/.meldra/config.toml       # model, provider URL, and limits
 ~/.meldra/credentials.env   # OPENAI_API_KEY
+~/.meldra/mcp.json          # optional trusted MCP server configuration
 ~/.meldra/sessions/         # preserved 0.1.x session snapshots
 ~/.meldra/tasks/tasks.db    # versioned task, run, tool, approval and event records
 ~/.meldra/tasks/sessions/   # current conversation snapshots
@@ -78,6 +79,33 @@ meldra config init   # create starter config files
 meldra config        # show effective values and config paths (hides API key)
 meldra version
 ```
+
+## MCP
+
+This validation branch connects to trusted MCP servers over stdio or Streamable
+HTTP. Add servers to `~/.meldra/mcp.json` (or `$MELDRA_HOME/mcp.json`), with a
+0700 directory and a 0600 file. It supports tool calls, resource and prompt
+catalog access, OAuth login, text sampling, and CLI/TUI form or URL elicitation.
+
+```bash
+meldra mcp login SERVER                # OAuth servers configured in mcp.json
+meldra mcp logout SERVER               # remove local OAuth credentials
+meldra mcp resources SERVER            # inspect one page of resources
+meldra mcp prompts SERVER              # inspect one page of prompt templates
+meldra mcp prompt SERVER NAME KEY=VALUE --run  # choose and confirm a workflow
+meldra mcp serve --workspace /path/to/project  # expose Meldra over MCP stdio
+```
+
+MCP clients can request Meldra's workspace tools, resources and review prompt.
+Required approvals travel through the client using elicitation. Text sampling
+is opt-in per server and requires explicit consent before calling the model
+and before sharing its result; `--auto-approve` does not bypass this consent.
+
+See [MCP configuration, scope and verification](docs/mcp.md) and
+[OAuth and interactive requests](docs/mcp-auth-interactions.md). These are
+implemented capability subsets, not a claim of full MCP specification
+conformance. External MCP servers use their own privileges and are not confined
+by Meldra's file-tool boundary.
 
 ## Safety
 

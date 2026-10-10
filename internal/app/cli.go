@@ -61,6 +61,27 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 		switch args[0] {
 		case "skills":
 			return runSkillsCommand(ctx, args[1:], stdout)
+		case "mcp":
+			if len(args) >= 2 {
+				switch args[1] {
+				case "resources", "templates", "read", "prompts", "prompt":
+					return runMCPCatalogCLI(ctx, args[1:], stdin, stdout)
+				}
+			}
+			if len(args) == 3 && (args[1] == "login" || args[1] == "logout") {
+				paths, err := ResolveConfigPaths()
+				if err != nil {
+					return err
+				}
+				if args[1] == "login" {
+					return runMCPLogin(ctx, paths, args[2], stdout)
+				}
+				return runMCPLogout(ctx, paths, args[2])
+			}
+			if len(args) >= 2 && args[1] == "serve" {
+				return runMCPServe(ctx, args[2:], stdin, stdout)
+			}
+			return fmt.Errorf("usage: meldra mcp login|logout|resources|templates|prompts <server>; read <server> <uri>; prompt <server> <name> [KEY=VALUE] [--run]; serve --workspace <path>")
 		case "tasks":
 			return runTasksCommand(ctx, args[1:], stdout)
 		case "task":
@@ -104,7 +125,12 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 				} else {
 					// Keep a single buffered reader for the line-based picker and
 					// chat so a piped follow-up prompt cannot be consumed by the picker.
-					chatInput = bufferedInput(stdin)
+					input, cleanup, err := newMCPCLIInput(stdin)
+					if err != nil {
+						return err
+					}
+					defer cleanup()
+					chatInput = input
 					paths, err := ResolveConfigPaths()
 					if err != nil {
 						return err
@@ -197,6 +223,7 @@ func runConfigCommand(args []string, stdout io.Writer) error {
 }
 
 type ChatOptions struct {
+	MCPServer         string // Limit a user-selected prompt to its own MCP server.
 	Workspace         string
 	Resume            string
 	Prompt            string
@@ -305,6 +332,9 @@ func resumeWorkspacePath(options ChatOptions) (string, error) {
 }
 
 func bufferedInput(input io.Reader) *bufio.Reader {
+	if reader, ok := input.(*mcpCLIInput); ok {
+		return reader.Reader
+	}
 	if reader, ok := input.(*bufio.Reader); ok {
 		return reader
 	}
@@ -566,6 +596,7 @@ type chatRuntime struct {
 	workspace  *Workspace
 	agent      *Agent
 	newSession bool
+	mcp        *mcpConnections
 }
 
 func newChatRuntime(
@@ -634,6 +665,11 @@ func newChatRuntime(
 	if len(skills.Skills) > 0 {
 		tools = append(tools, skills.definition())
 	}
+	external, err := connectMCP(ctx, paths, workspace, options.MCPServer)
+	if err != nil {
+		return nil, err
+	}
+	tools = append(tools, external.tools...)
 	agent := NewAgent(backend, getUserMessage, tools)
 	agent.skills = skills
 	agent.model = settings.Model
@@ -652,6 +688,7 @@ func newChatRuntime(
 		workspace:  workspace,
 		agent:      agent,
 		newSession: !session.resumed,
+		mcp:        external,
 	}, nil
 }
 
@@ -681,7 +718,12 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		return runTUIChat(ctx, stdin.(*os.File), stdout.(*os.File), paths, settings, options)
 	}
 
-	reader := bufferedInput(stdin)
+	input, cleanup, err := newMCPCLIInput(stdin)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	reader := input.Reader
 	var readErr error
 	initialPrompt := options.Prompt
 	getUserMessage := func() (string, bool) {
@@ -701,12 +743,20 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 		return strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r"), true
 	}
 	runtime, err := newChatRuntime(ctx, paths, settings, options, func(root string, autoApprove bool) (*Workspace, error) {
-		return NewWorkspace(root, reader, stdout, autoApprove)
+		workspace, err := NewWorkspace(root, reader, stdout, autoApprove)
+		if err == nil {
+			workspace.mcpInput = input.humanInput(stdout)
+		}
+		return workspace, err
 	}, getUserMessage, stdout)
 	if err != nil {
 		return err
 	}
 	defer runtime.deleteEmptyNewSession()
+	defer runtime.mcp.close()
+	for _, warning := range runtime.mcp.warnings {
+		fmt.Fprintln(stdout, warning)
+	}
 
 	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
 	if err := runtime.agent.Run(ctx); err != nil {
@@ -778,6 +828,12 @@ func overlayEnvironment(settings Settings) (Settings, error) {
 }
 
 const usageText = `Usage:
+  meldra mcp serve --workspace <path> [--auto-approve]
+  meldra mcp login <server>
+  meldra mcp logout <server>
+  meldra mcp resources|templates|prompts <server> [cursor]
+  meldra mcp read <server> <uri>
+  meldra mcp prompt <server> <name> [KEY=VALUE ...] [--run]
   meldra [options]               Start a chat in a bounded workspace.
   meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.

@@ -37,3 +37,13 @@ func runCommandProcess(ctx context.Context, command *exec.Cmd, onStart ...func()
 		return <-done
 	}
 }
+
+func prepareMCPProcess(command *exec.Cmd) {
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+}
+
+func stopMCPProcess(command *exec.Cmd) {
+	if command.Process != nil {
+		_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
+	}
+}

@@ -105,6 +105,13 @@ type tuiApprovalMsg struct {
 	request ApprovalRequest
 	answer  chan bool
 }
+type tuiApprovalCancelMsg struct{ answer chan bool }
+
+type tuiMCPInputMsg struct {
+	prompt string
+	answer chan string
+}
+type tuiMCPInputCancelMsg struct{ answer chan string }
 
 type tuiApprovalPreviewMsg struct {
 	request ApprovalRequest
@@ -276,6 +283,7 @@ func (t *tuiController) nextMessage() (string, bool) {
 func (t *tuiController) approve(ctx context.Context, request ApprovalRequest) bool {
 	answer := make(chan bool, 1)
 	t.send(tuiApprovalMsg{request: request, answer: answer})
+	defer t.send(tuiApprovalCancelMsg{answer: answer})
 	select {
 	case approved := <-answer:
 		return approved
@@ -283,6 +291,20 @@ func (t *tuiController) approve(ctx context.Context, request ApprovalRequest) bo
 		return false
 	case <-t.done:
 		return false
+	}
+}
+
+func (t *tuiController) mcpInput(ctx context.Context, prompt string) (string, bool) {
+	answer := make(chan string, 1)
+	t.send(tuiMCPInputMsg{prompt: prompt, answer: answer})
+	defer t.send(tuiMCPInputCancelMsg{answer: answer})
+	select {
+	case value := <-answer:
+		return value, true
+	case <-ctx.Done():
+		return "", false
+	case <-t.done:
+		return "", false
 	}
 }
 
@@ -296,9 +318,12 @@ func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writ
 		model,
 		tea.WithInput(input),
 		tea.WithOutput(output),
-		tea.WithContext(ctx),
+		tea.WithContext(context.WithoutCancel(ctx)),
 		tea.WithoutSignalHandler(),
 	)
+	// Graceful quit joins the input reader before closing its cancellation pipe.
+	stopQuit := context.AfterFunc(ctx, t.program.Quit)
+	defer stopQuit()
 
 	result := make(chan error, 1)
 	go func() {
@@ -397,6 +422,7 @@ type tuiModel struct {
 	submissionPending bool
 	stopped           bool
 	pending           *tuiApprovalMsg
+	mcpPending        *tuiMCPInputMsg
 
 	completedPrefix        string
 	completedPrefixWidth   int
@@ -481,8 +507,25 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tuiEventMsg:
 		return m, m.applyEvent(msg.event)
+	case tuiMCPInputMsg:
+		if m.pending != nil || m.mcpPending != nil {
+			msg.answer <- "cancel"
+			return m, nil
+		}
+		m.mcpPending = &msg
+		m.input.Reset()
+		m.busy = true
+		m.status = "MCP form: enter JSON, decline, or cancel"
+		m.refreshViewport()
+		m.viewport.GotoBottom()
+		return m, m.input.Focus()
+	case tuiMCPInputCancelMsg:
+		if m.mcpPending != nil && m.mcpPending.answer == msg.answer {
+			m.resolveMCPInput("cancel")
+		}
+		return m, nil
 	case tuiApprovalMsg:
-		if m.pending != nil {
+		if m.pending != nil || m.mcpPending != nil {
 			msg.answer <- false
 			return m, nil
 		}
@@ -493,6 +536,11 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewport()
 		m.viewport.GotoBottom()
 		return m, nil
+	case tuiApprovalCancelMsg:
+		if m.pending != nil && m.pending.answer == msg.answer {
+			m.resolveApproval(false)
+		}
+		return m, nil
 	case tuiApprovalPreviewMsg:
 		m.addEntry(tuiEntry{
 			kind: tuiEntryNotice,
@@ -501,6 +549,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 	case tuiAgentStoppedMsg:
+		m.resolveMCPInput("cancel")
 		m.stopped = true
 		m.busy = true
 		m.submissionPending = false
@@ -529,7 +578,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, command
 	}
 
-	if !m.busy && m.pending == nil && !m.stopped {
+	if (!m.busy || m.mcpPending != nil) && m.pending == nil && !m.stopped {
 		var command tea.Cmd
 		m.input, command = m.input.Update(message)
 		if _, pasted := message.(tea.PasteMsg); pasted {
@@ -545,6 +594,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	if key.String() == "ctrl+c" {
 		m.resolveApproval(false)
+		m.resolveMCPInput("cancel")
 		m.controller.stop()
 		return tea.Quit
 	}
@@ -554,6 +604,20 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return command
 	}
 
+	if m.mcpPending != nil {
+		switch key.String() {
+		case "esc":
+			m.resolveMCPInput("cancel")
+			return nil
+		case "enter":
+			m.resolveMCPInput(m.input.Value())
+			return nil
+		}
+		var command tea.Cmd
+		m.input, command = m.input.Update(key)
+		m.resize()
+		return command
+	}
 	if m.pending != nil {
 		switch key.String() {
 		case "y":
@@ -596,6 +660,18 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	return command
 }
 
+func (m *tuiModel) resolveMCPInput(value string) {
+	if m.mcpPending == nil {
+		return
+	}
+	m.mcpPending.answer <- value
+	m.mcpPending = nil
+	m.input.Reset()
+	m.input.Blur()
+	m.status = "Working"
+	m.refreshViewport()
+}
+
 func (m *tuiModel) resolveApproval(approved bool) {
 	if m.pending == nil {
 		return
@@ -619,7 +695,7 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 			m.submissionPending = false
 		}
 		m.status = event.Text
-		if event.Text == "Ready" && !m.stopped && m.pending == nil {
+		if event.Text == "Ready" && !m.stopped && m.pending == nil && m.mcpPending == nil {
 			m.busy = false
 			return m.input.Focus()
 		}
@@ -834,6 +910,9 @@ func (m *tuiModel) renderEntryUnwrapped(entry *tuiEntry) string {
 
 func (m *tuiModel) renderPending() string {
 	var output strings.Builder
+	if m.mcpPending != nil {
+		return tuiWarnStyle.Render(sanitizeTerminalText(m.mcpPending.prompt))
+	}
 	if m.pending != nil {
 		output.WriteString(tuiWarnStyle.Render(sanitizeTerminalText(m.pending.request.Title)))
 		if m.pending.request.Detail != "" {
@@ -867,6 +946,8 @@ func (m *tuiModel) View() tea.View {
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""
 	switch {
+	case m.mcpPending != nil:
+		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	case m.pending != nil:
 		composer = tuiWarnStyle.Render("Approval is waiting above")
 	case m.stopped:
@@ -884,7 +965,7 @@ func (m *tuiModel) View() tea.View {
 	footer := tuiDimStyle.Render(footerText)
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
 	view := tea.NewView(content)
-	if m.pending == nil && !m.busy && !m.stopped && m.input.Focused() {
+	if m.pending == nil && (!m.busy || m.mcpPending != nil) && !m.stopped && m.input.Focused() {
 		if cursor := m.input.Cursor(); cursor != nil {
 			cursor.Position.X += tuiInputStyle.GetBorderLeftSize() + tuiInputStyle.GetPaddingLeft()
 			cursor.Position.Y += tuiHeaderHeight + m.viewport.Height() + tuiInputStyle.GetBorderTopSize() + tuiInputStyle.GetPaddingTop()
@@ -936,6 +1017,8 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		return err
 	}
 	defer runtime.deleteEmptyNewSession()
+	defer runtime.mcp.close()
+	runtime.workspace.mcpInput = controller.mcpInput
 	runtime.workspace.SetApprovalFunc(controller.approve)
 	runtime.workspace.SetApprovalPresenter(controller.presentApproval)
 	runtime.agent.events = controller
@@ -947,6 +1030,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		sessionID: runtime.session.ID,
 		model:     settings.Model,
 		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
+		notices:   runtime.mcp.warnings,
 	}, func() {
 		started = true
 		go func() {
