@@ -9,9 +9,11 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/x/term"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/muesli/cancelreader"
@@ -244,6 +246,16 @@ func newMCPCLIInput(input io.Reader) (*mcpCLIInput, func(), error) {
 	}
 	if _, ok := input.(cancelreader.File); !ok {
 		return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
+	}
+	if file, ok := input.(*os.File); ok {
+		info, err := file.Stat()
+		if err != nil {
+			return nil, nil, err
+		}
+		// epoll cannot watch regular files or non-terminal devices such as /dev/null.
+		if info.Mode().IsRegular() || info.Mode()&os.ModeCharDevice != 0 && !term.IsTerminal(file.Fd()) {
+			return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
+		}
 	}
 	reader, err := cancelreader.NewReader(input)
 	if err != nil {
