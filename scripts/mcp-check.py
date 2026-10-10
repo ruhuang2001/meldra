@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run real-binary MCP suites and merge their coverage with go test coverage.
+"""Run real-binary MCP/capability suites and merge coverage with go test coverage.
 
 Failure cases, specified before implementation:
 - a build, E2E suite, or covdata conversion fails: fail the check, retain evidence;
@@ -114,9 +114,10 @@ def main():
         binary = directory / 'meldra'
         run(['go', 'build', '-race', '-cover', '-coverpkg=./...', '-covermode=atomic', '-o', str(binary), '.'], directory, 'go-build')
         env = dict(os.environ, GOCOVERDIR=str(covdir))
-        for script in ('mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e', 'mcp-oauth-regression-e2e'):
+        for script in ('mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e', 'mcp-oauth-regression-e2e', 'capability-e2e'):
             output = directory / script
-            run([sys.executable, 'scripts/' + script + '.py', '--binary', str(binary), '--output', str(output)], directory, script, env)
+            arguments = ['--controls', '--processes'] if script == 'capability-e2e' else []
+            run([sys.executable, 'scripts/' + script + '.py', '--binary', str(binary), '--output', str(output), *arguments], directory, script, env)
             report = json.loads((output / 'report.json').read_text())
             checks = report['scenarios'] if isinstance(report, dict) else report
             if not checks or not all(check.get('passed') is True for check in checks):

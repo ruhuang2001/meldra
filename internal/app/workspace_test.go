@@ -435,7 +435,7 @@ func TestWorkspaceCommandPolicyAndNonzeroOutput(t *testing.T) {
 	if _, err := callTool(t, w, "run_command", map[string]any{"command": "sh", "args": []string{"-c", "true"}}); err == nil {
 		t.Fatal("shell was accepted")
 	}
-	if _, err := callTool(t, w, "run_command", map[string]any{"command": "go", "args": []string{"test"}, "timeout": 121}); err == nil {
+	if _, err := callTool(t, w, "run_command", map[string]any{"command": "go", "args": []string{"test"}, "timeout": maxCommandTimeout + 1}); err == nil {
 		t.Fatal("oversized timeout was accepted")
 	}
 	got, err := callTool(t, w, "run_command", map[string]any{"command": "go", "args": []string{"test", "./..."}})
@@ -468,7 +468,7 @@ func TestWorkspaceExecutableCommandRequiresConfirmation(t *testing.T) {
 	if err != nil || result != "Declined; command not run." {
 		t.Fatalf("declined command = %q, %v", result, err)
 	}
-	if got := declinedOutput.String(); got != `Run command with OS-user privileges? go "test" "./..." [y/N] ` {
+	if got := declinedOutput.String(); !strings.HasPrefix(got, "Run command with OS-user privileges? ") || !strings.Contains(got, `go "test" "./..." [y/N] `) {
 		t.Fatalf("confirmation output = %q", declinedOutput.String())
 	}
 
@@ -806,7 +806,7 @@ func TestWorkspaceVerifyApprovesMultiCommandPlanOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := output.String(); got != "Run verification plan with OS-user privileges?\ngo \"vet\" \"./...\"\ngo \"test\" \"./...\"\nApprove 2 command(s)? [y/N] " {
+	if got := output.String(); !strings.HasPrefix(got, "Run verification plan with OS-user privileges?\n/") || !strings.Contains(got, `go "vet" "./..."`) || !strings.Contains(got, `go "test" "./..."`) || !strings.HasSuffix(got, "\nApprove 2 command(s)? [y/N] ") {
 		t.Fatalf("verification approval prompt = %q", got)
 	}
 	for _, want := range []string{"verification 1/2", "command: go vet ./...", "verification 2/2", "command: go test ./..."} {

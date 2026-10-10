@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func TestParseResumeOptionsAcceptsChatFlags(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != test.want {
+			if !reflect.DeepEqual(got, test.want) {
 				t.Fatalf("options = %#v, want %#v", got, test.want)
 			}
 		})
@@ -455,7 +456,7 @@ func TestParseChatOptionsAcceptsPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := ChatOptions{Workspace: "./project", Prompt: "fix the bug", AutoApprove: true, workspaceExplicit: true}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
 	}
 }

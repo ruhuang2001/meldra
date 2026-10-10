@@ -72,9 +72,10 @@ Startup and discovery default to 10 seconds. An MCP call defaults to 60 seconds;
 both values can be configured from 1 to 300 seconds. OAuth login waits up to five
 minutes, while OAuth metadata and token requests have a 30-second limit. Configuration
 is capped at 1 MiB and 16 servers. Each server may advertise at most 128 tools and
-1 MiB of encoded tool definitions. The combined external catalog is capped at 112
-tools and 1 MiB, counting fully encoded JSON including escaped descriptions and
-metadata. stdio frames and HTTP responses are capped at 16 MiB.
+1 MiB of encoded tool definitions. For chat, the external tool allowance is computed from the actual built-in and
+Skill tool count so the combined model catalog fits within 128 tools. The combined
+external catalog also has a 1 MiB limit, counting fully encoded JSON including
+escaped descriptions and metadata. stdio frames and HTTP responses are capped at 16 MiB.
 
 Configuration grants startup trust: stdio processes run with the current OS user's
 permissions and are not sandboxed. Configure only trusted servers and keep secrets

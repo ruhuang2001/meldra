@@ -1,9 +1,9 @@
 # Architecture and runtime boundaries
 
-Meldra is a local, serial foreground coding agent. The 0.2.0 implementation adds
+Meldra is a local, serial foreground coding agent. The 0.2.x implementation adds
 versioned execution history, task/workspace ownership, structured tool outcomes,
-and explicit recovery. It is under integration; this
-branch is not a declaration that 0.2.0 has been released.
+explicit recovery, scoped project context, and runtime controls. Capabilities in
+this source tree may not yet be present in the latest published release.
 
 Closing the terminal ends the current execution. There is no daemon, scheduler,
 automatic restart, detach/attach protocol, or multi-agent execution in this
@@ -55,6 +55,19 @@ replacement, directory synchronization and stale-save rejection. The ledger is
 the source of evidence about executed tools; a conversation summary is not a
 replacement for it.
 
+`RuntimePolicy` owns the execution mode, permission profile, and control
+generation. It classifies the actual invocation and is checked at dispatch and
+before side-effect admission. Plan permits workspace reads and task metadata;
+it cannot be widened by Skills, `AGENTS.md`, or automatic approval. User controls
+invalidate old-generation operations. They journal received and applied request
+identities separately, while the Agent remains the single conversation writer.
+
+Application, Run, inference, approval, and managed-process cancellation have
+separate lifetimes. Stopping a turn preserves the application. Steering stops
+inference or waits for an admitted operation's boundary, then rebuilds valid
+provider context. Recovered queued requests require `/continue-queue`; inspecting
+history or resuming an unrelated prompt does not execute them automatically.
+
 ## Provider and context
 
 `provider.Inference` uses Meldra request/result types. The concrete Client owns
@@ -72,6 +85,18 @@ workspace.
 Custom-provider replay compaction preserves ordering and protected protocol
 fields. Incremental size accounting removes repeated full-input JSON encoding
 from the older compaction loop.
+
+`ProjectContext` loads the root `AGENTS.md` and scoped ancestors for accessed
+paths. Its digest invalidates edits generated before newly discovered or changed
+rules were shown to the model. Explicit file references retain immutable content
+in task artifacts, with structured path/range/digest metadata in the request and
+session. They remain quoted data. The runtime does not interpret reference
+syntax inside a remote MCP prompt as a local file selection.
+
+Plan mode is selected before external MCP startup. Managed process tools remain
+private to agent Runs because an `mcp serve` invocation finishes its own Run.
+External tool capacity is derived from the actual built-in catalog under the
+provider's limit.
 
 ## Tools, approvals and execution records
 
@@ -187,7 +212,7 @@ Under `MELDRA_HOME` (default `~/.meldra`):
 ```text
 config.toml / credentials.env   settings and credentials
 sessions/                      preserved legacy 0.1.x snapshots
-tasks/tasks.db                 SQLite schema version 1, WAL mode, FULL sync
+tasks/tasks.db                 versioned SQLite database, WAL mode, FULL sync
 tasks/sessions/                 current bounded conversation snapshots
 tasks/artifacts/<sha256>        retained output referenced by task records
 ```
@@ -210,7 +235,19 @@ Unknown newer database schemas are rejected instead of downgraded.
 | Total artifact files per store | 256 MiB |
 | SQLite database pages | 256 MiB |
 | One JSON session snapshot | 2 MiB, at most 100 messages |
-| Built-in command duration | 60 seconds by default, at most 120 seconds |
+| Built-in command duration | 600 seconds by default, configurable up to 86400 seconds |
+| One AGENTS.md / active project instructions | 32 KiB / 128 KiB |
+| One reference source / retained reference | 1 MiB / 64 KiB |
+| References per request / total retained content | 32 / 128 KiB |
+| Accepted pending control requests | 32 |
+
+Managed process records distinguish a successful start from process completion
+and distinguish lifecycle state from effect certainty. The owning Run retains
+its workspace lease until owned groups are stopped/reaped and final records are
+saved. Commands block other commands and file writes while active. Output drains
+independently of bounded retention and live presentation. An interrupted process
+may be `stopped` with `unknown` effects; explicit reconciliation clears that gate
+without restarting a process or signaling a persisted PID.
 
 Commands combine stdout/stderr into a 256 KiB model-facing excerpt
 and a log of up to 16 MiB, which is persisted as an artifact. Log output beyond
