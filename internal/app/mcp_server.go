@@ -68,16 +68,18 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		return err
 	}
 	var operation sync.Mutex
+	var undoGeneration uint64 // Protected by operation, including approval redemption.
 	var approvalMu sync.Mutex
 	pending := map[string]struct {
 		fingerprint string
 		expires     time.Time
 	}{}
-	invoke := func(ctx context.Context, name string, raw json.RawMessage, approve ApprovalFunc, declined bool) (result tool.Result, err error) {
-		if !operation.TryLock() {
-			return result, ErrWorkspaceBusy
-		}
-		defer operation.Unlock()
+	invokeLocked := func(ctx context.Context, name string, raw json.RawMessage, approve ApprovalFunc, declined bool) (result tool.Result, err error) {
+		defer func() {
+			if result.Status == tool.Succeeded && (name == "edit_file" || name == "apply_patch" || name == "undo_last_change") {
+				undoGeneration++
+			}
+		}()
 		store := newTaskSessionStore(paths)
 		session, err := store.New(workspace.root)
 		if err != nil {
@@ -117,6 +119,13 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		err = errors.Join(err, store.Save(session))
 		return result, err
 	}
+	invoke := func(ctx context.Context, name string, raw json.RawMessage, approve ApprovalFunc, declined bool) (tool.Result, error) {
+		if !operation.TryLock() {
+			return tool.Result{}, ErrWorkspaceBusy
+		}
+		defer operation.Unlock()
+		return invokeLocked(ctx, name, raw, approve, declined)
+	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "meldra", Version: version}, &mcp.ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	for _, definition := range definitions {
 		schemaData, err := json.Marshal(definition.Parameters)
@@ -136,10 +145,20 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			if len(req.Params.Arguments) > maxApprovalPreviewBytes || json.Unmarshal(req.Params.Arguments, &arguments) != nil || arguments == nil || resolved.Validate(arguments) != nil {
 				return mcpServeResult("invalid tool arguments", true), nil
 			}
+			// Keep state validation and execution under the same lock so another
+			// call cannot change the undo target between approval and invocation.
+			if !operation.TryLock() {
+				return mcpServeResult(ErrWorkspaceBusy.Error(), true), nil
+			}
+			defer operation.Unlock()
 			var approve ApprovalFunc
 			declined := false
 			if !autoApprove && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
-				fingerprint := digest(append([]byte(definition.Name), req.Params.Arguments...))
+				fingerprintData := append([]byte(definition.Name), req.Params.Arguments...)
+				if definition.Name == "undo_last_change" {
+					fingerprintData = fmt.Appendf(fingerprintData, "\nundo generation: %d", undoGeneration)
+				}
+				fingerprint := digest(fingerprintData)
 				approvalMu.Lock()
 				for token, entry := range pending {
 					if time.Now().After(entry.expires) {
@@ -153,12 +172,25 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 						return mcpServeResult("too many pending approvals", true), nil
 					}
 					state := rand.Text()
+					message := "Allow " + definition.Name + " with arguments " + string(req.Params.Arguments) + "?"
+					if definition.Name == "undo_last_change" {
+						if len(workspace.last) == 0 {
+							approvalMu.Unlock()
+							return mcpServeResult("no successful change to undo", true), nil
+						}
+						diff, err := workspace.diff(workspace.last, true)
+						if err != nil {
+							approvalMu.Unlock()
+							return mcpServeResult(err.Error(), true), nil
+						}
+						message += "\n" + diff
+					}
 					pending[state] = struct {
 						fingerprint string
 						expires     time.Time
 					}{fingerprint, time.Now().Add(5 * time.Minute)}
 					approvalMu.Unlock()
-					return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{"approval": mcpServeApproval("Allow " + definition.Name + " with arguments " + string(req.Params.Arguments) + "?")}, RequestState: state}, nil
+					return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{"approval": mcpServeApproval(message)}, RequestState: state}, nil
 				}
 				entry, issued := pending[req.Params.RequestState]
 				delete(pending, req.Params.RequestState)
@@ -182,7 +214,7 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					return accepted
 				}
 			}
-			result, err := invoke(ctx, definition.Name, req.Params.Arguments, approve, declined)
+			result, err := invokeLocked(ctx, definition.Name, req.Params.Arguments, approve, declined)
 			output := result.Output
 			if result.Error != "" {
 				output += "\n" + result.Error

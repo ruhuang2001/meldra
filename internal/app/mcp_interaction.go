@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
+	"math/big"
 	"net/url"
 	"os"
 	"strings"
@@ -134,14 +136,27 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 		if field.Type == "array" && (field.Items == nil || len(field.Items.Enum) == 0 && len(field.Items.AnyOf) == 0) {
 			return nil, fmt.Errorf("elicitation arrays must contain enumerated strings")
 		}
-		lower := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(name + " " + field.Title + " " + field.Description))
+		lower := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(name + " " + field.Title + " " + field.Description + " " + field.Format))
 		for _, secret := range []string{"password", "secret", "apikey", "token", "credential", "creditcard"} {
 			if strings.Contains(lower, secret) {
 				return nil, fmt.Errorf("sensitive elicitation requires URL mode")
 			}
 		}
 	}
-	resolved, err := schema.Resolve(nil)
+	// jsonschema-go recognizes json.Number for numeric bounds, but classifies
+	// its Go string kind as a string for type checks. Check numeric types below
+	// and let the resolver validate their remaining constraints without rounding.
+	validationSchema := schema
+	validationSchema.Properties = maps.Clone(schema.Properties)
+	for name, field := range schema.Properties {
+		if field.Type == "number" || field.Type == "integer" {
+			copy := *field
+			copy.Type = ""
+			copy.MinLength, copy.MaxLength = nil, nil
+			validationSchema.Properties[name] = &copy
+		}
+	}
+	resolved, err := validationSchema.Resolve(nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid or externally referenced elicitation schema")
 	}
@@ -156,15 +171,65 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 			return &mcp.ElicitResult{Action: "decline"}, nil
 		}
 		var content map[string]any
-		if len(answer) <= 64<<10 && json.Unmarshal([]byte(answer), &content) == nil && content != nil && resolved.Validate(content) == nil {
+		decoder := json.NewDecoder(strings.NewReader(answer))
+		decoder.UseNumber()
+		if len(answer) <= 64<<10 && decoder.Decode(&content) == nil && decoder.Decode(new(any)) == io.EOF && content != nil {
 			declared := true
-			for key := range content {
-				if _, ok := schema.Properties[key]; !ok {
+			for key, value := range content {
+				field, ok := schema.Properties[key]
+				if !ok {
 					declared = false
 					break
 				}
+				switch field.Type {
+				case "string":
+					_, declared = value.(string)
+				case "boolean":
+					_, declared = value.(bool)
+				case "array":
+					items, ok := value.([]any)
+					declared = ok
+					for _, item := range items {
+						if _, ok := item.(string); !ok {
+							declared = false
+							break
+						}
+					}
+				}
+				if !declared {
+					break
+				}
+				if field.Type == "number" || field.Type == "integer" {
+					number, ok := value.(json.Number)
+					rational, valid := new(big.Rat).SetString(string(number))
+					if !ok || !valid || field.Type == "integer" && !rational.IsInt() {
+						declared = false
+						break
+					}
+					if field.Type == "integer" {
+						// The MCP SDK validates results using Go's native integer
+						// kinds. Convert without passing through float64 so values
+						// above JavaScript's safe-integer range remain exact on wire.
+						integer := rational.Num()
+						switch {
+						case integer.IsInt64():
+							content[key] = integer.Int64()
+						case integer.IsUint64():
+							content[key] = integer.Uint64()
+						default:
+							declared = false
+						}
+					} else {
+						float, err := number.Float64()
+						if err != nil {
+							declared = false
+						} else {
+							content[key] = float
+						}
+					}
+				}
 			}
-			if declared {
+			if declared && resolved.Validate(content) == nil {
 				return &mcp.ElicitResult{Action: "accept", Content: content}, nil
 			}
 		}
@@ -209,7 +274,7 @@ func validateMCPFormShape(data []byte) error {
 				}
 			case "oneOf", "anyOf":
 				entries, ok := value.([]any)
-				if !ok || len(entries) == 0 || key == "anyOf" && !item {
+				if !ok || len(entries) == 0 || key == "anyOf" && !item || key == "oneOf" && item {
 					return fmt.Errorf("flat elicitation only supports titled enum choices")
 				}
 				for _, value := range entries {
@@ -279,9 +344,10 @@ func (w *Workspace) sampleMCP(ctx context.Context, server string, p *mcp.CreateM
 		return nil, fmt.Errorf("sampling provider is not configured")
 	}
 	backend := provider.Connect(provider.Connection{APIKey: settings.APIKey, BaseURL: settings.BaseURL})
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	inferenceCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	result, err := backend.Infer(ctx, provider.Request{Model: settings.Model, Instructions: p.SystemPrompt, Input: provider.ItemsInput(items), MaxOutputTokens: min(p.MaxTokens, 8192)}, provider.Options{CustomProvider: isCustomBaseURL(settings.BaseURL), MaxResponseBytes: 1 << 20}, provider.Observer{})
+	result, err := backend.Infer(inferenceCtx, provider.Request{Model: settings.Model, Instructions: p.SystemPrompt, Input: provider.ItemsInput(items), MaxOutputTokens: min(p.MaxTokens, 8192)}, provider.Options{CustomProvider: isCustomBaseURL(settings.BaseURL), MaxResponseBytes: 1 << 20}, provider.Observer{})
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("MCP sampling provider failed")
 	}

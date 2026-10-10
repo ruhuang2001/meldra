@@ -65,6 +65,8 @@ def mcp_reply(request, log):
             result['tools'] = [dict(result['tools'][0], name='echo' if i == 0 else 'tool_' + str(i)) for i in range(60)]
         elif log.parent.name == 'catalog-bytes':
             result['tools'][0]['description'] = 'x' * 600000
+        elif log.parent.name == 'catalog-escaped-bytes':
+            result['tools'][0]['description'] = '\x01' * 100000
         elif not second:
             result['nextCursor'] = 'second'
     elif method == 'tools/call':
@@ -230,7 +232,7 @@ def run_case(binary, output, name, mode='ok', approval='auto', two=False, transp
     config = {'mcpServers': {'fixture': stdio('fixture') if transport == 'stdio' else {'url': url + '/mcp', 'tool_timeout_sec': 1 if mode == 'timeout' else 10}}}
     if name == 'http-slow-startup':
         config['mcpServers']['fixture'].update(startup_timeout_sec=10, tool_timeout_sec=1)
-    if name in ('catalog-count', 'catalog-bytes'):
+    if name in ('catalog-count', 'catalog-bytes', 'catalog-escaped-bytes'):
         config['mcpServers']['overflow'] = stdio('overflow')
     if two:
         config['mcpServers']['other'] = stdio('other')
@@ -346,10 +348,11 @@ def run_case(binary, output, name, mode='ok', approval='auto', two=False, transp
             assert result.returncode == 0, result.stderr
         if name in ('startup-timeout', 'descendant-startup'):
             assert 'slow' in result.stdout + result.stderr, 'startup timeout not reported'
-        if name in ('catalog-count', 'catalog-bytes'):
+        if name in ('catalog-count', 'catalog-bytes', 'catalog-escaped-bytes'):
             assert 'overflow unavailable' in result.stdout, result.stdout
             assert len(server.advertised) == (60 if name == 'catalog-count' else 1), len(server.advertised)
             assert not any(t['name'].startswith('mcp__overflow__') for t in server.advertised), 'overflow catalog reached model'
+            assert len(json.dumps(server.advertised).encode()) <= 1 << 20, 'serialized catalog exceeds 1 MiB'
         if name == 'bearer':
             assert server.authorization and all(value == 'Bearer bearer-secret-evidence' for value in server.authorization), 'bearer token absent'
             assert 'bearer-secret-evidence' not in json.dumps(server.requests) + json.dumps(detail) + result.stdout + result.stderr, 'bearer credential leaked'
@@ -414,7 +417,7 @@ def run_serve_case(binary, output, name):
     env = dict(os.environ, MELDRA_HOME=str(home))
     process = subprocess.Popen([str(binary), 'mcp', 'serve', '--workspace', str(workspace)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     latest = name.startswith('serve-latest-')
-    accepted = name.endswith('approve') or name in ('serve-command-failed', 'serve-approval-budget')
+    accepted = name.endswith('approve') or name in ('serve-command-failed', 'serve-approval-budget', 'serve-latest-undo-state')
     buffer = bytearray()
     transcript = directory / 'protocol.jsonl'
     sequence = 0
@@ -436,7 +439,7 @@ def run_serve_case(binary, output, name):
         message = json.loads(line)
         record(transcript, {'direction': 'server', 'message': message})
         return message
-    def request(method, params):
+    def request(method, params, handle_approval=True):
         nonlocal sequence, approval_waited
         sequence += 1
         request_id = sequence
@@ -452,7 +455,7 @@ def run_serve_case(binary, output, name):
                 send({'jsonrpc': '2.0', 'id': message['id'], 'result': {'action': 'accept' if accepted else 'decline', 'content': {'approve': True} if accepted else {}}})
             elif message.get('id') == request_id:
                 result = message.get('result', {})
-                if result.get('resultType') == 'input_required':
+                if result.get('resultType') == 'input_required' and handle_approval:
                     assert latest and 'approval' in result['inputRequests'], result
                     params['inputResponses'] = {'approval': {'action': 'accept' if accepted else 'decline', 'content': {'approve': True} if accepted else {}}}
                     params['requestState'] = result['requestState']
@@ -498,6 +501,16 @@ def run_serve_case(binary, output, name):
             assert failed['result'].get('isError') and 'nonzero-command-evidence' in json.dumps(failed), failed
         response = request('tools/call', {'name': 'edit_file', 'arguments': {'path': 'hello.txt', 'old_str': 'server-read-evidence', 'new_str': 'server-write-evidence'}})
         assert bool(response['result'].get('isError')) == (not accepted), response
+        if name == 'serve-latest-undo-state':
+            challenge = request('tools/call', {'name': 'undo_last_change', 'arguments': {}}, handle_approval=False)['result']
+            assert challenge.get('resultType') == 'input_required', challenge
+            newer = request('tools/call', {'name': 'edit_file', 'arguments': {'path': 'hello.txt', 'old_str': 'server-write-evidence', 'new_str': 'server-newer-evidence'}})
+            assert not newer['result'].get('isError'), newer
+            stale = request('tools/call', {'name': 'undo_last_change', 'arguments': {}, 'requestState': challenge['requestState'], 'inputResponses': {'approval': {'action': 'accept', 'content': {'approve': True}}}})
+            assert stale['result'].get('isError'), 'stale undo approval executed: ' + json.dumps(stale)
+            assert (workspace / 'hello.txt').read_text() == 'server-newer-evidence\n', 'stale approval undid the newer change'
+            fresh = request('tools/call', {'name': 'undo_last_change', 'arguments': {}})
+            assert not fresh['result'].get('isError'), fresh
         if latest:
             approved_requests = [row['message']['params'] for row in messages(transcript) if row['direction'] == 'client' and row['message'].get('method') == 'tools/call' and row['message']['params'].get('requestState') not in (None, 'forged-state')]
             assert approved_requests, 'no approval challenge issued'
@@ -524,7 +537,7 @@ def run_serve_case(binary, output, name):
             details.append(json.loads(show.stdout))
         save(directory / 'task-details.json', details)
         decisions = [approval['decision'] for detail in details for approval in (detail.get('approvals') or [])]
-        assert decisions == (['approved'] * (2 if name == 'serve-command-failed' else 1) if accepted else ['declined'] * (2 if latest else 1)), decisions
+        assert decisions == (['approved'] * (3 if name == 'serve-latest-undo-state' else 2 if name == 'serve-command-failed' else 1) if accepted else ['declined'] * (2 if latest else 1)), decisions
         return {'name': name, 'passed': True, 'tasks': len(tasks), 'approval': decisions[0]}
     finally:
         if process.poll() is None:
@@ -554,7 +567,7 @@ def main():
     scenarios += [('resources-client', {}), ('resources-deny', {'approval': 'no'}), ('prompts-client', {}), ('resources-cancel', {'mode': 'pre-cancel', 'approval': 'yes'}), ('resources-invalid', {'mode': 'invalid-args'}), ('prompts-invalid', {'mode': 'invalid-args'})]
     scenarios += [('serve-approve', {}), ('serve-deny', {}), ('serve-latest-approve', {}), ('serve-latest-deny', {}), ('serve-cancel', {})]
     scenarios += [('http-slow-startup', {'transport': 'http'})]
-    scenarios += [('catalog-count', {}), ('catalog-bytes', {}), ('serve-command-failed', {}), ('serve-approval-budget', {})]
+    scenarios += [('catalog-count', {}), ('catalog-bytes', {}), ('catalog-escaped-bytes', {}), ('serve-command-failed', {}), ('serve-approval-budget', {}), ('serve-latest-undo-state', {})]
     reports = []
     for name, options in scenarios:
         if args.case and name != args.case:

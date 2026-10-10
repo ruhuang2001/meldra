@@ -136,7 +136,17 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 		if err := json.Indent(&pretty, data, "", "  "); err != nil {
 			return err
 		}
-		_, err = fmt.Fprintln(output, pretty.String())
+		// Preserve valid, round-trippable JSON while escaping Unicode C1 controls
+		// that encoding/json leaves literal and terminals may interpret.
+		var safe strings.Builder
+		for _, character := range pretty.String() {
+			if terminalControlRune(character) && character != '\n' && character != '\t' {
+				fmt.Fprintf(&safe, "\\u%04x", character)
+			} else {
+				safe.WriteRune(character)
+			}
+		}
+		_, err = fmt.Fprintln(output, safe.String())
 		return err
 	}
 	var prompt mcp.GetPromptResult

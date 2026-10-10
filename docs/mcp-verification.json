@@ -30,11 +30,65 @@
     },
     "model_provider": "local deterministic Responses fixture"
   },
+  "official_conformance_targeted": {
+    "framework": "@modelcontextprotocol/conformance@0.2.0-alpha.12",
+    "transport": "temporary local HTTP bridge around Meldra stdio server",
+    "passed": {
+      "server-initialize": "2/2",
+      "tools-list": "3/3",
+      "resources-list": "2/2",
+      "prompts-list": "2/2"
+    },
+    "not_full_pass": {
+      "server-stateless-2026-07-28": "11/28; remaining checks require stateless HTTP, completion, subscriptions/notifications, or other unimplemented capabilities",
+      "completion-complete": "not implemented",
+      "input-required-result-basic-elicitation": "server-side MRTR request entry not implemented",
+      "input-required-result-basic-sampling": "server-side MRTR request entry not implemented"
+    },
+    "interpretation": "The passed scenarios are direct protocol evidence for the implemented stdio server surface; this is not a complete MCP conformance certification."
+  },
   "limits": [
     "Not full MCP conformance certification",
     "Sampling and prompt --run currently text-only",
     "MCP server transport is stdio",
     "OAuth real-account login not tested; loopback authorization and refresh tested"
   ],
+  "review_follow_up": {
+    "date": "2026-10-09",
+    "platform": "darwin-arm64",
+    "reviewed_pr_head": "697919e4154faa4115542137716160e7c276a53a",
+    "fix_commit": "1024d4c8ecfb1af19be03f912d30f4fe6d26ad42",
+    "commands": [
+      "make check",
+      "go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./..."
+    ],
+    "result": "passed",
+    "coverage_percent": 82.7,
+    "suites": {
+      "mcp-e2e": 48,
+      "mcp-auth-interaction-e2e": 29,
+      "mcp-cli-e2e": 20,
+      "mcp-input-e2e": 8,
+      "mcp-oauth-regression-e2e": 17
+    },
+    "regressions": [
+      "stale deferred undo approvals cannot undo a newer change",
+      "failed or cancelled OAuth re-login preserves existing credentials and generation",
+      "logout removes orphaned credentials independently of current server configuration",
+      "chat cannot initiate unused dynamic OAuth registration",
+      "integer form values remain exact over legacy and modern MCP requests",
+      "fractional values cannot pass integer validation after rounding",
+      "encoded catalog descriptions count toward the aggregate byte budget",
+      "catalog JSON escapes terminal controls while preserving round-trip content",
+      "sampling sharing consent uses the outer request deadline"
+    ],
+    "source_manifest_sha256": "d301ed4c76b578da7653632b4b6f688bbb02ca1cf2028d15e3660f533f01860a",
+    "source_manifest_encoding": "json.dumps(report.sources, sort_keys=True).encode()",
+    "instrumented_binary_sha256": "aaa20f8fc18035842a8659e00903e1e36dff10af065a4e6994c5f10184efb647",
+    "report_sha256": "706d123d4a1da7ffc03f46ed5128fec1572cb858a60d7168b8fb36f00f9f1719",
+    "evidence_checksums_sha256": "08950e84dc193086ce2ac034346b53ea41caa1a2cae618befa60ddd3ada6e647",
+    "local_evidence": "dist/mcp-check-g9t5z3yz",
+    "interpretation": "This follow-up verifies local regression fixes; prior conformance and real Codex MCP results above were not repeated."
+  },
   "reproduce": "make check; each run writes a fresh dist/mcp-check-* directory"
 }
