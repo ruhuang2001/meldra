@@ -64,7 +64,7 @@ func resultFor(ctx context.Context, started time.Time, observation *Observation,
 			if observation.Started {
 				result.Status = Unknown
 			}
-			if errors.Is(err, context.Canceled) && !observation.Started {
+			if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && !observation.Started {
 				result.Status = Cancelled
 			}
 		}

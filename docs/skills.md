@@ -120,14 +120,14 @@ scripts/skills-e2e.py 构建真实二进制，隔离 HOME、MELDRA_HOME 和工�
     make check
 
 输出目录须不存在或为空；每次使用新目录保留独立证据。
-成功产物 dist/skills-e2e-final-review-10/assertions.json 记录 109 项检查通过，保存源码和二进制
+成功产物 dist/pr42-merge-review/skills-e2e/assertions.json 记录 121 项检查通过，保存源码和二进制
 SHA-256、HTTP 请求/响应、stdout/stderr、任务/事件 JSON、fixture、实际生成文件及审计 artifact。
-dist/skills-check-final-review-3.log 记录 make check 通过：race、vet、格式、依赖、构建及 80.0% 覆盖率。
+dist/pr42-merge-review/check-local-ci.log 记录 make check 通过：race、vet、格式、依赖、构建及 81.2% 覆盖率。
 Linux amd64 交叉编译也通过，但未在 Linux 上执行该二进制。
 
 审查发现“工作区外用户技能包含配置目录”可能绕过保护。新增同一黑盒用例，
 在保存的旧二进制上复现凭据哨兵泄漏，在修复版上通过。
-失败证据在 dist/skills-e2e-review-regression，修复后成功证据在 dist/skills-e2e-final-review-10。
+失败证据在 dist/pr42-review-regression，修复后成功证据在 dist/pr42-review-final。
 新增覆盖还包括全局包读取、CLI/运行时缓存保护一致、FIFO 拒绝、审批先拒绝后同意及恢复读取新正文。
 
 这些检查证明协议接入和应用行为；脚本服务替代模型决策，不能声称真实模型已正确自动选择

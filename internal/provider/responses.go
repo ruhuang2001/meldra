@@ -490,7 +490,6 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 	}
 
 	merged := append([]responses.ResponseOutputItemUnion(nil), output...)
-	hasAssistantText := OutputText(&responses.Response{Output: merged}) != ""
 	for completedIndex, completedItem := range completed {
 		match := -1
 		for index, existing := range merged {
@@ -526,10 +525,20 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 			merged[match] = completedItem
 			continue
 		}
-		// Without stable item IDs, preserve a terminal assistant message that
-		// already contains text rather than adding a duplicate final message.
-		if completedItem.Type == "message" && hasAssistantText {
-			continue
+		// Without stable identities, suppress only an exact text duplicate.
+		// Distinct streamed messages must remain in the persisted response.
+		if completedItem.Type == "message" {
+			text := OutputText(&responses.Response{Output: []responses.ResponseOutputItemUnion{completedItem}})
+			duplicate := false
+			for _, existing := range merged {
+				if existing.Type == "message" && (existing.ID == "" || completedItem.ID == "") && text != "" && text == OutputText(&responses.Response{Output: []responses.ResponseOutputItemUnion{existing}}) {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
 		}
 		merged = append(merged, completedItem)
 	}

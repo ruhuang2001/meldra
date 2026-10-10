@@ -50,7 +50,7 @@ func providerIdentity(base string) string {
 		return "custom"
 	}
 	// Credentials and query strings are never part of the persisted identity.
-	return parsed.Scheme + "://" + parsed.Host
+	return parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath()
 }
 
 func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {

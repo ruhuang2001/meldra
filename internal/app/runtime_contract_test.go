@@ -138,8 +138,20 @@ type failedTaskWriter struct{}
 func (failedTaskWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
 
 func TestProviderIdentityPreservesPortWithoutCredentials(t *testing.T) {
-	if got := providerIdentity("http://secret:password@[::1]:8080/v1?key=secret"); got != "http://[::1]:8080" {
+	if got := providerIdentity("http://secret:password@[::1]:8080/v1?key=secret#private"); got != "http://[::1]:8080/v1" {
 		t.Fatal(got)
+	}
+}
+
+func TestFailedToolKeepsPartialOutputForProvider(t *testing.T) {
+	a := NewAgent(nil, nil, []ToolDefinition{{Name: "partial", Function: func(context.Context, json.RawMessage) (string, error) {
+		return "diagnostic before failure", errors.New("command failed")
+	}}})
+	a.output = io.Discard
+	items := a.executeToolCallsContext(t.Context(), []provider.OutputItem{{Type: "function_call", CallID: "partial-call", Name: "partial", Arguments: "{}"}})
+	data, err := json.Marshal(items)
+	if err != nil || !strings.Contains(string(data), "diagnostic before failure") || !strings.Contains(string(data), "Error: command failed") {
+		t.Fatalf("output=%s err=%v", data, err)
 	}
 }
 

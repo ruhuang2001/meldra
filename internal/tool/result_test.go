@@ -79,3 +79,23 @@ func TestInvokePropagatesPersistenceFailureAndCancellation(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
 }
+
+func TestDeadlineBeforeEffectsIsCancelled(t *testing.T) {
+	for _, started := range []bool{false, true} {
+		r, err := New([]Definition{{Name: "deadline", Function: func(ctx context.Context, _ json.RawMessage) (string, error) {
+			Observe(ctx, func(o *Observation) { o.Started = started })
+			return "partial", context.DeadlineExceeded
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := r.Invoke(t.Context(), "deadline", nil)
+		want := Cancelled
+		if started {
+			want = Unknown
+		}
+		if !errors.Is(err, context.DeadlineExceeded) || result.Status != want {
+			t.Fatalf("result=%+v err=%v", result, err)
+		}
+	}
+}

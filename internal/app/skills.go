@@ -47,7 +47,7 @@ type skillCatalog struct {
 // Discovery is a process-lifetime snapshot. Bodies and resources are read only
 // when requested; restarting or resuming discovers newly installed skills.
 func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths) (*skillCatalog, error) {
-	catalog := &skillCatalog{Skills: []skill{}, Warnings: []string{}, workspace: workspace, meldraHome: paths.Home}
+	catalog := &skillCatalog{Skills: []skill{}, Warnings: []string{}, workspace: workspace}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		catalog.warn("$HOME", err)
@@ -59,12 +59,13 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 		home = canonical
 	}
 	meldraHome, err := canonicalSkillHome(paths.Home)
+	roots := []string{filepath.Join(workspace.root, ".meldra", "skills"), filepath.Join(workspace.root, ".agents", "skills")}
 	if err != nil {
-		catalog.warn(paths.Home, err)
-		meldraHome = paths.Home
+		catalog.warn(filepath.Join(paths.Home, "skills"), err)
+	} else {
+		catalog.meldraHome = meldraHome
+		roots = append(roots, filepath.Join(meldraHome, "skills"))
 	}
-	catalog.meldraHome = meldraHome
-	roots := []string{filepath.Join(workspace.root, ".meldra", "skills"), filepath.Join(workspace.root, ".agents", "skills"), filepath.Join(meldraHome, "skills")}
 	if home != "" {
 		roots = append(roots, filepath.Join(home, ".agents", "skills"))
 	}
@@ -163,7 +164,7 @@ func skillDisplayLine(text string) string {
 // to every source, even when a user package sits outside the workspace.
 func (c *skillCatalog) checkPath(path string) error {
 	nativeRoot := filepath.Join(c.meldraHome, "skills")
-	native := within(nativeRoot, path)
+	native := c.meldraHome != "" && within(nativeRoot, path)
 	for _, protected := range c.workspace.protected {
 		if !withinFold(protected, path) {
 			continue
@@ -395,8 +396,8 @@ func runSkillsCommand(ctx context.Context, args []string, output io.Writer) erro
 	asJSON := flags.Bool("json", false, "print JSON")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			_, err = fmt.Fprintln(output, "Usage: meldra skills [--workspace PATH] [--json]")
-			return err
+			_, writeErr := fmt.Fprintln(output, "Usage: meldra skills [--workspace PATH] [--json]")
+			return writeErr
 		}
 		return err
 	}

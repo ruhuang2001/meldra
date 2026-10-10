@@ -78,7 +78,12 @@ class Harness:
                  Path(__file__), ROOT / 'docs/skills-failure-matrix.md']
         self.report['source_sha256'] = {str(p.relative_to(ROOT)): digest(p) for p in sorted(paths)}
         self.report['binary_sha256'] = digest(self.binary)
-        self.report['git_head'] = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+        try:
+            self.report['git_head'] = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=30
+            ).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            self.report['git_head'] = None
 
     def discovery(self):
         roots = [self.workspace / '.meldra/skills', self.workspace / '.agents/skills', self.state / 'skills', self.home / '.agents/skills']
