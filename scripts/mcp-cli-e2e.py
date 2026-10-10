@@ -76,6 +76,7 @@ def run_case(binary, output, name):
     calls = {
         'resources': ['resources', 'selected'],
         'pagination': ['resources', 'selected', 'second'],
+        'opaque-cursor': ['resources', 'selected', '--', '-opaque-page'],
         'templates': ['templates', 'selected'],
         'read': ['read', 'selected', 'fixture://custom'],
         'prompts': ['prompts', 'selected', 'second'],
@@ -93,9 +94,10 @@ def run_case(binary, output, name):
         'invalid-run': ['resources', 'selected', '--run'],
         'invalid-flag': ['resources', 'selected', '--something'],
     }
-    args = [str(binary), 'mcp'] + calls[name]
+    args = [str(binary), 'mcp', calls[name][0]]
     if name != 'resources':
         args += ['--workspace', str(workspace)]
+    args += calls[name][1:]
     if name in ('run', 'run-auto'):
         env['OPENAI_API_KEY'] = 'fixture-model-key'
     no_spawn = name in ('disabled', 'unknown', 'invalid-pair', 'duplicate-pair', 'invalid-read', 'invalid-run', 'invalid-flag')
@@ -129,6 +131,8 @@ def run_case(binary, output, name):
             data = json.loads(result.stdout)
             if name == 'resources':
                 assert data['nextCursor'] == 'second', data
+            elif name == 'opaque-cursor':
+                assert any(row.get('params', {}).get('cursor') == '-opaque-page' for row in messages), messages
             elif name == 'pagination':
                 assert data['resources'][0]['uri'] == 'fixture://second', data
             elif name == 'templates':
@@ -169,7 +173,7 @@ def main():
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True)
     checks = []
-    for name in ('resources', 'pagination', 'templates', 'read', 'prompts', 'prompt', 'image', 'run', 'run-auto', 'run-deny', 'run-image', 'disabled', 'unknown', 'invalid-pair', 'duplicate-pair', 'invalid-read', 'invalid-run', 'invalid-flag'):
+    for name in ('resources', 'pagination', 'opaque-cursor', 'templates', 'read', 'prompts', 'prompt', 'image', 'run', 'run-auto', 'run-deny', 'run-image', 'disabled', 'unknown', 'invalid-pair', 'duplicate-pair', 'invalid-read', 'invalid-run', 'invalid-flag'):
         if args.case and name != args.case:
             continue
         try:

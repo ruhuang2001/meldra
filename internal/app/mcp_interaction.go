@@ -120,6 +120,9 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 	if err != nil || len(data) > 64<<10 {
 		return nil, fmt.Errorf("invalid elicitation schema")
 	}
+	if err := validateMCPFormShape(data); err != nil {
+		return nil, err
+	}
 	var schema jsonschema.Schema
 	if json.Unmarshal(data, &schema) != nil || schema.Type != "object" || len(schema.Properties) > 32 {
 		return nil, fmt.Errorf("elicitation requires an object with at most 32 fields")
@@ -128,11 +131,11 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 		if field == nil || (field.Type != "string" && field.Type != "integer" && field.Type != "number" && field.Type != "boolean" && field.Type != "array") {
 			return nil, fmt.Errorf("unsupported elicitation field")
 		}
-		if field.Type == "array" && (field.Items == nil || field.Items.Type != "string" || len(field.Items.Enum) == 0) {
+		if field.Type == "array" && (field.Items == nil || len(field.Items.Enum) == 0 && len(field.Items.AnyOf) == 0) {
 			return nil, fmt.Errorf("elicitation arrays must contain enumerated strings")
 		}
-		lower := strings.ToLower(name + " " + field.Title + " " + field.Description)
-		for _, secret := range []string{"password", "secret", "api_key", "api key", "token", "credential", "credit card"} {
+		lower := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(name + " " + field.Title + " " + field.Description))
+		for _, secret := range []string{"password", "secret", "apikey", "token", "credential", "creditcard"} {
 			if strings.Contains(lower, secret) {
 				return nil, fmt.Errorf("sensitive elicitation requires URL mode")
 			}
@@ -143,6 +146,7 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 		return nil, fmt.Errorf("invalid or externally referenced elicitation schema")
 	}
 	prompt := fmt.Sprintf("MCP server %s requests information:\n%s\nSchema: %s\nEnter one JSON object, 'decline', or 'cancel':", server, p.Message, data)
+	originalPrompt := prompt
 	for range 3 {
 		answer, ok := w.mcpHumanInput(ctx, prompt)
 		if !ok || strings.EqualFold(answer, "cancel") {
@@ -153,11 +157,88 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 		}
 		var content map[string]any
 		if len(answer) <= 64<<10 && json.Unmarshal([]byte(answer), &content) == nil && content != nil && resolved.Validate(content) == nil {
-			return &mcp.ElicitResult{Action: "accept", Content: content}, nil
+			declared := true
+			for key := range content {
+				if _, ok := schema.Properties[key]; !ok {
+					declared = false
+					break
+				}
+			}
+			if declared {
+				return &mcp.ElicitResult{Action: "accept", Content: content}, nil
+			}
 		}
-		prompt = "Invalid form response: values must match the shown schema. Enter JSON, 'decline', or 'cancel':"
+		prompt = "Invalid form response: values must match the shown schema.\n" + originalPrompt
 	}
 	return nil, fmt.Errorf("elicitation response failed validation three times")
+}
+
+// Forms support the protocol's primitive fields and titled enums, not arbitrary JSON Schema composition.
+func validateMCPFormShape(data []byte) error {
+	var root map[string]any
+	if json.Unmarshal(data, &root) != nil || root == nil {
+		return fmt.Errorf("invalid flat elicitation schema")
+	}
+	for key, value := range root {
+		switch key {
+		case "type", "properties", "required", "title", "description", "$schema":
+		case "additionalProperties":
+			if value != false {
+				return fmt.Errorf("flat elicitation cannot allow undeclared properties")
+			}
+		default:
+			return fmt.Errorf("unsupported flat elicitation keyword %q", key)
+		}
+	}
+	fields, ok := root["properties"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("flat elicitation requires declared properties")
+	}
+	var checkField func(map[string]any, bool) error
+	checkField = func(field map[string]any, item bool) error {
+		for key, value := range field {
+			switch key {
+			case "type", "title", "description", "default", "enum", "enumNames", "minLength", "maxLength", "format", "minimum", "maximum", "minItems", "maxItems":
+			case "items":
+				schema, ok := value.(map[string]any)
+				if !ok || item {
+					return fmt.Errorf("flat elicitation disallows nested arrays")
+				}
+				if err := checkField(schema, true); err != nil {
+					return err
+				}
+			case "oneOf", "anyOf":
+				entries, ok := value.([]any)
+				if !ok || len(entries) == 0 || key == "anyOf" && !item {
+					return fmt.Errorf("flat elicitation only supports titled enum choices")
+				}
+				for _, value := range entries {
+					entry, ok := value.(map[string]any)
+					if !ok || len(entry) != 2 {
+						return fmt.Errorf("flat elicitation requires const/title enum entries")
+					}
+					constant, valueOK := entry["const"].(string)
+					title, titleOK := entry["title"].(string)
+					if !valueOK || !titleOK || constant == "" || title == "" {
+						return fmt.Errorf("invalid flat elicitation enum")
+					}
+				}
+			default:
+				return fmt.Errorf("unsupported flat elicitation field keyword %q", key)
+			}
+		}
+		return nil
+	}
+	for _, value := range fields {
+		field, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("invalid flat elicitation field")
+		}
+		if err := checkField(field, false); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (w *Workspace) sampleMCP(ctx context.Context, server string, p *mcp.CreateMessageParams) (*mcp.CreateMessageResult, error) {
 	if p == nil || p.MaxTokens < 1 || len(p.Messages) == 0 || len(p.Messages) > 64 {
@@ -240,6 +321,14 @@ type mcpCLIInput struct {
 	source    io.Reader
 }
 
+// cancelreader calls Fd during reads; cache it while SyscallConn protects against signal-time Close.
+type mcpInputFile struct {
+	*os.File
+	descriptor uintptr
+}
+
+func (f mcpInputFile) Fd() uintptr { return f.descriptor }
+
 func newMCPCLIInput(input io.Reader) (*mcpCLIInput, func(), error) {
 	if existing, ok := input.(*mcpCLIInput); ok {
 		return existing, func() {}, nil
@@ -248,14 +337,33 @@ func newMCPCLIInput(input io.Reader) (*mcpCLIInput, func(), error) {
 		return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
 	}
 	if file, ok := input.(*os.File); ok {
+		raw, err := file.SyscallConn()
+		if err != nil {
+			return nil, nil, err
+		}
+		var descriptor uintptr
+		if err := raw.Control(func(fd uintptr) { descriptor = fd }); err != nil {
+			return nil, nil, err
+		}
 		info, err := file.Stat()
 		if err != nil {
 			return nil, nil, err
 		}
-		// epoll cannot watch regular files or non-terminal devices such as /dev/null.
-		if info.Mode().IsRegular() || info.Mode()&os.ModeCharDevice != 0 && !term.IsTerminal(file.Fd()) {
+		// epoll cannot watch regular files or /dev/null.
+		if info.Mode().IsRegular() {
 			return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
 		}
+		if info.Mode()&os.ModeCharDevice != 0 && !term.IsTerminal(descriptor) {
+			nullInfo, err := os.Stat(os.DevNull)
+			if err != nil {
+				return nil, nil, err
+			}
+			if os.SameFile(info, nullInfo) {
+				return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
+			}
+			return nil, nil, fmt.Errorf("unsupported nonterminal character device for stdin")
+		}
+		input = mcpInputFile{File: file, descriptor: descriptor}
 	}
 	reader, err := cancelreader.NewReader(input)
 	if err != nil {

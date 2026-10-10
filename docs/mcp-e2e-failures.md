@@ -35,3 +35,16 @@ Additional security/lifecycle cases, specified before fixture changes:
 - SIGTERM during external call: durable unknown outcome, no retries, child cleaned up.
 - TUI approval bridge: real PTY displays approval; y/n controls dispatch and durable decision; Ctrl-C restores/exits.
 - Descendant process ownership: fixture spawns a child inheriting stdio; both PIDs disappear on normal exit, startup timeout, and SIGTERM during a call.
+
+## Runtime review regressions (before fixes)
+
+- A workspace command that exits nonzero can return a structured failed result without
+  a Go error; MCP must preserve its output and send isError=true. Declines are errors too.
+- Waiting 121 seconds for legacy approval must not exhaust the subsequent workspace
+  operation; approval has its own bounded deadline, parent cancellation still applies.
+- Cancelling a resource request before dispatch must persist cancelled, not unknown,
+  and send no resource request on the wire.
+- Opaque cursors beginning with "-" must be accepted after a "--" option terminator.
+- Individually valid servers whose combined catalogs exceed 112 external tools or
+  1 MiB schema/description must not overflow the model request; offending servers
+  are skipped with a warning and closed while accepted servers remain usable.

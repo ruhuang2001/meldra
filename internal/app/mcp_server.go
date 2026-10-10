@@ -78,8 +78,6 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			return result, ErrWorkspaceBusy
 		}
 		defer operation.Unlock()
-		ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
-		defer cancel()
 		store := newTaskSessionStore(paths)
 		session, err := store.New(workspace.root)
 		if err != nil {
@@ -173,6 +171,9 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 				approve = func(context.Context, ApprovalRequest) bool { return answer.Action == "accept" && accepted }
 			} else {
 				approve = func(ctx context.Context, request ApprovalRequest) bool {
+					// Human approval does not consume the workspace command deadline.
+					ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+					defer cancel()
 					answer, err := req.Session.Elicit(ctx, mcpServeApproval(request.Title+"\n"+request.Detail))
 					if err != nil || answer == nil || answer.Action != "accept" {
 						return false
@@ -182,10 +183,14 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 				}
 			}
 			result, err := invoke(ctx, definition.Name, req.Params.Arguments, approve, declined)
-			if err != nil {
-				return mcpServeResult(result.Output+"\n"+err.Error(), true), nil
+			output := result.Output
+			if result.Error != "" {
+				output += "\n" + result.Error
 			}
-			return mcpServeResult(result.Output, false), nil
+			if err != nil && err.Error() != result.Error {
+				output += "\n" + err.Error()
+			}
+			return mcpServeResult(output, err != nil || result.Status != tool.Succeeded), nil
 		})
 	}
 	server.AddResource(&mcp.Resource{URI: "meldra://workspace", Name: "workspace", Description: "Bounded listing of workspace files", MIMEType: "text/plain"}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {

@@ -85,6 +85,10 @@ func (w *Workspace) callMCPCatalog(session *mcp.ClientSession, server, kind stri
 	if !w.requestApproval(ApprovalRequest{Kind: ApprovalCommand, Title: "Access MCP " + kind + " on " + server, Detail: detail, Prompt: detail + "\nAllow MCP request? [y/N] "}) {
 		return "Declined; MCP request was not sent.", nil
 	}
+	if err := w.ctx.Err(); err != nil {
+		tool.Observe(w.ctx, func(o *tool.Observation) { o.Result.Status = tool.Cancelled })
+		return "", err
+	}
 	ctx, cancel := context.WithTimeout(w.ctx, mcpTimeout(timeout, 60))
 	defer cancel()
 	tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })

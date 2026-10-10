@@ -3,9 +3,14 @@
 Before changes these can fail: logout during in-flight refresh resurrects cache;
 concurrent processes reuse a rotated refresh token; old clients ignore relogin,
 removed cache or config changes; canceled requests persist a later refresh;
-OAuth MCP calls ignore tool_timeout_sec > 30. No real service or secrets used.
+OAuth MCP calls ignore tool_timeout_sec > 30; environment client secrets leak
+into saved oauth2.Config, removed/rotated environment values are ignored; failed
+callback binding destroys valid login; stale requests reach the wire before auth.
+No real service or secrets used.
 """
 import argparse
+import base64
+import socket
 import importlib.util
 import io
 import json
@@ -29,11 +34,26 @@ class Handler(base.Handler):
         server = self.server
         raw = self.rfile.read(int(self.headers.get('Content-Length', 0)))
         self.rfile = io.BytesIO(raw)
+        if self.path == '/register' and server.dynamic_secret:
+            self.reply(dict(json.loads(raw), client_id='dynamic-fixture', client_secret=server.dynamic_secret, token_endpoint_auth_method='client_secret_basic'), 201)
+            return
+        if self.path == '/token' and server.expected_secret:
+            fields = urllib.parse.parse_qs(raw.decode())
+            supplied = fields.get('client_secret', [''])[0]
+            header = self.headers.get('Authorization', '')
+            if header.startswith('Basic '):
+                supplied = urllib.parse.unquote(base64.b64decode(header[6:]).decode().split(':', 1)[1])
+            server.secret_matches.append(supplied == server.expected_secret)
+            if supplied != server.expected_secret:
+                self.reply({'error': 'invalid_client'}, 401)
+                return
         if self.path == '/token' and b'grant_type=refresh_token' in raw:
             server.refresh_entered.set()
             server.refresh_release.wait(15)
         if self.path == '/mcp':
             body = json.loads(raw)
+            if body.get('method') == 'tools/call':
+                server.tool_requests += 1
             if self.headers.get('Authorization') == 'Bearer fixture-access-' + str(server.token_serial) and server.token_serial:
                 method = body.get('method')
                 if method == 'initialize':
@@ -79,7 +99,9 @@ def prepare(binary, output, name):
     server.provider_entered, server.provider_release = threading.Event(), threading.Event()
     server.refresh_release.set()
     server.provider_release.set()
-    server.tool_calls = 0
+    server.tool_calls = server.tool_requests = 0
+    server.expected_secret = server.dynamic_secret = None
+    server.secret_matches = []
     server.tool_delay = 0
     config = {'url': server.url + '/mcp', 'oauth': {}}
     base.set_config(home, config)
@@ -144,7 +166,7 @@ def run_case(binary, output, name):
                 server.refresh_release.set()
                 time.sleep(0.5)
                 current = json.loads(path.read_text())
-                assert current['token']['access_token'] == saved['token']['access_token'], 'canceled refresh changed token cache'
+                assert current['token'] == saved['token'], 'canceled refresh changed token cache'
                 finish(first, directory, 'chat')
                 evidence['canceled_refresh_not_persisted'] = True
         elif name in ('relogin-generation', 'missing-cache', 'changed-config'):
@@ -163,7 +185,7 @@ def run_case(binary, output, name):
                 base.set_config(home, dict(config, oauth={'scopes': ['changed']}))
             server.provider_release.set()
             code, transcript = finish(first, directory, 'old-session')
-            assert server.tool_calls == 0, 'stale session dispatched remote tool'
+            assert server.tool_requests == 0, 'stale session sent remote tool request before authorization'
             assert code != 0, 'stale session continued despite auth change'
             if name == 'missing-cache':
                 assert not path.exists(), 'missing cache recreated'
@@ -182,7 +204,10 @@ def run_case(binary, output, name):
             deadline = time.monotonic() + 15
             query = None
             while time.monotonic() < deadline:
-                line = lines.get(timeout=5)
+                try:
+                    line = lines.get(timeout=min(5, max(0.01, deadline-time.monotonic())))
+                except queue.Empty:
+                    continue
                 if line.startswith(server.url + '/authorize?'):
                     query = urllib.parse.parse_qs(urllib.parse.urlparse(line.strip()).query)
                     break
@@ -198,6 +223,69 @@ def run_case(binary, output, name):
             assert login_process.returncode != 0, 'logged-out authorization was accepted'
             assert not path.exists(), 'pending browser login recreated credentials after logout'
             evidence['pending_login_rejected_after_logout'] = True
+        elif name in ('environment-secret', 'dynamic-secret'):
+            secrets = ['environment-private-login-4321', 'environment-private-rotated-9876']
+            if name == 'environment-secret':
+                server.expected_secret = secrets[0]
+                env['MCP_FIXTURE_CLIENT_SECRET'] = secrets[0]
+                config['oauth'] = {'client_id': 'registered-fixture', 'client_secret_env': 'MCP_FIXTURE_CLIENT_SECRET', 'issuer': server.url}
+            else:
+                server.dynamic_secret = server.expected_secret = 'dynamic-client-issued-secret'
+            base.set_config(home, config)
+            assert base.login(binary, env, server, directory, suffix='-secret') == 0
+            saved = json.loads(path.read_text())
+            if name == 'environment-secret':
+                assert not saved['config']['ClientSecret'], 'environment secret persisted in oauth2.Config'
+                expire(home)
+                before = path.read_bytes()
+                missing_env = dict(env)
+                del missing_env['MCP_FIXTURE_CLIENT_SECRET']
+                count = len(server.token_requests)
+                code, transcript = finish(start(binary, workspace, missing_env), directory, 'missing-secret')
+                assert 'secret environment variable is missing' in transcript, transcript
+                assert len(server.token_requests) == count and path.read_bytes() == before, 'missing environment secret reused persisted credentials'
+                env['MCP_FIXTURE_CLIENT_SECRET'] = server.expected_secret = secrets[1]
+            else:
+                assert saved['config']['ClientSecret'] == server.dynamic_secret, 'DCR client secret lost'
+                expire(home)
+            code, transcript = finish(start(binary, workspace, env), directory, 'secret-refresh')
+            assert code == 0 and 'unavailable' not in transcript, transcript
+            assert server.secret_matches and all(server.secret_matches), 'client authentication used stale secret'
+            assert server.token_requests[-1]['grant_type'] == ['refresh_token']
+            if name == 'environment-secret':
+                for artifact in directory.rglob('*'):
+                    if artifact.is_file():
+                        content = artifact.read_bytes()
+                        assert all(secret.encode() not in content for secret in secrets), 'environment secret persisted: ' + str(artifact)
+                evidence['environment_secret_not_persisted'] = True
+                evidence['refresh_used_rotated_environment'] = True
+            else:
+                evidence['dynamic_client_secret_retained'] = True
+        elif name == 'occupied-callback':
+            reservation = socket.socket()
+            reservation.bind(('127.0.0.1', 0))
+            callback_port = reservation.getsockname()[1]
+            reservation.close()
+            config['oauth'] = {'callback_port': callback_port}
+            base.set_config(home, config)
+            assert base.login(binary, env, server, directory, suffix='-fixed-port') == 0
+            before = path.read_bytes()
+            generation_path = Path(str(path) + '.generation')
+            before_generation = generation_path.read_bytes()
+            occupied = socket.socket()
+            occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            occupied.bind(('127.0.0.1', callback_port))
+            occupied.listen()
+            try:
+                result = subprocess.run([str(binary), 'mcp', 'login', 'fixture'], capture_output=True, text=True, env=env, timeout=10)
+                (directory / 'occupied-port.txt').write_text(result.stdout + result.stderr)
+                assert result.returncode != 0, 'occupied callback port accepted'
+                assert path.read_bytes() == before and generation_path.read_bytes() == before_generation, 'callback bind failure changed valid session'
+            finally:
+                occupied.close()
+            code, transcript = finish(start(binary, workspace, env), directory, 'retained-session')
+            assert code == 0 and 'unavailable' not in transcript, transcript
+            evidence['bind_failure_preserved_session'] = True
         elif name == 'long-tool':
             server.tool_delay = 31
             base.set_config(home, dict(config, tool_timeout_sec=40))
@@ -225,12 +313,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--case', choices=['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'long-tool'])
+    parser.add_argument('--case', choices=['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool'])
     args = parser.parse_args()
     args.binary, args.output = args.binary.resolve(), args.output.resolve()
     args.output.mkdir()
     checks = []
-    for name in ([args.case] if args.case else ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'long-tool']):
+    for name in ([args.case] if args.case else ['concurrent-refresh', 'logout-refresh', 'cancel-refresh', 'relogin-generation', 'missing-cache', 'changed-config', 'logout-pending-login', 'environment-secret', 'dynamic-secret', 'occupied-callback', 'long-tool']):
         checks.append(run_case(args.binary, args.output, name))
         base.write(args.output / 'report.json', checks)
         print(name + ': passed', flush=True)

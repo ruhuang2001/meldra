@@ -131,6 +131,7 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		return nil, err
 	}
 	connections := &mcpConnections{}
+	catalogBytes := 0
 	names := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if selected != "" && name != selected {
@@ -145,8 +146,19 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 			return nil, err
 		}
 		session, definitions, err := connectMCPServer(ctx, paths, name, server, workspace)
+		candidateBytes := catalogBytes
+		// Leave room for the built-in tools in providers with a 128-tool limit.
+		if err == nil && len(connections.tools)+len(definitions) > 112 {
+			err = fmt.Errorf("combined MCP catalog exceeds 112 tools")
+		}
 		if err == nil {
 			for _, definition := range definitions {
+				schema, marshalErr := json.Marshal(definition.Parameters)
+				candidateBytes += len(schema) + len(definition.Description) + len(definition.Name)
+				if marshalErr != nil || candidateBytes > 1<<20 {
+					err = fmt.Errorf("combined MCP catalog exceeds 1 MiB or has invalid schema")
+					break
+				}
 				if names[definition.Name] {
 					err = fmt.Errorf("duplicate advertised tool name")
 					break
@@ -163,6 +175,7 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		for _, definition := range definitions {
 			names[definition.Name] = true
 		}
+		catalogBytes = candidateBytes
 		connections.sessions = append(connections.sessions, session)
 		connections.tools = append(connections.tools, definitions...)
 	}
