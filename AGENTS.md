@@ -1,9 +1,10 @@
 # Meldra Agent Rules
 
-## Documentation Language
+## Project Language
 
-Use English for project documentation and documentation examples by default.
-Preserve useful content when translating existing documents.
+Use English for project documentation, CLI/TUI messages, help text, and code
+comments. Preserve Unicode input support and multilingual regression fixtures.
+This rule does not restrict the language used to discuss work with the user.
 
 ## Commit Messages
 

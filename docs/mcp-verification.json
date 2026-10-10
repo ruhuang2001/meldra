@@ -90,5 +90,33 @@
     "local_evidence": "dist/mcp-check-g9t5z3yz",
     "interpretation": "This follow-up verifies local regression fixes; prior conformance and real Codex MCP results above were not repeated."
   },
-  "reproduce": "make check; each run writes a fresh dist/mcp-check-* directory"
+  "reproduce": "make check; each run writes a fresh dist/mcp-check-* directory",
+  "second_review_follow_up": {
+    "date": "2026-10-10",
+    "platform": "darwin-arm64",
+    "reviewed_pr_head": "36eefe534e938e495ee0c49adb3b10cb5f5eb71d",
+    "commands": [
+      "make check",
+      "go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./..."
+    ],
+    "result": "passed",
+    "coverage_percent": 82.8,
+    "suites": {
+      "mcp-e2e": 49,
+      "mcp-auth-interaction-e2e": 30,
+      "mcp-cli-e2e": 20,
+      "mcp-input-e2e": 8,
+      "mcp-oauth-regression-e2e": 19
+    },
+    "regressions": [
+      "reject numeric form input that cannot retain its value through JSON round-trip",
+      "reject oversized serialized OAuth sessions before login or refresh writes",
+      "verify declined edits preserve pending undo approvals"
+    ],
+    "local_evidence": "dist/mcp-check-w3oa4yqa",
+    "source_manifest_sha256": "0242eb7c5b129e76d3bdbfb99888ee5f7db52e5350a7cdc0dcf1632531692b41",
+    "instrumented_binary_sha256": "a563c6edd51bbe4c2a885916639e4e22c5644d7aa10f283bff55abfb9ae8c022",
+    "report_sha256": "0dd5c2c0e446e5b77b700bebb2442ed792efb8d02508252217ae8ffc3bfea141",
+    "evidence_checksums_sha256": "d9be3c8fa3188ba4f4e7bf42acbd74483bc182723061a31a11fde8e10c76b0b3"
+  }
 }
