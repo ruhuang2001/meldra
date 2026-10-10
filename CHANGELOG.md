@@ -5,6 +5,14 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.3.1](https://github.com/ruhuang2001/meldra/compare/v0.3.0...v0.3.1) (2026-10-10)
+
+
+### Bug Fixes
+
+* **release:** keep legacy tag checks outside the checkout ([d633788](https://github.com/ruhuang2001/meldra/commit/d63378887c133fad5a37d76751ea483f50019060))
+* **release:** separate check evidence from release artifacts ([e8f841a](https://github.com/ruhuang2001/meldra/commit/e8f841a6e8821805605876e906689e30ace07434))
+
 ## [0.3.0](https://github.com/ruhuang2001/meldra/compare/v0.2.0...v0.3.0) (2026-10-10)
 
 
