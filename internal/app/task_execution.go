@@ -35,6 +35,8 @@ type taskExecution struct {
 	resume            bool
 	context           string
 	replayScope       string
+	legacyReplayScope string
+	legacyProvider    string
 }
 
 type executionContextKey struct{}
@@ -231,6 +233,20 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	// result supplies that result again without repeating the side effect.
 	if callID != "" {
 		old, err := e.db.GetScopedToolCall(ctx, e.session.ID, callID, e.replayScope)
+		if errors.Is(err, task.ErrNotFound) && e.legacyReplayScope != "" && e.legacyReplayScope != e.replayScope {
+			legacy, legacyErr := e.db.GetScopedToolCall(ctx, e.session.ID, callID, e.legacyReplayScope)
+			if legacyErr == nil {
+				run, runErr := e.db.GetRun(ctx, legacy.RunID)
+				if runErr != nil {
+					return tool.Result{}, e.recordingError(ctx, runErr)
+				}
+				if run.Config.Provider == e.legacyProvider {
+					old, err = legacy, nil
+				}
+			} else if !errors.Is(legacyErr, task.ErrNotFound) {
+				return tool.Result{}, e.recordingError(ctx, legacyErr)
+			}
+		}
 		if err != nil && !errors.Is(err, task.ErrNotFound) {
 			return tool.Result{}, e.recordingError(ctx, err)
 		}

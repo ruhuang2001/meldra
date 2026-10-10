@@ -343,3 +343,28 @@ func TestCustomResponseWithoutIdentityDoesNotRunTools(t *testing.T) {
 		t.Fatalf("missing response identity executed: effects=%d error=%v", effects, err)
 	}
 }
+
+func TestCustomReplayPreservesLegacyProviderScope(t *testing.T) {
+	a, paths := recordedAgent(t, nil, nil)
+	a.customProvider = true
+	effects := 0
+	a.registry, _ = tool.New([]ToolDefinition{{Name: "count", Function: func(context.Context, json.RawMessage) (string, error) { effects++; return "done", nil }}})
+	call := []provider.OutputItem{{Type: "function_call", CallID: "legacy-call", Name: "count", Arguments: `{}`}}
+	for _, endpoint := range []string{"https://example.invalid", "https://example.invalid/v1"} {
+		a.execution.config.Provider = endpoint
+		if err := a.execution.begin(t.Context(), "count"); err != nil {
+			t.Fatal(err)
+		}
+		a.executeToolCallsContext(t.Context(), call, "same-response")
+		if a.execution.err != nil {
+			t.Fatal(a.execution.err)
+		}
+		if err := a.execution.finish(t.Context(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	calls, err := openTaskDB(t, paths).ToolCalls(t.Context(), a.session.ID)
+	if err != nil || len(calls) != 1 || effects != 1 {
+		t.Fatalf("calls=%d effects=%d err=%v", len(calls), effects, err)
+	}
+}
