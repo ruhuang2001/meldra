@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/charmbracelet/x/term"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/charmbracelet/x/term"
 
 	"meldra/internal/provider"
 	taskstore "meldra/internal/store"
@@ -39,19 +40,33 @@ func unreadOutput(t *testing.T, ctx context.Context) (*synchronizedWriter, *os.F
 	return bounded, reader
 }
 
-func TestSynchronizedWriterBoundsUnreadPipeAndKeepsFailure(t *testing.T) {
-	writer, _ := unreadOutput(t, t.Context())
+func TestSynchronizedWriterRecoversFromStallAndKeepsFailure(t *testing.T) {
+	writer, reader := unreadOutput(t, t.Context())
 	started := time.Now()
 	n, err := writer.Write([]byte(strings.Repeat("x", 4<<20)))
-	if err == nil || n == 4<<20 || time.Since(started) > 3*time.Second {
+	if !errors.Is(err, os.ErrDeadlineExceeded) || n == 4<<20 || time.Since(started) > 3*time.Second {
 		t.Fatalf("unbounded output n=%d err=%v elapsed=%s", n, err, time.Since(started))
 	}
-	started = time.Now()
-	if _, err := writer.Write([]byte("late result")); err == nil || time.Since(started) > 100*time.Millisecond {
-		t.Fatalf("sticky output failure retried: %v", err)
+	const result = "late result\n"
+	done := make(chan []byte, 1)
+	go func() {
+		data := make([]byte, n+len(resumedOutputNotice)+len(result))
+		_, _ = io.ReadFull(reader, data)
+		done <- data
+	}()
+	if _, err := writer.Write([]byte(result)); err != nil {
+		t.Fatalf("output remained disabled after a temporary stall: %v", err)
 	}
-	if writer.Err() == nil {
-		t.Fatal("output failure was hidden")
+	select {
+	case got := <-done:
+		if want := strings.Repeat("x", n) + resumedOutputNotice + result; string(got) != want {
+			t.Fatalf("recovery lost its marker or repeated partial payload: %q", got[max(0, len(got)-200):])
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("resumed output did not reach its reader")
+	}
+	if !errors.Is(writer.Err(), os.ErrDeadlineExceeded) {
+		t.Fatalf("output failure was hidden: %v", writer.Err())
 	}
 }
 
@@ -298,4 +313,196 @@ func TestSignalShutdownWithUnreadStdoutRecordsProcessBeforeExit(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = lease.Close()
+}
+
+func TestCommandPresentationRecoversAfterTemporaryOutputStall(t *testing.T) {
+	writer, reader := unreadOutput(t, t.Context())
+	w, _ := testWorkspace(t, t.TempDir(), "", true)
+	a := &Agent{workspace: w, output: writer}
+	stop := a.startCommandPresentation(t.Context())
+	defer stop()
+	w.commandOutput(CommandOutput{Text: strings.Repeat("x", 4<<20)})
+	deadline := time.Now().Add(4 * time.Second)
+	for writer.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !errors.Is(writer.Err(), os.ErrDeadlineExceeded) {
+		t.Fatalf("live output did not encounter the test stall: %v", writer.Err())
+	}
+	const marker = "output after reader resumes\n"
+	done := make(chan string, 1)
+	go func() {
+		var received strings.Builder
+		buffer := make([]byte, 32<<10)
+		for {
+			n, err := reader.Read(buffer)
+			received.Write(buffer[:n])
+			if strings.Contains(received.String(), marker) || err != nil {
+				done <- received.String()
+				return
+			}
+		}
+	}()
+	w.commandOutput(CommandOutput{Text: marker})
+	select {
+	case received := <-done:
+		if !strings.Contains(received, resumedOutputNotice) || !strings.Contains(received, marker) {
+			t.Fatalf("missing recovery notice or resumed live output: %q", received[max(0, len(received)-200):])
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("presentation worker stopped permanently after a transient output deadline")
+	}
+}
+
+func TestOutputOwnerAbruptExitHelper(t *testing.T) {
+	mode := os.Getenv("MELDRA_OUTPUT_OWNER_HELPER")
+	if mode == "" {
+		return
+	}
+	writer, _, err := newSynchronizedWriter(context.Background(), os.Stdout)
+	if err == nil && mode == "relay" {
+		_ = writer.Close()
+		var bounded *os.File
+		var cleanup func() error
+		bounded, cleanup, err = relayedOutput(os.Stdout)
+		writer = &synchronizedWriter{writer: bounded, terminal: os.Stdout, ctx: context.Background(), deadline: bounded, cleanup: cleanup, live: true}
+	}
+	if err != nil {
+		_, _ = io.WriteString(os.Stderr, err.Error()+"\n")
+		os.Exit(2)
+	}
+	if mode == "tty" && !term.IsTerminal(writer.Fd()) {
+		_, _ = io.WriteString(os.Stderr, "terminal identity lost\n")
+		os.Exit(3)
+	}
+	_, _ = io.WriteString(os.Stderr, "output ready\n")
+	_, _ = writer.Write([]byte(strings.Repeat("x", 4<<20)))
+	for {
+		time.Sleep(time.Second)
+	}
+}
+
+func TestOutputAbruptExitPreservesInheritedDescriptorFlags(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		t.Skip("python3 is required for the pipe and PTY owner-crash regression")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const script = `
+import fcntl, os, pty, select, signal, subprocess, sys, time
+for mode in ('pipe', 'tty', 'relay'):
+    reader, writer = pty.openpty() if mode == 'tty' else os.pipe()
+    mask = os.O_NONBLOCK | os.O_APPEND | os.O_ASYNC | os.O_ACCMODE
+    original = fcntl.fcntl(writer, fcntl.F_GETFL) & mask
+    env = dict(os.environ, MELDRA_OUTPUT_OWNER_HELPER=mode)
+    child = subprocess.Popen([sys.argv[1], '-test.run=^TestOutputOwnerAbruptExitHelper$'], stdout=writer, stderr=subprocess.PIPE, env=env)
+    try:
+        assert select.select([child.stderr], [], [], 8)[0], 'owner did not initialize'
+        assert child.stderr.readline() == b'output ready\n', 'owner failed to initialize'
+        assert fcntl.fcntl(writer, fcntl.F_GETFL) & mask == original, 'caller flags changed during output initialization'
+        time.sleep(.2)
+        rows = subprocess.check_output(['ps', '-axo', 'pid,ppid,pgid,state'], text=True).splitlines()[1:]
+        groups = {int(row.split()[2]) for row in rows if len(row.split()) >= 4 and int(row.split()[1]) == child.pid}
+        if mode == 'relay':
+            assert len(groups) == 1, ('expected private relay group', groups)
+        child.kill()
+        child.wait(timeout=3)
+        assert fcntl.fcntl(writer, fcntl.F_GETFL) & mask == original, 'caller flags changed after abrupt owner exit'
+        until = time.monotonic() + 4
+        while groups:
+            rows = subprocess.check_output(['ps', '-axo', 'pid,ppid,pgid,state'], text=True).splitlines()[1:]
+            live = [row for row in rows if len(row.split()) >= 4 and int(row.split()[2]) in groups and not row.split()[3].startswith('Z')]
+            if not live:
+                break
+            assert time.monotonic() < until, ('owner crash left live relay processes', live)
+            time.sleep(.05)
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=3)
+        child.stderr.close()
+        os.close(reader)
+        os.close(writer)
+print('blocking pipe, PTY, and forced relay preserve flags and stop after owner SIGKILL')
+`
+	command := exec.CommandContext(t.Context(), python, "-c", script, executable)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("abrupt output-owner exit regression: %v\n%s", err, output)
+	}
+}
+
+func TestOutputRelayBoundsCleanupWithoutDrainingCallerPipe(t *testing.T) {
+	reader, output, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer output.Close()
+	// Inherited stdout is normally blocking. Fd makes that test condition
+	// explicit before the relay sees the descriptor.
+	fd := output.Fd()
+	before, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+	if errno != 0 {
+		t.Fatal(errno)
+	}
+	bounded, cleanup, err := relayedOutput(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &synchronizedWriter{writer: bounded, terminal: output, ctx: t.Context(), deadline: bounded, cleanup: cleanup, live: true}
+	defer writer.Close()
+	_, err = writer.Write([]byte(strings.Repeat("x", 4<<20)))
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("unread relay did not time out: %v", err)
+	}
+	started := time.Now()
+	if err := writer.Close(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("relay cleanup lost output failure: %v", err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("blocked relay prevented bounded cleanup")
+	}
+	after, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
+	const statusFlags = syscall.O_NONBLOCK | syscall.O_APPEND | syscall.O_ASYNC | syscall.O_ACCMODE
+	if errno != 0 || before&statusFlags != after&statusFlags {
+		t.Fatalf("relay changed caller flags: before=%x after=%x error=%v", before, after, errno)
+	}
+}
+
+type partiallyStalledOutput struct {
+	bytes.Buffer
+	writes int
+}
+
+func (w *partiallyStalledOutput) SetWriteDeadline(time.Time) error { return nil }
+func (w *partiallyStalledOutput) Write(data []byte) (int, error) {
+	w.writes++
+	if w.writes <= 2 {
+		n, _ := w.Buffer.Write(data[:3])
+		return n, os.ErrDeadlineExceeded
+	}
+	return w.Buffer.Write(data)
+}
+
+func TestSynchronizedWriterResumesPartialNoticeWithoutReplayingPayload(t *testing.T) {
+	output := &partiallyStalledOutput{}
+	writer := &synchronizedWriter{writer: output, deadline: output, ctx: t.Context()}
+	if n, err := writer.Write([]byte("original")); n != 3 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("initial partial write: %d %v", n, err)
+	}
+	if n, err := writer.Write([]byte("second")); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("partial notice must not report user bytes written: %d %v", n, err)
+	}
+	if n, err := writer.Write([]byte("last")); n != 4 || err != nil {
+		t.Fatalf("recovery: %d %v", n, err)
+	}
+	if want := "ori" + resumedOutputNotice + "last"; output.String() != want {
+		t.Fatalf("resumed output replayed skipped bytes or repeated notice: got %q want %q", output.String(), want)
+	}
+	if !errors.Is(writer.Err(), os.ErrDeadlineExceeded) {
+		t.Fatal("recovery concealed prior timeout")
+	}
 }

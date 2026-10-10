@@ -254,7 +254,7 @@ func (m *processManager) save(record task.Process) error {
 }
 
 func (m *processManager) finishProcess(p *managedProcess, cmd *exec.Cmd, ctx context.Context, waitErr error, started bool) {
-	p.log.flush()
+	p.log.finish()
 	m.mu.Lock()
 	record := p.record
 	m.mu.Unlock()
