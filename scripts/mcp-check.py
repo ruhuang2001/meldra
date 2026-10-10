@@ -95,7 +95,9 @@ def run(command, directory, label, env=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--coverage', type=Path, default=Path('coverage.out'))
-    parser.add_argument('--dist', type=Path, default=Path('dist'))
+    parser.add_argument('--output-dir', '--dist', dest='output_dir', type=Path,
+                        default=Path('.artifacts/checks'),
+                        help='check evidence directory (separate from release artifacts)')
     parser.add_argument('--self-check', action='store_true')
     args = parser.parse_args()
     self_check()
@@ -103,8 +105,8 @@ def main():
         print('coverage merge self-check passed')
         return
     os.chdir(Path(__file__).resolve().parent.parent)
-    args.dist.mkdir(parents=True, exist_ok=True)
-    directory = Path(tempfile.mkdtemp(prefix='mcp-check-', dir=args.dist.resolve()))
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    directory = Path(tempfile.mkdtemp(prefix='mcp-check-', dir=args.output_dir.resolve()))
     covdir = directory / 'covdata'
     covdir.mkdir()
     summary = {'passed': False, 'directory': str(directory), 'sources': sources()}

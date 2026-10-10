@@ -131,8 +131,11 @@ environments. It does not make server-initiated sampling or form answers automat
 ## Verification
 
 Run `make check` for Go race tests, five real-binary MCP E2E suites, and the 75%
-coverage gate. The suites use local fixtures and write a fresh `dist/mcp-check-*`
-evidence directory. CI also runs `govulncheck`.
+coverage gate. The suites use local fixtures and write a fresh `.artifacts/checks/mcp-check-*`
+evidence directory. Override it with `make check CHECK_DIR=/path/to/checks` or
+`scripts/mcp-check.py --output-dir /path/to/checks`. Keep check evidence outside
+`dist/`, which GoReleaser requires to be empty after its before hooks. CI also
+runs `govulncheck`.
 
 The tests cover implemented local integration paths. They do not certify every
 third-party server, real OAuth provider, HTTP server hosting, subscriptions,

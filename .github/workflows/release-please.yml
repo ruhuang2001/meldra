@@ -74,11 +74,17 @@ jobs:
         with:
           go-version: "1.26.9"
 
+      # Older tags write check evidence through DIST_DIR; newer tags use
+      # CHECK_DIR. Keep both outside GoReleaser's dist directory for repairs.
+      - name: Validate release source
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
+        run: make check DIST_DIR=.artifacts/checks CHECK_DIR=.artifacts/checks
+
       - uses: goreleaser/goreleaser-action@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
           distribution: goreleaser
           version: "v2.14.0"
-          args: release --clean
+          args: release --clean --skip=before
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

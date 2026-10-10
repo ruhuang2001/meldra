@@ -1,4 +1,5 @@
 /dist/
+/.artifacts/
 /coverage.out
 .DS_Store
 /.env
