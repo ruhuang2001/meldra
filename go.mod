@@ -12,7 +12,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/muesli/cancelreader v0.2.2
-	github.com/openai/openai-go/v3 v3.71.2
+	github.com/openai/openai-go/v3 v3.74.0
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/oauth2 v0.35.0
 	modernc.org/sqlite v1.60.1
