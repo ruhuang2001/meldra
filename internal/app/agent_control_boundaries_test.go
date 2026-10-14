@@ -113,6 +113,51 @@ func TestRunCancellationPreservesJoinedProcessCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestRunContinuesAfterStopWithCancelledCleanup(t *testing.T) {
+	a := NewAgent(nil, userMessages("first", "second"), nil)
+	a.workspace = contextWorkspace(t)
+	requests := 0
+	a.backend = inferenceFunc(func(ctx context.Context, _ provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+		requests++
+		if requests == 1 {
+			if err := a.SubmitControl("stop", ""); err != nil {
+				t.Fatal(err)
+			}
+			m := a.workspace.processes
+			m.mu.Lock()
+			m.err = ctx.Err()
+			m.mu.Unlock()
+			return provider.Result{}, ctx.Err()
+		}
+		return provider.Result{Response: finishResponse()}, nil
+	})
+	if err := a.Run(t.Context()); err != nil {
+		t.Fatalf("ordinary cancellation prevented later work: %v", err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests=%d; want 2", requests)
+	}
+}
+
+func TestRunStopPreservesFailureJoinedWithCancelledCleanup(t *testing.T) {
+	cleanupErr := errors.New("process lifecycle could not be saved")
+	a := NewAgent(nil, userMessages("stop owned work"), nil)
+	a.workspace = contextWorkspace(t)
+	a.backend = inferenceFunc(func(ctx context.Context, _ provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+		if err := a.SubmitControl("stop", ""); err != nil {
+			t.Fatal(err)
+		}
+		m := a.workspace.processes
+		m.mu.Lock()
+		m.err = errors.Join(ctx.Err(), cleanupErr)
+		m.mu.Unlock()
+		return provider.Result{}, ctx.Err()
+	})
+	if err := a.Run(t.Context()); !errors.Is(err, cleanupErr) || !errors.Is(err, errTurnStopped) {
+		t.Fatalf("stopped Run hid joined cleanup failure: %v", err)
+	}
+}
+
 func TestSteeringRejectsCustomProviderContextOverBudget(t *testing.T) {
 	for _, interrupted := range []bool{false, true} {
 		for _, withSession := range []bool{false, true} {

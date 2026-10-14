@@ -190,7 +190,7 @@ func (a *Agent) Run(ctx context.Context) error {
 			return a.handleInterruption(false)
 		}
 		if err := a.RunTurn(ctx, userInput); err != nil {
-			if onlyError(err, errTurnStopped) {
+			if errors.Is(err, errTurnStopped) && onlyError(err, errTurnStopped, context.Canceled) {
 				a.emitNotice("Turn stopped")
 				continue
 			}
@@ -207,7 +207,7 @@ func (a *Agent) Run(ctx context.Context) error {
 // A control cancellation is recoverable only when no independent cleanup or
 // persistence error was joined to it. Matching any cancellation in the error
 // tree would hide those errors.
-func onlyError(err, target error) bool {
+func onlyError(err error, targets ...error) bool {
 	switch wrapped := err.(type) {
 	case interface{ Unwrap() []error }:
 		children := wrapped.Unwrap()
@@ -215,15 +215,20 @@ func onlyError(err, target error) bool {
 			return false
 		}
 		for _, child := range children {
-			if !onlyError(child, target) {
+			if !onlyError(child, targets...) {
 				return false
 			}
 		}
 		return true
 	case interface{ Unwrap() error }:
-		return onlyError(wrapped.Unwrap(), target)
+		return onlyError(wrapped.Unwrap(), targets...)
 	default:
-		return errors.Is(err, target)
+		for _, target := range targets {
+			if errors.Is(err, target) {
+				return true
+			}
+		}
+		return false
 	}
 }
 
