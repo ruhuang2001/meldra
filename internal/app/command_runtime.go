@@ -146,9 +146,9 @@ func (w *Workspace) executePreparedCommand(spec commandSpec, requestApproval boo
 	if logErr != nil {
 		truncated = true
 	}
-	preview := output
+	preview := strings.ToValidUTF8(string(output), "�")
 	if len(preview) > maxToolOutput {
-		preview = preview[:maxToolOutput]
+		preview = truncateUTF8Prefix(preview, maxToolOutput)
 		truncated = true
 	}
 	suffix := ""
@@ -176,7 +176,7 @@ func (w *Workspace) executePreparedCommand(spec commandSpec, requestApproval boo
 			o.Result.Status = tool.Failed
 		}
 	})
-	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", spec.DisplayCommand, strings.Join(spec.Arguments, " "), status, string(preview)) + suffix, nil
+	return fmt.Sprintf("command: %s %s\nstatus: %d\n%s", spec.DisplayCommand, strings.Join(spec.Arguments, " "), status, preview) + suffix, nil
 }
 
 const commandLogLimit = 16 << 20

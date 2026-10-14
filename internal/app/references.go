@@ -44,6 +44,7 @@ type ReferenceSnapshot struct {
 func ParseFileReferences(text string) ([]FileReference, error) {
 	var refs []FileReference
 	var fence byte
+	fenceLength := 0
 	inline := 0
 	lineStart := true
 	for i := 0; i < len(text); {
@@ -53,16 +54,24 @@ func ParseFileReferences(text string) ([]FileReference, error) {
 				j++
 			}
 			if j+2 < len(text) && (text[j] == '`' || text[j] == '~') && text[j] == text[j+1] && text[j] == text[j+2] {
-				if fence == 0 {
-					fence = text[j]
-				} else if fence == text[j] {
-					fence = 0
+				k := j + 3
+				for k < len(text) && text[k] == text[j] {
+					k++
 				}
-				end := strings.IndexByte(text[j:], '\n')
+				end := strings.IndexByte(text[k:], '\n')
+				lineEnd := len(text)
+				if end >= 0 {
+					lineEnd = k + end
+				}
+				if fence == 0 {
+					fence, fenceLength = text[j], k-j
+				} else if fence == text[j] && k-j >= fenceLength && strings.Trim(text[k:lineEnd], " \t\r") == "" {
+					fence, fenceLength = 0, 0
+				}
 				if end < 0 {
 					break
 				}
-				i = j + end + 1
+				i = lineEnd + 1
 				lineStart = true
 				continue
 			}
