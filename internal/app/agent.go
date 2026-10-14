@@ -190,11 +190,11 @@ func (a *Agent) Run(ctx context.Context) error {
 			return a.handleInterruption(false)
 		}
 		if err := a.RunTurn(ctx, userInput); err != nil {
-			if errors.Is(err, errTurnStopped) {
+			if onlyError(err, errTurnStopped) {
 				a.emitNotice("Turn stopped")
 				continue
 			}
-			if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+			if ctx.Err() != nil && onlyError(err, ctx.Err()) {
 				return nil
 			}
 			return err
@@ -202,6 +202,29 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// A control cancellation is recoverable only when no independent cleanup or
+// persistence error was joined to it. Matching any cancellation in the error
+// tree would hide those errors.
+func onlyError(err, target error) bool {
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		children := wrapped.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !onlyError(child, target) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return onlyError(wrapped.Unwrap(), target)
+	default:
+		return errors.Is(err, target)
+	}
 }
 
 // ErrAgentBusy means the same agent is already executing a turn.
@@ -366,6 +389,15 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			}
 			input = provider.UserInput(modelInput)
 			customBaseURLInput = provider.UserItems(modelInput)
+			if a.customProvider {
+				bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
+				if boundErr != nil {
+					return fmt.Errorf("steering custom-provider context: %w", boundErr)
+				}
+				customBaseURLInput = bounded
+				metrics.ContextBytes = contextBytes
+				a.emitMetrics(metrics)
+			}
 			previousResponseID = ""
 		}
 		if a.execution != nil {
@@ -399,6 +431,15 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				}
 				input = provider.UserInput(modelInput)
 				customBaseURLInput = provider.UserItems(modelInput)
+				if a.customProvider {
+					bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
+					if boundErr != nil {
+						return fmt.Errorf("steering custom-provider context: %w", boundErr)
+					}
+					customBaseURLInput = bounded
+					metrics.ContextBytes = contextBytes
+					a.emitMetrics(metrics)
+				}
 				previousResponseID = ""
 				continue
 			}

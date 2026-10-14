@@ -178,7 +178,8 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			defer operation.Unlock()
 			var approve ApprovalFunc
 			declined := false
-			if !autoApprove && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
+			policyGrantsEdit := permissions == PermissionWorkspaceEdit && classifyOperation(definition.Name, req.Params.Arguments) == operationWrite
+			if !autoApprove && !policyGrantsEdit && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
 				instructionDigest, err := workspace.mcpApprovalContextDigest(definition.Name, req.Params.Arguments)
 				if err != nil {
 					// A failed redemption consumes its token even if instructions
