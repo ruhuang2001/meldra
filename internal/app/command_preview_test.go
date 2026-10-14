@@ -17,6 +17,9 @@ func TestCommandPreviewHelper(t *testing.T) {
 	if index < 0 {
 		return
 	}
+	// os.Exit bypasses testing's coverage teardown. A private destination keeps
+	// coverage diagnostics from becoming part of the command output fixture.
+	t.Setenv("GOCOVERDIR", os.Args[index+2])
 	data, err := os.ReadFile(os.Args[index+1])
 	if err != nil {
 		os.Exit(2)
@@ -58,7 +61,7 @@ func TestCommandPreviewPreservesUTF8AndRawArtifact(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, err := json.Marshal(map[string]any{"command": executable, "args": []string{"-test.run=^TestCommandPreviewHelper$", "--", "--command-preview-helper", "output.bin"}, "timeout": 10})
+			raw, err := json.Marshal(map[string]any{"command": executable, "args": []string{"-test.run=^TestCommandPreviewHelper$", "--", "--command-preview-helper", "output.bin", t.TempDir()}, "timeout": 10})
 			if err != nil {
 				t.Fatal(err)
 			}
