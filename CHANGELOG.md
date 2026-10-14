@@ -5,6 +5,23 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.4.0](https://github.com/ruhuang2001/meldra/compare/v0.3.0...v0.4.0) (2026-10-14)
+
+
+### Features
+
+* **agent:** add project context and foreground task controls ([901b6b4](https://github.com/ruhuang2001/meldra/commit/901b6b443fb41732928cb65b5163f53d75fcd626))
+* **session:** persist managed processes and run policies ([46c8cd3](https://github.com/ruhuang2001/meldra/commit/46c8cd3d018c4345e147f55b3eb2dd7465b403cd))
+
+
+### Bug Fixes
+
+* **agent:** harden review boundaries and live output ([b3ad56f](https://github.com/ruhuang2001/meldra/commit/b3ad56ffad2d267225751e7cffedfca835ed2354))
+* **agent:** preserve runtime boundaries after review ([1a35ac4](https://github.com/ruhuang2001/meldra/commit/1a35ac46efaeb13bed31e7909625e28a8e831c42))
+* **agent:** retain normal cancellation and isolate test coverage ([d41e040](https://github.com/ruhuang2001/meldra/commit/d41e040e4c1879c39d80b3c7065cf31d1acadb26))
+* **release:** keep legacy tag checks outside the checkout ([d633788](https://github.com/ruhuang2001/meldra/commit/d63378887c133fad5a37d76751ea483f50019060))
+* **release:** separate check evidence from release artifacts ([e8f841a](https://github.com/ruhuang2001/meldra/commit/e8f841a6e8821805605876e906689e30ace07434))
+
 ## [0.3.0](https://github.com/ruhuang2001/meldra/compare/v0.2.0...v0.3.0) (2026-10-10)
 
 
