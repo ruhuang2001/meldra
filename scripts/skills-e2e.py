@@ -51,13 +51,13 @@ class Harness:
         if not condition:
             raise AssertionError(f'{name}: {detail}')
 
-    def command(self, label, args, stdin='', env=None):
+    def command(self, label, args, stdin='', env=None, success=True):
         result = subprocess.run([str(self.binary), *args], cwd=self.workspace, env=env or self.env,
                                 input=stdin, text=True, capture_output=True, timeout=90)
         write(self.output / (label + '.stdout.txt'), result.stdout)
         write(self.output / (label + '.stderr.txt'), result.stderr)
         self.report['commands'].append({'label': label, 'args': args, 'returncode': result.returncode})
-        self.check(label + ' exits successfully', result.returncode == 0, result.stderr[-2000:])
+        self.check(label + (' exits successfully' if success else ' exits unsuccessfully'), (result.returncode == 0) == success, result.stderr[-2000:])
         return result.stdout
 
     def skill(self, root, name, description='A skill fixture.', body='body'):
@@ -344,10 +344,17 @@ class Harness:
             value = self.catalog(label + '-catalog', workspace, env)
             names = {s['name'] for s in value['skills']}
             self.check(label + ' CLI catalog protection', ('demo' in names) == (label != 'cache-source'), names == {'demo', 'native-demo'} if label == 'nested-state' else sorted(names))
+            if label == 'cache-source':
+                # The entire workspace is protected, so chat must fail before inference.
+                start = len(self.requests)
+                self.command(label + '-chat', ['--workspace', str(workspace), '--prompt', 'Inspect the available skill using read_skill.'], env=env, success=False)
+                stderr = (self.output / (label + '-chat.stderr.txt')).read_text()
+                self.check(label + ' rejects protected workspace', 'access to Meldra configuration and sessions is forbidden' in stderr, stderr)
+                self.check(label + ' sends no provider requests', len(self.requests) == start)
+                continue
             read = lambda name, path: ('read_skill', {'name': name, 'path': path})
             requested = [read('demo', forbidden)]
-            if label != 'cache-source':
-                requested += [read('demo', '.git/config'), read('demo', '../SKILL.md'), read('demo', None)]
+            requested += [read('demo', '.git/config'), read('demo', '../SKILL.md'), read('demo', None)]
             if label == 'nested-state':
                 requested += [read('native-demo', None)]
             start = len(self.requests)
@@ -359,8 +366,7 @@ class Harness:
             self.check(label + ' never discloses protected sentinel', SECRET not in json.dumps(self.requests[start:]))
             records = self.audit(label, env)
             calls = [c for record in records for c in record.get('tool_calls', []) if c['name'] == 'read_skill']
-            failed = 1 if label == 'cache-source' else 3
-            self.check(label + ' blocks protected resources and traversal', len(calls) == len(requested) and sum(c['status'] == 'failed' for c in calls) == failed, [(c['arguments'], c['status']) for c in calls])
+            self.check(label + ' blocks protected resources and traversal', len(calls) == len(requested) and sum(c['status'] == 'failed' for c in calls) == 3, [(c['arguments'], c['status']) for c in calls])
             self.check(label + ' read-only audit contains no secret', all(c['effect'] == 'read' for c in calls) and SECRET not in json.dumps(calls))
             self.check(label + ' reads need no approval', not any(record.get('approvals') for record in records))
             if label == 'nested-state':

@@ -25,7 +25,7 @@ output directory; a failed assertion exits nonzero and retains the evidence.
 | Read confinement | Unknown skill, absolute/traversal, .git, symlink, binary, oversized file, or protected state can be read | Failed audited calls and no secret marker in any provider request |
 | Nested protected state | User skill outside workspace contains MELDRA_HOME and exposes credentials through a relative resource | Nested state/credentials.env read fails; sentinel absent from HTTP requests and audited output |
 | Global skill exception | Protecting MELDRA_HOME blocks legitimate native state/skills packages | Actual read_skill calls load global source bodies with durable artifacts |
-| Cache protection | CLI discovers a cache-protected source that runtime forbids, or nested skill resources expose execution-cache state | Isolated native cache layouts exercise matching CLI/runtime exclusion and failed resource reads |
+| Cache protection | CLI discovers a cache-protected source that runtime forbids, or nested skill resources expose execution-cache state | A workspace inside Meldra's private cache excludes its skills and rejects chat before any provider request; a normal workspace rejects reads of protected cache resources |
 | Special files | FIFO skill metadata or resource blocks a read waiting for a writer | Static FIFO fixtures are rejected without opening and bounded CLI/runtime finish |
 | Existing tools | Skills bypass workspace/protected-state boundaries | Existing read_file cannot read outside/protected fixture |
 | Execution | Reading a skill authorizes executable code | Declined run_command leaves no output; approved run creates exact output |
