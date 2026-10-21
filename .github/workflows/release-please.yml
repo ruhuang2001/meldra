@@ -72,7 +72,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
-          go-version: "1.26.9"
+          go-version: "1.26.10"
 
       # Older tags write check evidence through DIST_DIR; newer tags use
       # CHECK_DIR. Keep both outside GoReleaser's dist directory for repairs.
