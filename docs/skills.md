@@ -1,7 +1,7 @@
-# Meldra Skills Research and Validation Prototype
+# Skills
 
-The initial prototype was researched in October 2026 on `codex/skills-support`.
-This document describes the discovery rules, integration boundaries, and validation approach.
+This document describes Meldra's `SKILL.md` discovery rules, integration
+boundaries, and verification approach.
 
 ## Design
 
@@ -90,22 +90,22 @@ Listing requires no API credentials. Chat uses the existing model and credential
 
 ## Verification and evidence
 
-The failure matrix [5] and executable harness preceded the initial implementation. Subsequent review fixes also have focused Go regression tests. `scripts/skills-e2e.py` builds the real binary, isolates `HOME`, `MELDRA_HOME`, and the workspace, and drives the CLI, tools, approvals, SQLite records, and session recovery through a deterministic loopback Responses SSE server. It uses fake credentials and no paid model.
+The failure matrix [5] and executable harness define the expected application boundaries, alongside focused Go regression tests. `scripts/skills-e2e.py` builds the real binary, isolates `HOME`, `MELDRA_HOME`, and the workspace, and drives the CLI, tools, approvals, SQLite records, and session recovery through a deterministic loopback Responses SSE server. It uses fake credentials and no paid model.
 
     python3 scripts/skills-e2e.py --output dist/skills-e2e-new-run
     make check-local-ci
 
 The output directory must be new or empty. Stage changes before `make check-local-ci`, which checks an isolated copy of the index. Keep a separate output directory for each E2E run.
 
-The final PR evidence in `dist/pr42-merge-review/skills-e2e-final/assertions.json` records 121 passing checks, source and binary SHA-256 hashes, HTTP requests/responses, stdout/stderr, task/event JSON, fixtures, generated files, and audit artifacts. `dist/pr42-merge-review/check-local-ci.log` records successful race tests, vet, formatting, dependency checks, build, and 81.2% coverage. These local artifacts are not tracked in Git and are historical evidence for the tested source; rerun verification for later changes.
+Each E2E run writes `assertions.json` with passing checks, source and binary SHA-256 hashes, HTTP requests/responses, stdout/stderr, task/event JSON, fixtures, generated files, and audit artifacts.
 
-The suite covers external packages containing protected configuration, global reads, CLI/runtime cache protection consistency, static FIFO rejection, hard-linked metadata and credential rejection, approval decline and acceptance, multiline presentation, help, and recovery with fresh bodies. Earlier local validation also executed a cross-built Linux arm64 binary against the same 121 checks; cross-compilation alone does not establish native runtime behavior.
+The suite covers external packages containing protected configuration, global reads, CLI/runtime cache protection consistency, static FIFO rejection, hard-linked metadata and credential rejection, approval decline and acceptance, multiline presentation, help, and recovery with fresh bodies.
 
 The scripted provider validates application behavior, not live-model skill selection or instruction compliance. Arbitrary concurrent filesystem replacements, mounts, and malicious-instruction resistance require separate security review.
 
 ## Future trade-offs
 
-Add a frontend selector when deterministic selection is needed. Explicit-only invocation requires enforceable policy filtering rather than prompt text alone. Consider pagination, hot reload, and ancestor discovery when catalog scale or update frequency justifies them. Marketplaces, installers, remote downloads, new executors, and new permission systems are outside this prototype.
+Add a frontend selector when deterministic selection is needed. Explicit-only invocation requires enforceable policy filtering rather than prompt text alone. Consider pagination, hot reload, and ancestor discovery when catalog scale or update frequency justifies them. Marketplaces, installers, remote downloads, new executors, and new permission systems are outside the current scope.
 
 ## Primary sources
 

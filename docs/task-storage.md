@@ -1,4 +1,4 @@
-# Foreground task storage contract (0.2.x)
+# Foreground task storage contract
 
 Status: database schema 2; the event envelope remains schema 1. Schema 1 databases
 are migrated transactionally to add process records, preserving existing history.
@@ -126,15 +126,17 @@ The index is rebuildable and added idempotently to existing schema 1 stores;
 older binaries can still read those stores. Empty provider IDs are not replay
 identities. Custom-provider calls additionally carry a response-based replay
 scope. Recovery pages unknown calls and reads only their approvals; the context
-query decodes at most the most recent 30 calls. Inspection can open an existing
-store without resolving execution lock paths.
+query decodes at most the most recent 30 tool calls and 10 managed processes.
+Inspection can open an existing store without resolving execution lock paths.
 
 The application commits tool intent before starting the handler and commits
 the outcome after completion. SQLite cannot atomically commit an external
 command or filesystem edit. Explicit recovery marks formerly planned calls
-cancelled and formerly running calls unknown, then marks their Run interrupted.
-It runs no tools and expires pending approvals. Normal cancellation also keeps
-unrecorded started outcomes unknown rather than asserting that no effect occurred.
+cancelled, formerly running calls unknown, and active managed processes
+unknown (`state='unknown'`, `effects='unknown'`), then marks their Run
+interrupted. It runs no tools and expires pending approvals. Normal
+cancellation also keeps unrecorded started outcomes unknown rather than
+asserting that no effect occurred.
 
 ## Limits, retention and corruption
 
@@ -161,12 +163,14 @@ committed execution history. Back up and archive the entire closed store
 when necessary; deleting only the WAL while a database is live is unsafe.
 
 `PRAGMA user_version` is checked before migration or enabling WAL. Schema 0
-(an empty pre-ledger database) migrates transactionally to schema 1; repeated
-opens leave the schema unchanged. Versions newer than this binary are rejected.
-The database page limit is applied before schema or index writes. Each rebuildable
-index is attempted in its own transaction; an index that cannot fit is deferred
-on SQLITE_FULL so existing records remain readable and the store can reopen.
-Corrupt JSON records and digest mismatches are reported, not silently repaired.
+(an empty pre-ledger database) migrates transactionally to schema 1, and schema 1
+migrates transactionally to schema 2 (adding the `processes` table and indexes);
+repeated opens leave the schema unchanged. Versions newer than this binary are
+rejected. The database page limit is applied before schema or index writes. Each
+rebuildable index is attempted in its own transaction; an index that cannot fit is
+deferred on SQLITE_FULL so existing records remain readable and the store can
+reopen. Corrupt JSON records and digest mismatches are reported, not silently
+repaired.
 
 Legacy JSON sessions are validated by the app and imported transactionally by
 source session ID plus SHA-256. Repeated import of an identical source is a

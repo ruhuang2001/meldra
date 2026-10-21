@@ -1,7 +1,8 @@
 # Project context, execution modes, and foreground control
 
-These capabilities are part of the 0.2.x foreground runtime. Use a binary built
-from this source tree; older published binaries may not expose these flags.
+Meldra's foreground runtime supports scoped project instructions, explicit file
+references, Plan/Build execution modes, managed processes, and interactive turn
+controls.
 
 ## Project instructions
 
@@ -31,10 +32,11 @@ edits. Arbitrary programs may affect files outside their working directory, so
 per-file instruction discovery cannot determine a program's complete write set.
 
 Applicable instruction files must be regular UTF-8 text files without symbolic
-links. Each file is limited to 32 KiB. The active project-instruction payload is
-limited to 128 KiB, including its explanatory prefix, JSON-encoded paths, scopes,
-digests, and escaped content. Invalid or oversized instructions produce a visible
-error before they are acknowledged or sent to the model.
+links. Each file is limited to 32 KiB, across at most 1024 inspected directories.
+The active project-instruction payload is limited to 128 KiB, including its
+explanatory prefix, JSON-encoded paths, scopes, digests, and escaped content.
+Invalid or oversized instructions produce a visible error before they are
+acknowledged or sent to the model.
 
 ## Explicit file references
 
@@ -75,6 +77,7 @@ history and are subject to task storage limits.
 meldra --mode plan --prompt 'Inspect the project and propose a change.'
 meldra --mode build --permissions workspace-edit
 meldra mcp serve --workspace /path/to/project --mode plan
+meldra mcp serve --workspace /path/to/project --permissions workspace-edit
 ```
 
 | Mode | Allowed work |
@@ -85,8 +88,9 @@ meldra mcp serve --workspace /path/to/project --mode plan
 Plan denies workspace edits, undo, tests, builds, formatting, process creation,
 and unclassified external effects at runtime. `--auto-approve`, Skills, project
 instructions, and MCP `readOnlyHint` annotations cannot override that boundary.
-Plan is initially local-only: starting a Plan session does not connect configured
-external MCP servers. A mode change requires a user action.
+Plan is local-only while active: starting a Plan session does not connect
+configured external MCP servers, and switching to Build connects them on demand.
+A mode change requires a user action.
 
 Mode and permission are separate. `interactive`, the default permission policy,
 requires confirmation for file modifications and programs that execute project
@@ -151,6 +155,7 @@ The same commands are available in the TUI and line interface:
 | `/steer correction` | Apply a correction to the active task. |
 | `/queue request` | Save a separate follow-up request for after the current turn. |
 | `/continue-queue` | Explicitly apply queued requests recovered after a restart. |
+| `/context [path]` | Inspect applicable `AGENTS.md` sources while idle without calling the model. |
 
 Ordinary text submitted while the TUI is busy acts as steering. In the line
 interface, use `/steer` explicitly; ordinary piped lines retain their FIFO order.

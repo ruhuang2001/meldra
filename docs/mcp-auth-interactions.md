@@ -1,6 +1,6 @@
 # MCP Authentication and Server Interactions
 
-Updated 2026-10-10. Meldra reads MCP configuration from `~/.meldra/mcp.json` or
+Meldra reads MCP configuration from `~/.meldra/mcp.json` or
 `$MELDRA_HOME/mcp.json`. OAuth and static `bearer_token_env` are mutually exclusive.
 OAuth applies only to HTTP MCP servers.
 
@@ -60,10 +60,11 @@ refresh, and logout currently support macOS and Linux only.
 ## Sampling
 
 Only servers with `sampling: true` receive sampling capability. Meldra supports
-text messages and uses the user's configured model. Server model preferences are
-hints and do not override Meldra's settings. Requests exclude the main conversation,
-workspace content, other MCP content, and executable tools. Each request is capped
-at 8192 output tokens and the server's `maxTokens`. Inference has a 60-second child
+text messages (up to 64 messages and 1 MiB request payload) and uses the user's
+configured model. Server model preferences are hints and do not override Meldra's
+settings. Requests exclude the main conversation, workspace content, other MCP
+content, and executable tools. Each request is capped at 8192 output tokens, the
+server's `maxTokens`, and a 1 MiB response body. Inference has a 60-second child
 deadline; sharing approval uses the outer MCP request's remaining deadline.
 
 Human approval is required before the model request and before sharing its result.
@@ -75,13 +76,15 @@ supported.
 ## Elicitation
 
 CLI and TUI support form and URL elicitation. Forms show the server, message, and
-schema; users enter one JSON object, `decline`, or `cancel`. In the TUI, Enter
-submits and Esc cancels. Fields are limited to flat strings, numbers, integers,
-booleans, and string-enum arrays, with at most 32 fields and three attempts. Names,
-descriptions, and sensitive formats such as `password` are rejected for forms.
-This is an additional filter, not a general secret detector: use URL mode for
-credentials. EOF cancels, and automatic approval never invents form answers.
-Responses go directly to the requesting server, which may echo them in later results.
+schema (message, schema, and JSON response are each capped at 64 KiB); users enter
+one JSON object, `decline`, or `cancel`. In the TUI, Enter submits and Esc cancels.
+Fields are limited to flat strings, numbers, integers, booleans, and string-enum
+arrays, with at most 32 fields and three attempts. Names, titles, descriptions, and
+formats containing sensitive terms (`password`, `secret`, `apikey`, `token`,
+`credential`, `creditcard`) are rejected for forms. This is an additional filter,
+not a general secret detector: use URL mode for credentials. EOF cancels, and
+automatic approval never invents form answers. Responses go directly to the
+requesting server, which may echo them in later results.
 
 Integers within the `int64`/`uint64` range retain exact values; larger values and
 fractional integers require retry. The SDK uses `float64` for `number` fields.

@@ -1,7 +1,6 @@
 # Skills E2E failure matrix
 
-Written before the skills implementation and its executable verification. Run
-`python3 scripts/skills-e2e.py --output dist/skills-e2e` from the repository.
+Run `python3 scripts/skills-e2e.py --output dist/skills-e2e` from the repository.
 The harness builds the real binary, uses temporary HOME/MELDRA_HOME/workspace
 directories, and talks only to a deterministic loopback Responses SSE server.
 It uses no real API credentials. It leaves its inputs, HTTP requests, command

@@ -1,13 +1,13 @@
 # Architecture and runtime boundaries
 
-Meldra is a local, serial foreground coding agent. The 0.2.x implementation adds
+Meldra is a local, serial foreground coding agent. Its runtime provides
 versioned execution history, task/workspace ownership, structured tool outcomes,
-explicit recovery, scoped project context, and runtime controls. Capabilities in
-this source tree may not yet be present in the latest published release.
+explicit recovery, scoped project context, MCP integration, Skills, and runtime
+controls.
 
 Closing the terminal ends the current execution. There is no daemon, scheduler,
-automatic restart, detach/attach protocol, or multi-agent execution in this
-version. Persistence lets users inspect and explicitly continue work.
+automatic restart, detach/attach protocol, or multi-agent execution. Persistence
+lets users inspect and explicitly continue work.
 
 ## Dependency direction
 
@@ -57,10 +57,12 @@ replacement for it.
 
 `RuntimePolicy` owns the execution mode, permission profile, and control
 generation. It classifies the actual invocation and is checked at dispatch and
-before side-effect admission. Plan permits workspace reads and task metadata;
-it cannot be widened by Skills, `AGENTS.md`, or automatic approval. User controls
-invalidate old-generation operations. They journal received and applied request
-identities separately, while the Agent remains the single conversation writer.
+before side-effect admission. Plan permits workspace reads, read-only diff
+verification (`verify` with `preset="diff"`), task metadata, and stopping an
+owned managed process; it cannot be widened by Skills, `AGENTS.md`, or automatic
+approval. User controls invalidate old-generation operations. They journal
+received and applied request identities separately, while the Agent remains the
+single conversation writer.
 
 Application, Run, inference, approval, and managed-process cancellation have
 separate lifetimes. Stopping a turn preserves the application. Steering stops
@@ -93,9 +95,10 @@ in task artifacts, with structured path/range/digest metadata in the request and
 session. They remain quoted data. The runtime does not interpret reference
 syntax inside a remote MCP prompt as a local file selection.
 
-Plan mode is selected before external MCP startup. Managed process tools remain
-private to agent Runs because an `mcp serve` invocation finishes its own Run.
-External tool capacity is derived from the actual built-in catalog under the
+Plan mode is selected before external MCP startup; switching a session from Plan
+to Build connects configured MCP servers before continuing. Managed process tools
+remain private to agent Runs because an `mcp serve` invocation finishes its own
+Run. External tool capacity is derived from the actual built-in catalog under the
 provider's limit.
 
 ## Tools, approvals and execution records
@@ -142,6 +145,7 @@ access the user's filesystem, network and other external systems.
 | Run | One foreground attempt, configuration, executor, timestamps and immutable terminal outcome |
 | ToolCall | Provider call identity, parameters, effect class, execution state and structured result |
 | Approval | Pending/approved/declined/expired decision bound to a call and reviewed operation |
+| Process | Run-owned command identity, lifecycle state, effect certainty, exit evidence, and output artifacts |
 | Event | Task-local monotonic sequence, schema version, IDs and execution linkage |
 | ArtifactRef | Digest, name and size of retained tool/verification output |
 
@@ -183,27 +187,30 @@ recovery, and inspection says so.
 
 `task resume ID` reacquires ownership and marks abandoned attempts interrupted.
 Previously planned operations are cancelled; operations that had started but
-lack a saved result become unknown. Supported file operations are reconciled
-against recorded hashes, existence, modes and auxiliary directory states.
+lack a saved result become unknown; active managed processes become unknown
+(`state='unknown'`, `effects='unknown'`). Supported file operations are reconciled
+against recorded hashes, existence, modes and auxiliary directory states, and
+interrupted read-only tools are resolved as failed with no side effects.
 Complete postimages confirm a completed change; complete preimages indicate no
 net change. Residual write-temporary files, mixed states, external edits and
 older evidence without auxiliary metadata remain unresolved. Recovery never
 deletes unowned temporary files or overwrites current workspace files.
 
 Unknown external commands require inspection and an explicit
-`task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT`. Resolution
-records evidence without invoking a tool or changing an old Run's outcome.
-Unresolved calls prevent a new run. Re-delivery of the same provider call ID and
-parameter hash uses its recorded result; that check is not a promise to recognize
-arbitrarily reworded commands with new IDs. Custom-provider replay additionally
-includes provider/model and response identity, so a call ID reused by a new
-response is a new operation. These providers must supply stable response IDs;
-missing or duplicate tool call IDs are rejected before execution.
+`task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT`; unresolved
+managed processes require `task resolve-process ID PROCESS_ID --reason TEXT`.
+Resolution records evidence without invoking a tool or changing an old Run's
+outcome. Unresolved calls or processes prevent a new run. Re-delivery of the same
+provider call ID and parameter hash uses its recorded result; that check is not a
+promise to recognize arbitrarily reworded commands with new IDs. Custom-provider
+replay additionally includes provider/model and response identity, so a call ID
+reused by a new response is a new operation. These providers must supply stable
+response IDs; missing or duplicate tool call IDs are rejected before execution.
 
-Recovery context includes the original goal, missing-history markers and a
-bounded excerpt of recent tool results, alongside conversation messages and
-summary. The full stored ledger remains inspectable; the entire history is not
-sent to the model on every resume.
+Recovery context includes the original goal, missing-history markers, a bounded
+excerpt of recent tool results, and recent managed-process lifecycle and log
+evidence, alongside conversation messages and summary. The full stored ledger
+remains inspectable; the entire history is not sent to the model on every resume.
 
 ## Storage and limits
 
@@ -211,8 +218,10 @@ Under `MELDRA_HOME` (default `~/.meldra`):
 
 ```text
 config.toml / credentials.env   settings and credentials
-sessions/                      preserved legacy 0.1.x snapshots
-tasks/tasks.db                 versioned SQLite database, WAL mode, FULL sync
+mcp.json / mcp-oauth-*.json     optional MCP server configuration and OAuth caches
+update-check.json               cached 24-hour stable release check metadata
+sessions/                       preserved legacy 0.1.x snapshots
+tasks/tasks.db                  versioned SQLite database, WAL mode, FULL sync
 tasks/sessions/                 current bounded conversation snapshots
 tasks/artifacts/<sha256>        retained output referenced by task records
 ```
@@ -236,10 +245,11 @@ Unknown newer database schemas are rejected instead of downgraded.
 | SQLite database pages | 256 MiB |
 | One JSON session snapshot | 2 MiB, at most 100 messages |
 | Built-in command duration | 600 seconds by default, configurable up to 86400 seconds |
-| One AGENTS.md / active project instructions | 32 KiB / 128 KiB |
+| One AGENTS.md / active project instructions | 32 KiB / 128 KiB (at most 1024 inspected directories) |
 | One reference source / retained reference | 1 MiB / 64 KiB |
 | References per request / total retained content | 32 / 128 KiB |
 | Accepted pending control requests | 32 |
+| File edits / patch per operation | 4 MiB per file, 8 MiB combined before/after, 1 MiB diff preview, at most 32 files |
 
 Managed process records distinguish a successful start from process completion
 and distinguish lifecycle state from effect certainty. The owning Run retains
@@ -266,13 +276,13 @@ stores before maintenance; copying only a live `tasks.db` is unsafe.
 
 ## CLI inspection and legacy compatibility
 
-`tasks [--json]` returns the latest 1000 task records across workspaces. It has no
-list-pagination flag in 0.2.0; retain known IDs to inspect older tasks. `task show
-ID --json` includes runs, calls, approvals and artifact references. `task events
-ID --json [--after N]` returns at most 1000 sequenced JSONL events. Advance the
-cursor to the last returned `sequence` until the result is empty. Inspection
-returns the recorded state at query time; it is not a live subscription and does
-not acquire an execution lease or call a model.
+`tasks [--json]` returns the latest 1000 task records across workspaces; retain
+known IDs to inspect older tasks. `task show ID --json` includes runs, calls,
+processes, approvals, and artifact references. `task events ID --json [--after N]`
+returns at most 1000 sequenced JSONL events. Advance the cursor to the last
+returned `sequence` until the result is empty. Inspection returns the recorded
+state at query time; it is not a live subscription and does not acquire an
+execution lease or call a model.
 
 Legacy `sessions`, `resume SESSION_ID` and the session picker remain available.
 `resume latest` chooses from the current workspace (or explicit `--workspace`).
@@ -300,15 +310,15 @@ whole-store backups and legacy snapshot limits.
 
 The root remains the build target (`go build .`), and `-X main.version=...`
 continues to identify binaries. `make check` covers formatting, vet, module
-consistency, race tests, aggregate coverage and build. Store tests cover state
-transitions, ownership, crash boundaries, schema rejection and imports. App tests
-cover real tools, persistence failures, recovery, legacy compatibility, signals,
-owned subprocesses and actual PTY closure.
+consistency, race tests, real-binary E2E suites, aggregate coverage, and build.
+Store tests cover state transitions, ownership, crash boundaries, schema
+rejection, and imports. App tests cover real tools, persistence failures,
+recovery, legacy compatibility, signals, owned subprocesses, and actual PTY
+closure.
 
-Run these tests on the reviewed candidate before merging. M1–M4 acceptance is
-covered by `make check`; repeatable JSONL logs can be retained with
+Repeatable JSONL test logs can be retained with
 `go test -race -json -count=3 -timeout=5m ./...`. Real-model quality evaluations
-are outside this release scope.
+are outside the deterministic test suite.
 
 After this runtime is validated, independent child workspaces, parent/child
 contracts, inherited budgets and serial result integration can build on these

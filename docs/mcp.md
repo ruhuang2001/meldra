@@ -1,6 +1,6 @@
 # MCP Support
 
-Updated 2026-10-10. Meldra connects to external MCP servers and exposes bounded
+Meldra connects to external MCP servers and exposes bounded
 workspace tools through `meldra mcp serve`. It uses the official Go SDK v1.8.0 and
 Meldra's existing approvals, task records, and recovery runtime.
 
@@ -116,24 +116,26 @@ be expanded to a resource URI before reading.
 ## Serving Meldra
 
 ```sh
-meldra mcp serve --workspace /path/to/project
+meldra mcp serve --workspace /path/to/project [--mode plan|build] [--permissions interactive|workspace-edit] [--auto-approve]
 ```
 
 The command reserves stdin/stdout for JSON-RPC and does not require a model API key.
-It exposes `meldra://workspace`, `meldra://workspace/{path}`, and `review_workspace`.
-Workspace protections, command allowlists, task records, and approvals remain active.
-Modern approval tokens are bound to the operation, arguments, and undo target's change
-generation; a later change invalidates a pending undo approval. Validation and
-execution share a workspace lock.
+It exposes Meldra's workspace tools (including `read_project_context`), `meldra://workspace`,
+`meldra://workspace/{path}`, and `review_workspace`. Workspace protections, command
+allowlists, execution mode/permission policy, task records, and approvals remain active.
+Modern approval tokens are bound to the operation, arguments, applicable `AGENTS.md`
+instruction digest, and undo target's change generation; a later change or instruction
+update invalidates a pending approval. Validation and execution share a workspace lock.
 
 `--auto-approve` skips workspace-operation approval for explicitly trusted isolated
 environments. It does not make server-initiated sampling or form answers automatic.
 
 ## Verification
 
-Run `make check` for Go race tests, five real-binary MCP E2E suites, and the 75%
-coverage gate. The suites use local fixtures and write a fresh `.artifacts/checks/mcp-check-*`
-evidence directory. Override it with `make check CHECK_DIR=/path/to/checks` or
+Run `make check` for Go race tests, six real-binary E2E suites (five MCP suites
+plus `capability-e2e`), and the 75% coverage gate. The suites use local fixtures
+and write a fresh `.artifacts/checks/mcp-check-*` evidence directory. Override
+it with `make check CHECK_DIR=/path/to/checks` or
 `scripts/mcp-check.py --output-dir /path/to/checks`. Keep check evidence outside
 `dist/`, which GoReleaser requires to be empty after its before hooks. CI also
 runs `govulncheck`.
