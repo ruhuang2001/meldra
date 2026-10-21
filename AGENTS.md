@@ -45,6 +45,15 @@ Build with the `go.mod` toolchain (`CGO_ENABLED=0` on Darwin/Linux, amd64/arm64)
 - **Test isolation**: Keep home/config isolated, use fake providers/loopback fixtures, and keep auto-update checks disabled unless testing them with local fixtures.
 - **Terminal & docs**: Exercise affected line/PTY modes and inspect rendered output for TUI changes. Update help text and `docs/` when behavior changes.
 
+## Documentation and Release Status
+
+- Document new behavior with its implementation, but mark unreleased features in the relevant sections. Do not assume `main` or a pending release PR is available in the latest installed binary; verify published release contents before claiming availability.
+- Leave root `CHANGELOG.md` generation to Release Please. The site's `docs/changelog.mdx` is a separate user-facing summary, not a copy of the commit list. Agents may draft 3–5 highlights from version differences; a maintainer reviews them and any compatibility or upgrade instructions.
+- Add an entry to the published timeline only after confirming the actual release version/date and all four platform archives plus `meldra_checksums.txt`. A tag or release page alone is insufficient. Then replace the relevant unreleased notices with `Available since vX.Y.Z`.
+- Drafting notes or reviewing a release PR does not authorize merging, publishing, or triggering release workflows. Keep the release decision explicit.
+
+See [Maintaining the documentation](docs/documentation.md) for Mintlify preview, validation, and the release-note workflow. Keep detailed procedures there rather than duplicating them here.
+
 ## Project Language & Commits
 
 Use English for all docs, CLI/TUI messages, help text, and comments; preserve Unicode/multilingual test fixtures.

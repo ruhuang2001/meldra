@@ -328,6 +328,12 @@ backup. Unknown newer database schemas are rejected, not rewritten.
 
 ## Documentation
 
+The documentation site uses [Mintlify](https://www.mintlify.com/) with `docs/` as
+its content root. Start with the [Quickstart](docs/quickstart.md); see
+[Maintaining the documentation](docs/documentation.md) for local preview,
+validation, and hosting setup. Existing Markdown guides remain readable here:
+
+- [Changelog](docs/changelog.mdx) — User-facing release highlights and upgrade notes; [CHANGELOG.md](CHANGELOG.md) retains the generated technical history.
 - [Capabilities & Foreground Controls](docs/capabilities.md) — `AGENTS.md` project context, `@file` references, Plan/Build modes, managed processes, and interactive controls.
 - [MCP Support](docs/mcp.md) — MCP client/server configuration, catalog CLI, workspace server (`meldra mcp serve`), and boundaries.
 - [MCP Authentication & Interactions](docs/mcp-auth-interactions.md) — OAuth login/refresh, opt-in text sampling, and CLI/TUI elicitation.

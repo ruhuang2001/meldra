@@ -57,7 +57,9 @@ The catalog is a process-lifetime snapshot, refreshed on restart or resume. Each
 
 Example tool input:
 
-    {"name":"review-checklist","path":null}
+```json
+{"name":"review-checklist","path":null}
+```
 
 `path=null` reads `SKILL.md`; `path=references/checklist.md` reads a resource relative to its package. Output includes the name, base directory, and resource path. Successful reads use digest-addressed task artifacts and the `read` effect. Recovery reuses existing task, session, and audit mechanisms without adding tables.
 
@@ -113,4 +115,4 @@ Add a frontend selector when deterministic selection is needed. Explicit-only in
 2. OpenAI: [Codex Skills](https://developers.openai.com/codex/skills/) and [Markdown](https://developers.openai.com/codex/skills.md).
 3. Claude Code: [Skills](https://code.claude.com/docs/en/skills) and [duplicate resolution](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name).
 4. OpenCode: [documentation](https://opencode.ai/docs/skills/) and pinned [loader](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/index.ts), [discovery](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/discovery.ts), [skill tool](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/tool/skill.ts), and [commands](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/command/index.ts).
-5. This repository: [failure matrix](skills-failure-matrix.md), [E2E harness](../scripts/skills-e2e.py), and [implementation](../internal/app/skills.go).
+5. This repository: [failure matrix](skills-failure-matrix.md), [E2E harness](https://github.com/ruhuang2001/meldra/blob/main/scripts/skills-e2e.py), and [implementation](https://github.com/ruhuang2001/meldra/blob/main/internal/app/skills.go).

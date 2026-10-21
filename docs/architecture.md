@@ -303,7 +303,7 @@ available after another interruption. Wall-clock timestamps and
 repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
-See the [upgrade and downgrade guide](../README.md#upgrade-and-downgrade) for
+See the [upgrade and downgrade guide](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade) for
 whole-store backups and legacy snapshot limits.
 
 ## Verification and next increments

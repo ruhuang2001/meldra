@@ -1,0 +1,54 @@
+---
+title: "Changelog"
+description: "Published releases, user-facing improvements, and upgrade notes."
+---
+
+Highlights from published Meldra releases. For the complete technical history,
+see the [generated changelog](https://github.com/ruhuang2001/meldra/blob/main/CHANGELOG.md)
+and [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
+Features on the development branch are not necessarily available in a release.
+
+<Update label="v0.3.0" description="October 10, 2026">
+  ## Connect MCP tools and load Skills on demand
+
+  - **MCP integration:** Connect external MCP servers or expose Meldra's workspace
+    tools through its MCP server workflow.
+  - **On-demand Skills:** Discover local workflow packages and load their
+    instructions and resources when needed, without preloading every skill.
+  - **Reliability fixes:** Improved MCP validation, OAuth callback shutdown,
+    Linux terminal input handling, and recovery of streamed assistant output.
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.3.0)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.2.0...v0.3.0)
+</Update>
+
+<Update label="v0.2.0" description="October 9, 2026">
+  ## Inspect execution history and recover explicitly
+
+  - **Durable tasks:** Persist task records and execution ownership instead of
+    relying only on conversation snapshots.
+  - **Foreground recovery and controls:** Inspect interrupted work and explicitly
+    continue it, with controls for foreground execution.
+  - **Safer persistence:** Stop execution after session snapshot failures and
+    preserve evidence across recovery and provider replay boundaries.
+
+  **Upgrade note:** Back up the full Meldra state directory before migrating or
+  downgrading. Legacy conversation snapshots are not a replacement for the task
+  ledger. See the [upgrade and downgrade guide](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade).
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.2.0)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.1.0...v0.2.0)
+</Update>
+
+<Update label="v0.1.0" description="September 15, 2026">
+  ## First stable release
+
+  - **Longer-running work:** Removed fixed turn execution limits.
+  - **Terminal usability:** Fixed native copy behavior and file output in the TUI.
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.1.0)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.1.0-alpha.4...v0.1.0)
+</Update>
+
+Earlier prereleases are available in the
+[complete changelog](https://github.com/ruhuang2001/meldra/blob/main/CHANGELOG.md).
