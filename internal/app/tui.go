@@ -1132,6 +1132,10 @@ func shouldUseTUI(stdin io.Reader, stdout io.Writer) bool {
 	if terminalIsDumb() {
 		return false
 	}
+	return interactiveTerminal(stdin, stdout)
+}
+
+func interactiveTerminal(stdin io.Reader, stdout io.Writer) bool {
 	input, inputOK := stdin.(*os.File)
 	output, outputOK := stdout.(*os.File)
 	if !inputOK || !outputOK {
@@ -1184,6 +1188,9 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		notices:   runtime.mcp.warnings,
 	}, func() {
 		started = true
+		if options.Prompt == "" {
+			newReleaseUpdater().startUpdateCheck(chatCtx, paths, version, controller)
+		}
 		go func() {
 			agentErr := runtime.agent.Run(chatCtx)
 			if agentErr != nil && chatCtx.Err() == nil {

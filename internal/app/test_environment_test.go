@@ -6,4 +6,7 @@ import (
 	"testing"
 )
 
-func TestMain(m *testing.M) { os.Exit(testenv.Run(m.Run)) }
+func TestMain(m *testing.M) {
+	_ = os.Setenv("MELDRA_DISABLE_UPDATE_CHECK", "1")
+	os.Exit(testenv.Run(m.Run))
+}

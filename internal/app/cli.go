@@ -92,6 +92,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			return runTaskCommand(ctx, args[1:], stdin, stdout)
 		case "config":
 			return runConfigCommand(args[1:], stdout)
+		case "update":
+			return runUpdateCommand(ctx, args[1:], stdout)
 		case "version", "--version", "-v":
 			if len(args) != 1 {
 				return fmt.Errorf("version does not accept arguments")
@@ -802,6 +804,9 @@ func (runtime *chatRuntime) deleteEmptyNewSession() {
 }
 
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
+	ctx, cancelUpdateCheck := context.WithCancel(ctx)
+	defer cancelUpdateCheck()
+	interactiveUpdates := options.Prompt == "" && interactiveTerminal(stdin, stdout)
 	paths, err := ResolveConfigPaths()
 	if err != nil {
 		return err
@@ -880,6 +885,11 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	}
 
 	fmt.Fprintf(stdout, "Session: %s\nWorkspace: %s\n", runtime.session.ID, sanitizeTerminalText(runtime.workspace.root))
+	if interactiveUpdates {
+		newReleaseUpdater().startUpdateCheck(ctx, paths, version, UIEventSinkFunc(func(event UIEvent) {
+			fmt.Fprintln(stdout, event.Text)
+		}))
+	}
 	if err := runtime.agent.Run(ctx); err != nil {
 		return err
 	}
@@ -952,13 +962,14 @@ func overlayEnvironment(settings Settings) (Settings, error) {
 }
 
 const usageText = `Usage:
-  meldra mcp serve --workspace <path> [--auto-approve]
+  meldra mcp serve --workspace <path> [--mode plan|build]
+                   [--permissions interactive|workspace-edit] [--auto-approve]
   meldra mcp login <server>
   meldra mcp logout <server>
   meldra mcp resources|templates|prompts <server> [cursor]
   meldra mcp read <server> <uri>
   meldra mcp prompt <server> <name> [KEY=VALUE ...] [--run]
-  meldra context --workspace <path> --path <file> [--json]
+  meldra context [--workspace <path>] [--path <file>] [--json]
   meldra [--mode plan|build] [--permissions interactive|workspace-edit]
          [--command-timeout <seconds>] [--allow-executable <absolute-path>]
   meldra [options]               Start a chat in a bounded workspace.
@@ -966,13 +977,16 @@ const usageText = `Usage:
   meldra sessions                List saved sessions.
   meldra skills [--json]         List skills; accepts --workspace PATH.
   meldra tasks [--json]           List recorded tasks.
-  meldra task show ID [--json]    Inspect task runs, tools and approvals.
+  meldra task show ID [--json]    Inspect task runs, tools, processes, and approvals.
   meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.
   meldra task resume ID           Explicitly continue in the foreground.
   meldra task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT
                                  Record an inspected unknown outcome; runs no tools.
+  meldra task resolve-process ID PROCESS_ID --reason TEXT
+                                 Record inspected process effects; runs no tools.
   meldra config init             Create ~/.meldra configuration files.
   meldra config [show]           Show effective configuration without secrets.
+  meldra update                  Check for and install the latest stable release.
   meldra version                 Print the installed version.
 
 Options:
