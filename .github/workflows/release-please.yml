@@ -98,10 +98,15 @@ jobs:
           # Avoid concurrent storage stress tests starving deadline-sensitive
           # process tests under race and coverage instrumentation.
           GOFLAGS: "-p=1"
-        run: >-
-          make -f "$RUNNER_TEMP/release-verification/Makefile" check
-          CHECK_SCRIPT="$RUNNER_TEMP/release-verification/mcp-check.py"
-          DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
+        run: |
+          if test -f scripts/capability-e2e.py; then
+            make -f "$RUNNER_TEMP/release-verification/Makefile" check \
+              CHECK_SCRIPT="$RUNNER_TEMP/release-verification/mcp-check.py" \
+              DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
+          else
+            # Historical tags retain their compatible verification entrypoint.
+            make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
+          fi
 
       # Helper-process tests use isolated environments that can drop
       # PYTHONDONTWRITEBYTECODE. Clean only untracked Python bytecode; older
