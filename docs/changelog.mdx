@@ -8,6 +8,31 @@ see the [generated changelog](https://github.com/ruhuang2001/meldra/blob/main/CH
 and [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
 Features on the development branch are not necessarily available in a release.
 
+<Update label="v0.4.0" description="October 22, 2026">
+  ## Guide foreground work with explicit context and controls
+
+  - **Project context:** Load scoped `AGENTS.md` instructions and attach explicit
+    file references, with a file picker in the TUI.
+  - **Execution boundaries:** Inspect in Plan mode, then implement in Build mode
+    with explicit workspace permissions.
+  - **Foreground controls:** Steer or queue requests, stop a turn without leaving
+    chat, and inspect managed commands and recovery evidence.
+  - **Updates:** Install checksum-verified stable releases with `meldra update`
+    and receive cached release notices.
+  - **Certificate security:** All four release binaries use Go 1.26.10, including
+    the fix for GO-2026-6809 / CVE-2026-111943.
+
+  **Upgrade note:** v0.3.0 and earlier do not provide `meldra update`; use the
+  installer or a verified platform archive. Stop all Meldra processes and back
+  up the complete private `MELDRA_HOME` before first opening the new ledger.
+  Schema 1 migrates to schema 2; rollback requires the previous binary with the
+  pre-upgrade backup or a separate data directory. Restart existing processes
+  to use the new binary and security fix.
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.4.0)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.3.0...v0.4.0)
+</Update>
+
 <Update label="v0.3.0" description="October 10, 2026">
   ## Connect MCP tools and load Skills on demand
 

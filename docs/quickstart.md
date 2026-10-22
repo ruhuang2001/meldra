@@ -60,9 +60,10 @@ for provider URL rules and response/context limits.
 
 ## Start a session
 
-The latest published release is v0.3.0. The Plan/Build modes and foreground
-controls below are unreleased and require the upcoming v0.4.0 release or a
-development build from `main`.
+**Available since v0.4.0:** Plan/Build modes and foreground controls are
+included in the latest release. If upgrading from v0.3.0 or earlier, follow the
+[upgrade and rollback instructions](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade)
+before opening the new ledger.
 
 ```sh
 cd /path/to/project
