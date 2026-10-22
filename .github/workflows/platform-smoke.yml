@@ -40,14 +40,28 @@ jobs:
       - name: Build without CGO
         env:
           CGO_ENABLED: "0"
-        run: make build VERSION=0.2.0-candidate
+        run: |
+          make build VERSION=0.0.0-candidate
+          mkdir -p .artifacts/platform-smoke
+          target='${{ matrix.target }}'
+          python3 scripts/verify-release-binary.py --binary dist/meldra --goos "${target%-*}" --goarch "${target#*-}" --output .artifacts/platform-smoke/build-info.json
       - name: Verify executable and private task store
         run: |
-          test "$(dist/meldra version)" = "0.2.0-candidate"
-          go test ./internal/task ./internal/store -count=1 -timeout=5m
+          test "$(dist/meldra version)" = "0.0.0-candidate"
+          go test ./internal/task ./internal/store -count=1 -timeout=5m 2>&1 | tee .artifacts/platform-smoke/store.log
       - name: Verify process shutdown and task recovery
         run: |
           pattern='^TestTask(Signals|SignalStops|TerminalClose|PromptEOF|RecoveryHardKill|ResumeUsesRealTerminalTUI)'
           tests="$(go test ./internal/app -list "$pattern")"
           printf '%s\n' "$tests" | grep -q '^TestTask'
-          go test ./internal/app -run "$pattern" -count=1 -timeout=5m
+          go test ./internal/app -run "$pattern" -count=1 -timeout=5m 2>&1 | tee .artifacts/platform-smoke/recovery.log
+      - name: Verify foreground capability flows
+        run: python3 scripts/capability-e2e.py --binary dist/meldra --output .artifacts/platform-smoke/capability --only plan-denials --only workspace-edit-policy
+      - name: Retain native verification evidence
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: platform-smoke-${{ matrix.target }}
+          path: .artifacts/platform-smoke
+          include-hidden-files: true
+          if-no-files-found: warn

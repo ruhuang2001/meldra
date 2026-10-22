@@ -15,6 +15,9 @@ builds:
       - -trimpath
     ldflags:
       - -s -w -X main.version={{ .Version }}
+    hooks:
+      post:
+        - cmd: 'python3 scripts/verify-release-binary.py --binary "{{ .Path }}" --goos "{{ .Os }}" --goarch "{{ .Arch }}" --output "{{ .Path }}.build-info.json"'
     goos:
       - darwin
       - linux

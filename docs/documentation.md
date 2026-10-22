@@ -46,6 +46,42 @@ therefore does not prove a successful build or complete downloads. If publishing
 fails, inspect the workflow and use its existing tag-repair dispatch only after
 reviewing the failure. Do not move the tag to include later fixes.
 
+## Pending certificate security release
+
+**Unreleased.** The next release includes the Go crypto/x509 fix for
+[GO-2026-6809 / CVE-2026-111943](https://pkg.go.dev/vuln/GO-2026-6809).
+On October 22, 2026, all four published v0.3.0 archives were downloaded,
+verified against `meldra_checksums.txt`, and inspected with `go version -m`.
+Every binary reports Go 1.26.9, which predates the fix. Older releases have
+not been individually inspected; do not assume they contain the fix.
+This toolchain match does not establish exploitability in a particular setup.
+
+Include the security fix and these upgrade actions in the next release notes:
+
+- Build with stable Go 1.26.10+, or Go 1.27.3+ on the 1.27 branch.
+- v0.3.0 and earlier lack `meldra update`; use the installer or a verified
+  release archive after the fixed release is published.
+- Stop old processes and back up the complete private `MELDRA_HOME` before
+  first opening the new ledger. Schema 1 migrates to schema 2; rollback needs
+  the old binary and pre-upgrade backup, or a separate data directory.
+- Restart existing processes to use the new binary.
+
+The GoReleaser post-build hook checks each actual binary's stable toolchain,
+target, and disabled CGO before upload. Adjacent build-info JSON reports are
+retained as workflow artifacts even if a later build fails.
+
+To repeat the old-release inspection, download all assets with
+`gh release download v0.3.0 --dir /tmp/meldra-v030`, verify the archives against
+`meldra_checksums.txt` with `sha256sum -c` (or `shasum -a 256 -c` on macOS),
+extract each archive to its own directory, and run `go version -m` on each binary.
+Run `python3 scripts/verify-release-binary.py --help` from the repository for
+the JSON inspection gate; v0.3.0 must fail that gate.
+
+The metadata gate does not execute foreign-platform binaries. Review native
+startup and key-flow evidence for all four targets at the exact release revision,
+then inspect all published archives and checksums before closing issue #51.
+Neither local verification nor these notes authorize publishing a release.
+
 ## Local preview
 
 Documentation tooling is separate from the Go build and test workflow. Install

@@ -287,7 +287,20 @@ credentials, legacy snapshots, `tasks/`, and any SQLite WAL/SHM files. Copying o
 binary alongside the backup. Execution locks in `~/.meldra-locks` and the user cache must not be
 removed while held.
 
-For release-archive installations on macOS or Linux (amd64/arm64):
+**Unreleased upgrade path from v0.3.0 and earlier:** these versions do not
+provide `meldra update`. Once the next release and all four platform archives
+are published, use the installer above or a checksum-verified release archive.
+Before first opening its ledger, stop all old processes and make the complete
+backup described above. The new binary migrates schema 1 to schema 2 when the
+ledger is opened. v0.3.0 cannot read schema 2. To roll back, use the previous
+binary with the pre-upgrade backup or a separate `MELDRA_HOME`; restoring the
+backup loses later task records and does not undo project changes.
+
+**Unreleased:** the updater and automatic update notices described below are
+implemented on main but are not available in v0.3.0.
+
+For release-archive installations that already support the updater on macOS or
+Linux (amd64/arm64):
 
 ```bash
 meldra update
