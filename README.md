@@ -21,12 +21,18 @@ Inspired by Amp's article [How to Build an Agent](https://ampcode.com/notes/how-
 ## Highlights
 
 - **Interactive TUI & CLI fallback** — Full-screen streaming terminal UI in supported terminals, with automatic fallback to a line-based interface for pipes and scripts.
-- **Scoped project context & references** — Automatically loads root and ancestor `AGENTS.md` rules and supports `@path:start-end` file references (`Ctrl-F` file picker in TUI).
-- **Plan & Build modes** — Inspect and design changes in `plan` mode with writes and command execution blocked at runtime; switch to `build` mode when ready to implement.
-- **Foreground task control** — Steer active work (`/steer`), queue follow-ups (`/queue`), or stop the current turn (`/stop`) while keeping the session open.
-- **Durable task ledger & explicit recovery** — SQLite-backed task, run, tool, process, and approval records allow safe inspection and explicit reconciliation after crashes or interruptions.
+- **Durable task ledger & explicit recovery** — SQLite-backed task, run, tool, and approval records allow safe inspection and explicit reconciliation after crashes or interruptions.
 - **MCP client & server** — Connect to external Model Context Protocol servers over stdio or Streamable HTTP (with OAuth, sampling, and elicitation), or expose Meldra's workspace tools via `meldra mcp serve`.
 - **On-demand Skills** — Discover local and user `SKILL.md` packages with progressive loading and strict path confinement.
+
+**Unreleased in v0.4.0:** The following features are on `main` but are not
+available in the latest published release, v0.3.0:
+
+- Scoped project context and file references, including `AGENTS.md` rules and
+  `@path:start-end` references.
+- Plan and Build modes, foreground steering and queue controls, and managed
+  process records and recovery.
+- `meldra update` and cached release notices.
 
 ## Requirements
 
@@ -295,6 +301,12 @@ backup described above. The new binary migrates schema 1 to schema 2 when the
 ledger is opened. v0.3.0 cannot read schema 2. To roll back, use the previous
 binary with the pre-upgrade backup or a separate `MELDRA_HOME`; restoring the
 backup loses later task records and does not undo project changes.
+
+The next release includes the Go `crypto/x509` certificate-chain security fix
+tracked by [GO-2026-6809](https://pkg.go.dev/vuln/GO-2026-6809) and
+CVE-2026-111943. Restart existing Meldra processes after upgrading so they use
+the fixed binary. The inspected v0.3.0 platform binaries were built with Go
+1.26.9; the fix is included starting with Go 1.26.10.
 
 **Unreleased:** the updater and automatic update notices described below are
 implemented on main but are not available in v0.3.0.

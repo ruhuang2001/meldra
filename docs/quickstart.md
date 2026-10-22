@@ -60,6 +60,10 @@ for provider URL rules and response/context limits.
 
 ## Start a session
 
+The latest published release is v0.3.0. The Plan/Build modes and foreground
+controls below are unreleased and require the upcoming v0.4.0 release or a
+development build from `main`.
+
 ```sh
 cd /path/to/project
 meldra
