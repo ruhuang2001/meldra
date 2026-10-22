@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    # Use native ARM64 for the full race/coverage gate. Byte-heavy process
+    # fixtures retain their deadlines; platform-smoke covers all four targets.
+    runs-on: macos-15
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
