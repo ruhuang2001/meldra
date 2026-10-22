@@ -18,11 +18,14 @@ Linux and an OpenAI API key or a compatible Responses API provider.
 
 ## Work with explicit boundaries
 
-- **Inspect before editing.** The unreleased [Plan and Build modes](capabilities.md)
+Project context, execution modes, and foreground controls are available since
+v0.4.0.
+
+- **Inspect before editing.** [Plan and Build modes](capabilities.md)
   separate read-only investigation from implementation.
-- **Keep project instructions close to the code.** Unreleased scoped `AGENTS.md`
+- **Keep project instructions close to the code.** Scoped `AGENTS.md`
   files and explicit file references provide context for the paths you work on.
-- **Stay in control.** Unreleased foreground controls let you steer a turn,
+- **Stay in control.** Foreground controls let you steer a turn,
   queue a follow-up, or stop the current turn without leaving the session.
 - **Connect tools and guidance.** Use [MCP servers](mcp.md) for integrations and
   [Skills](skills.md) for on-demand workflow instructions.
