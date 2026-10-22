@@ -80,6 +80,9 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+          # Avoid concurrent storage stress tests starving deadline-sensitive
+          # process tests under race and coverage instrumentation.
+          GOFLAGS: "-p=1"
         run: make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
 
       # Helper-process tests use isolated environments that can drop
@@ -119,4 +122,13 @@ jobs:
         with:
           name: release-build-info
           path: dist/**/*.build-info.json
+          if-no-files-found: warn
+
+      - name: Retain release source check evidence
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true') }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-source-checks
+          path: ${{ runner.temp }}/meldra-checks
+          include-hidden-files: true
           if-no-files-found: warn
