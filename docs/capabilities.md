@@ -1,5 +1,8 @@
 # Project context, execution modes, and foreground control
 
+**Unreleased:** These capabilities are on `main` for the upcoming v0.4.0 release
+and are not included in the latest published release, v0.3.0.
+
 Meldra's foreground runtime supports scoped project instructions, explicit file
 references, Plan/Build execution modes, managed processes, and interactive turn
 controls.
