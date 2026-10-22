@@ -8,6 +8,8 @@ Failure cases, specified before implementation:
 - existing evidence directories: choose a fresh directory, never overwrite them;
 - suite reports claim failures or contain no checks: fail even after exit code 0;
 - Go source changes during the run: reject coverage for mixed source revisions.
+- wrong/missing source roots: fail before testing; keep release verification
+  scripts separate from immutable tagged application sources.
 """
 import argparse
 import hashlib
@@ -99,12 +101,16 @@ def main():
                         default=Path('.artifacts/checks'),
                         help='check evidence directory (separate from release artifacts)')
     parser.add_argument('--self-check', action='store_true')
+    parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parent.parent,
+                        help='source checkout to verify (defaults to this script repository)')
     args = parser.parse_args()
     self_check()
     if args.self_check:
         print('coverage merge self-check passed')
         return
-    os.chdir(Path(__file__).resolve().parent.parent)
+    os.chdir(args.source_root.resolve())
+    if not Path('go.mod').is_file() or not Path('scripts/capability-e2e.py').is_file():
+        parser.error('source root must be a Meldra source checkout')
     args.output_dir.mkdir(parents=True, exist_ok=True)
     directory = Path(tempfile.mkdtemp(prefix='mcp-check-', dir=args.output_dir.resolve()))
     covdir = directory / 'covdata'
@@ -112,7 +118,10 @@ def main():
     summary = {'passed': False, 'directory': str(directory), 'sources': sources()}
     print('MCP check artifacts: ' + str(directory), flush=True)
     try:
-        run(['go', 'test', '-race', '-coverpkg=./...', '-coverprofile=' + str(directory / 'tests.out'), './...'], directory, 'go-test')
+        # Keep both full-suite gates without compounding race and coverage
+        # overhead in deadline-sensitive child-process fixtures.
+        run(['go', 'test', '-race', './...'], directory, 'go-test-race')
+        run(['go', 'test', '-covermode=atomic', '-coverpkg=./...', '-coverprofile=' + str(directory / 'tests.out'), './...'], directory, 'go-test')
         binary = directory / 'meldra'
         run(['go', 'build', '-race', '-cover', '-coverpkg=./...', '-covermode=atomic', '-o', str(binary), '.'], directory, 'go-build')
         env = dict(os.environ, GOCOVERDIR=str(covdir))

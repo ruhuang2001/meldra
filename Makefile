@@ -3,6 +3,7 @@ DIST_DIR := dist
 CHECK_DIR := .artifacts/checks
 COVERAGE_FILE := coverage.out
 COVERAGE_MIN := 75.0
+CHECK_SCRIPT ?= scripts/mcp-check.py
 # Local builds should identify the source they were built from just like
 # release artifacts do. VERSION may be overridden for reproducible builds.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -25,7 +26,7 @@ test-race:
 	go test -race ./...
 
 test-coverage:
-	python3 scripts/mcp-check.py --coverage "$(COVERAGE_FILE)" --output-dir "$(CHECK_DIR)"
+	python3 "$(CHECK_SCRIPT)" --source-root "$(CURDIR)" --coverage "$(COVERAGE_FILE)" --output-dir "$(CHECK_DIR)"
 	@coverage="$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ { print $$3 }' | tr -d '%')"; \
 		awk -v coverage="$$coverage" -v minimum="$(COVERAGE_MIN)" 'BEGIN { if (coverage < minimum) { printf "coverage %.1f%% is below %.1f%%\n", coverage, minimum; exit 1 }; printf "coverage %.1f%% meets %.1f%% minimum\n", coverage, minimum }'
 
@@ -37,7 +38,7 @@ check:
 	test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))"
 	go vet ./...
 	go mod tidy -diff
-	$(MAKE) test-coverage
+	$(MAKE) -f "$(firstword $(MAKEFILE_LIST))" test-coverage
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
 
 check-ci:

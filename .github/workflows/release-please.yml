@@ -20,9 +20,7 @@ concurrency:
 
 jobs:
   release-please:
-    # Use native ARM64 for the full race/coverage gate. Byte-heavy process
-    # fixtures retain their deadlines; platform-smoke covers all four targets.
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -58,6 +56,21 @@ jobs:
           tag_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$TAG_NAME" --jq .sha)"
           printf 'commit_sha=%s\n' "$tag_commit" >> "$GITHUB_OUTPUT"
 
+      # Validation infrastructure follows the reviewed workflow revision;
+      # application source and all E2E fixtures remain at the immutable tag.
+      - uses: actions/checkout@v7
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Stage release verification scripts
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-verification"
+          cp Makefile scripts/mcp-check.py "$RUNNER_TEMP/release-verification/"
+          printf 'Verification revision: %s\n' "$(git rev-parse HEAD)"
+
       - uses: actions/checkout@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
@@ -85,7 +98,10 @@ jobs:
           # Avoid concurrent storage stress tests starving deadline-sensitive
           # process tests under race and coverage instrumentation.
           GOFLAGS: "-p=1"
-        run: make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
+        run: >-
+          make -f "$RUNNER_TEMP/release-verification/Makefile" check
+          CHECK_SCRIPT="$RUNNER_TEMP/release-verification/mcp-check.py"
+          DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
 
       # Helper-process tests use isolated environments that can drop
       # PYTHONDONTWRITEBYTECODE. Clean only untracked Python bytecode; older
