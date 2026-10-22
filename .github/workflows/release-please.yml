@@ -82,6 +82,28 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
 
+      # Helper-process tests use isolated environments that can drop
+      # PYTHONDONTWRITEBYTECODE. Clean only untracked Python bytecode; older
+      # release tags need this too, without changing their source or tag.
+      - name: Verify clean release checkout
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          cache = Path('scripts/__pycache__')
+          if cache.is_dir() and not cache.is_symlink():
+              for path in cache.glob('*.pyc'):
+                  tracked = subprocess.run(['git', 'ls-files', '--error-unmatch', str(path)], capture_output=True).returncode == 0
+                  if path.is_file() and not path.is_symlink() and not tracked:
+                      path.unlink()
+              if not any(cache.iterdir()):
+                  cache.rmdir()
+          PY
+          git status --short
+          test -z "$(git status --porcelain)"
+
       - uses: goreleaser/goreleaser-action@v7
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         with:
