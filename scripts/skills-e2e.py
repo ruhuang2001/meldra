@@ -136,7 +136,7 @@ class Harness:
             (self.runtime / name).symlink_to(target, target_is_directory=True)
         alias_env = dict(self.env, HOME=str(self.runtime / 'home-alias'), MELDRA_HOME=str(self.runtime / 'state-alias'))
         aliased = self.catalog('trusted-home-aliases', env=alias_env)
-        self.check('trusted home aliases preserve canonical catalog and package confinement', aliased == value, aliased)
+        self.check('trusted home aliases preserve canonical catalog and package confinement', aliased['skills'] == value['skills'] and not aliased['warnings'], aliased)
         for label, count, description in (('candidate-limit', 280, 'small'), ('metadata-limit', 100, 'm' * 1000)):
             base = self.runtime / label
             workspace, home, state = [base / part for part in ('workspace', 'home', 'state')]
@@ -163,7 +163,7 @@ class Harness:
         self.check('JSON retains exact metadata and paths', len(catalog['skills']) == 1 and catalog['skills'][0]['description'] == description and catalog['skills'][0]['path'] == str(path), catalog)
         human = self.command('presentation-human', ['skills', '--workspace', str(workspace)], env=env)
         lines = human.splitlines()
-        self.check('untrusted paths and warnings cannot add listing rows', len(lines) == 3 and lines[0].startswith('Warning: ') and lines[1] == 'demo\tFirst line second line.' and lines[2].startswith('  '), lines)
+        self.check('untrusted paths and warnings cannot add listing rows', len(lines) == 2 and lines[0] == 'demo\tFirst line second line.' and lines[1].startswith('  '), lines)
         self.check('human listing removes terminal controls', '\x1b' not in human and '\a' not in human, human)
         self.presentation_workspace, self.presentation_state, self.presentation_env = workspace, state, env
 
@@ -249,8 +249,8 @@ class Harness:
         self.presentation_env['OPENAI_API_KEY'] = 'dummy-e2e-not-a-real-credential'
         self.plan = [{}]
         presentation = self.command('presentation-chat', ['--workspace', str(self.presentation_workspace), '--prompt', 'Inspect the skill catalog.'], env=self.presentation_env)
-        warning = presentation.split('Warning: ', 1)[1].split('Chat with Meldra', 1)[0]
-        self.check('chat skill warning remains on one line', warning.count('\n') == 1 and 'forged-warning' in warning and '\x1b' not in warning, warning)
+        warning = presentation.split('Chat with Meldra', 1)[0]
+        self.check('chat skill warning is not repeated after discovery', 'Warning: ' not in warning, warning)
         empty_workspace = self.runtime / 'empty-workspace'
         empty_workspace.mkdir(mode=0o700)
         empty_home = self.runtime / 'empty-home'

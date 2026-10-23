@@ -338,7 +338,10 @@ func (t *tuiController) presentApproval(request ApprovalRequest) {
 }
 
 func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writer, initial tuiInitialState, startAgent func()) (runErr error) {
-	boundedOutput, closeOutput, err := newSynchronizedWriter(ctx, output)
+	// Keep terminal output alive through Bubble Tea's shutdown: cancellation
+	// must not suppress the escape sequences that restore keyboard and cursor
+	// modes. Each write still has the synchronized writer's one-second deadline.
+	boundedOutput, closeOutput, err := newSynchronizedWriter(context.WithoutCancel(ctx), output)
 	if err != nil {
 		return err
 	}
@@ -1210,6 +1213,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 		return agentErr
 	}
 	if started && chatCtx.Err() != nil {
+		runtime.preserveSession()
 		noticeCtx, noticeCancel := context.WithTimeout(context.Background(), time.Second)
 		defer noticeCancel()
 		bounded, closeOutput, err := newSynchronizedWriter(noticeCtx, stdout)

@@ -55,14 +55,14 @@ printing the API key:
 meldra config
 ```
 
-See the [configuration reference](https://github.com/ruhuang2001/meldra#configuration)
+See the [configuration reference](configuration.md)
 for provider URL rules and response/context limits.
 
 ## Start a session
 
 **Available since v0.4.0:** Plan/Build modes and foreground controls are
 included in the latest release. If upgrading from v0.3.0 or earlier, follow the
-[upgrade and rollback instructions](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade)
+[upgrade and rollback instructions](upgrading.md)
 before opening the new ledger.
 
 ```sh
@@ -88,4 +88,4 @@ not a sandbox and should only be used in an isolated environment.
 - [Project instructions, references, modes, and controls](capabilities.md)
 - [MCP configuration and workspace tools](mcp.md)
 - [On-demand Skills](skills.md)
-- [Upgrade, backup, and downgrade guidance](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade)
+- [Upgrade, backup, and downgrade guidance](upgrading.md)

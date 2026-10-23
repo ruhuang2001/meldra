@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,6 +45,8 @@ type skillCatalog struct {
 	workspace  *Workspace
 	meldraHome string
 }
+
+const skillWarningsFile = "skill-warnings.json"
 
 // Discovery is a process-lifetime snapshot. Bodies and resources are read only
 // when requested; restarting or resuming discovers newly installed skills.
@@ -149,10 +153,76 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 		}
 	}
 	slices.SortFunc(catalog.Skills, func(a, b skill) int { return strings.Compare(a.Name, b.Name) })
+	if _, err := canonicalSkillHome(paths.Home); err == nil {
+		catalog.Warnings = filterSkillWarnings(catalog.Warnings, paths)
+	}
 	return catalog, nil
 }
 
+func filterSkillWarnings(warnings []string, paths ConfigPaths) []string {
+	if len(warnings) == 0 {
+		return warnings
+	}
+	path := filepath.Join(paths.Home, skillWarningsFile)
+	seen := map[string]bool{}
+	data, _, err := readPrivateFile(path)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return warnings
+	}
+	if len(data) != 0 {
+		if err := json.Unmarshal(data, &seen); err != nil {
+			return warnings
+		}
+	}
+	if seen == nil {
+		seen = map[string]bool{}
+	}
+	previous := maps.Clone(seen)
+	first := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(warning)))
+		if seen[digest] {
+			continue
+		}
+		seen[digest] = true
+		first = append(first, warning)
+	}
+	if maps.Equal(previous, seen) {
+		return first
+	}
+	data, err = json.Marshal(seen)
+	if err != nil {
+		return warnings
+	}
+	if err := ensureConfigHome(paths); err != nil {
+		return warnings
+	}
+	temp, err := os.CreateTemp(paths.Home, ".skill-warnings-*")
+	if err != nil {
+		return warnings
+	}
+	defer os.Remove(temp.Name())
+	_, err = temp.Write(data)
+	if err == nil {
+		err = temp.Sync()
+	}
+	closeErr := temp.Close()
+	if err != nil || closeErr != nil {
+		return warnings
+	}
+	if err := os.Rename(temp.Name(), path); err != nil {
+		return warnings
+	}
+	if err := syncDirectory(paths.Home); err != nil {
+		return warnings
+	}
+	return first
+}
+
 func (c *skillCatalog) warn(path string, err error) {
+	if pathErr, ok := errors.AsType[*fs.PathError](err); ok {
+		err = pathErr.Err
+	}
 	c.Warnings = append(c.Warnings, fmt.Sprintf("%s: %s", path, err))
 }
 

@@ -116,3 +116,10 @@ Add a frontend selector when deterministic selection is needed. Explicit-only in
 3. Claude Code: [Skills](https://code.claude.com/docs/en/skills) and [duplicate resolution](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name).
 4. OpenCode: [documentation](https://opencode.ai/docs/skills/) and pinned [loader](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/index.ts), [discovery](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/discovery.ts), [skill tool](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/tool/skill.ts), and [commands](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/command/index.ts).
 5. This repository: [failure matrix](skills-failure-matrix.md), [E2E harness](https://github.com/ruhuang2001/meldra/blob/main/scripts/skills-e2e.py), and [implementation](https://github.com/ruhuang2001/meldra/blob/main/internal/app/skills.go).
+
+## Discovery notices
+
+**Unreleased:** Identical discovery warnings are shown once per Meldra home,
+including across restarts and resumes. Warning fingerprints are stored privately
+in `skill-warnings.json`. Changed diagnostics are shown again; failure to read or
+save the cache leaves warnings visible. Invalid packages remain excluded.

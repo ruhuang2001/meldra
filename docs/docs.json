@@ -9,39 +9,103 @@
   },
   "favicon": "/assets/icon.png",
   "redirects": [
-    { "source": "/index.md", "destination": "/" },
-    { "source": "/quickstart.md", "destination": "/quickstart" },
-    { "source": "/changelog.mdx", "destination": "/changelog" },
-    { "source": "/capabilities.md", "destination": "/capabilities" },
-    { "source": "/mcp.md", "destination": "/mcp" },
-    { "source": "/mcp-auth-interactions.md", "destination": "/mcp-auth-interactions" },
-    { "source": "/skills.md", "destination": "/skills" },
-    { "source": "/architecture.md", "destination": "/architecture" },
-    { "source": "/task-storage.md", "destination": "/task-storage" },
-    { "source": "/skills-failure-matrix.md", "destination": "/skills-failure-matrix" },
-    { "source": "/documentation.md", "destination": "/documentation" }
+    {
+      "source": "/index.md",
+      "destination": "/"
+    },
+    {
+      "source": "/quickstart.md",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/changelog.mdx",
+      "destination": "/changelog"
+    },
+    {
+      "source": "/capabilities.md",
+      "destination": "/capabilities"
+    },
+    {
+      "source": "/mcp.md",
+      "destination": "/mcp"
+    },
+    {
+      "source": "/mcp-auth-interactions.md",
+      "destination": "/mcp-auth-interactions"
+    },
+    {
+      "source": "/skills.md",
+      "destination": "/skills"
+    },
+    {
+      "source": "/architecture.md",
+      "destination": "/architecture"
+    },
+    {
+      "source": "/task-storage.md",
+      "destination": "/task-storage"
+    },
+    {
+      "source": "/skills-failure-matrix.md",
+      "destination": "/skills-failure-matrix"
+    },
+    {
+      "source": "/documentation.md",
+      "destination": "/documentation"
+    },
+    {
+      "source": "/configuration.md",
+      "destination": "/configuration"
+    },
+    {
+      "source": "/upgrading.md",
+      "destination": "/upgrading"
+    },
+    {
+      "source": "/development.md",
+      "destination": "/development"
+    }
   ],
   "navigation": {
     "groups": [
       {
         "group": "Get started",
-        "pages": ["index", "quickstart"]
+        "pages": [
+          "index",
+          "quickstart"
+        ]
       },
       {
         "group": "What's new",
-        "pages": ["changelog"]
+        "pages": [
+          "changelog"
+        ]
       },
       {
         "group": "Guides",
-        "pages": ["capabilities", "mcp", "mcp-auth-interactions", "skills"]
+        "pages": [
+          "capabilities",
+          "mcp",
+          "mcp-auth-interactions",
+          "skills",
+          "configuration",
+          "upgrading"
+        ]
       },
       {
         "group": "Internals",
-        "pages": ["architecture", "task-storage", "skills-failure-matrix"]
+        "pages": [
+          "architecture",
+          "task-storage",
+          "skills-failure-matrix"
+        ]
       },
       {
         "group": "Contributing",
-        "pages": ["documentation"]
+        "pages": [
+          "documentation",
+          "development"
+        ]
       }
     ]
   },

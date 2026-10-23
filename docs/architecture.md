@@ -180,6 +180,11 @@ five-second context independent of the cancelled request. Normal EOF after
 `--prompt` finishes the request before ending input. A real terminal hangup ends
 the foreground task.
 
+**Unreleased:** TUI output remains writable during cancellation until terminal
+cleanup finishes, so Ctrl-C and SIGTERM can restore keyboard protocols and
+cursor modes before returning to the shell. Each terminal write retains its
+one-second deadline.
+
 SIGKILL, power loss and children that escape their process group remain limits:
 cleanup and final persistence may not happen. Starting Meldra or listing records
 does not resume them. A recorded running state can remain stale until explicit
@@ -303,7 +308,7 @@ available after another interruption. Wall-clock timestamps and
 repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
-See the [upgrade and downgrade guide](https://github.com/ruhuang2001/meldra#upgrade-and-downgrade) for
+See the [upgrade and downgrade guide](upgrading.md) for
 whole-store backups and legacy snapshot limits.
 
 ## Verification and next increments

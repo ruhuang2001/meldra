@@ -803,6 +803,12 @@ func (runtime *chatRuntime) deleteEmptyNewSession() {
 	}
 }
 
+// preserveSession keeps an interrupted session available for explicit resume,
+// even when no user/assistant message was persisted before cancellation.
+func (runtime *chatRuntime) preserveSession() {
+	runtime.newSession = false
+}
+
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
 	ctx, cancelUpdateCheck := context.WithCancel(ctx)
 	defer cancelUpdateCheck()

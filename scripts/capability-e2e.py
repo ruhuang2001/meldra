@@ -15,7 +15,9 @@ import os
 from pathlib import Path
 import platform
 import pty
+import re
 import select
+import signal
 import struct
 import subprocess
 import sys
@@ -183,6 +185,7 @@ class Interactive:
         args = [str(case.binary), '--workspace', str(case.workspace), '--prompt', 'Initial controlled request.', *flags]
         if terminal:
             self.master, slave = pty.openpty()
+            self.initial_terminal_state = termios.tcgetattr(slave)
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 45, 150, 0, 0))
             self.process = subprocess.Popen(args, stdin=slave, stdout=slave, stderr=slave, cwd=case.workspace, env=dict(case.env, TERM='xterm-256color'))
             os.close(slave)
@@ -468,6 +471,56 @@ def long_command(binary, output):
         case.complete()
 
 
+def terminal_exit(binary, output):
+    """Check process exit, tty restoration, and keyboard protocol cleanup."""
+    for busy in (False, True):
+        for interrupt in ('ctrl-c', 'sigterm'):
+            name = 'terminal-exit-' + ('busy-' if busy else 'idle-') + interrupt
+            with Case(binary, output, name, [{'stream_wait': True} if busy else {}]) as case:
+                with Interactive(case, terminal=True) as client:
+                    client.wait('CAPABILITY_PARTIAL_STREAM' if busy else 'CAPABILITY_COMPLETE')
+                    # Require an enabled protocol, so missing teardown cannot pass
+                    # merely because this fixture never entered enhanced input.
+                    assert b'\x1b[>4;2m' in client.transcript, 'keyboard protocol was not enabled'
+                    start = len(client.transcript)
+                    started = time.monotonic()
+                    if interrupt == 'ctrl-c':
+                        os.write(client.master, b'\x03')
+                    else:
+                        client.process.send_signal(signal.SIGTERM)
+                    deadline = started + 10
+                    while client.process.poll() is None:
+                        assert time.monotonic() < deadline, 'terminal exit timed out'
+                        client.read(0.05)
+                    while select.select([client.master], [], [], 0)[0]:
+                        previous = len(client.transcript)
+                        client.read()
+                        if len(client.transcript) == previous:
+                            break
+                    tail = bytes(client.transcript[start:])
+                    state_restored = termios.tcgetattr(client.master) == client.initial_terminal_state
+                    checks = {'exit_code': client.process.returncode, 'tty_restored': state_restored,
+                              'modify_other_keys_reset': b'\x1b[>4m' in tail,
+                              'kitty_keyboard_popped': b'\x1b[<1u' in tail,
+                              'elapsed_seconds': round(time.monotonic() - started, 3)}
+                    dump(case.directory / 'terminal-restoration.json', checks)
+                    assert checks['exit_code'] == 0, checks
+                    assert checks['tty_restored'], checks
+                    assert checks['modify_other_keys_reset'], checks
+                    assert checks['kitty_keyboard_popped'], checks
+                    assert b'WARNING: DATA RACE' not in client.transcript
+                    if not busy:
+                        match = re.search(rb'Session ([0-9a-f-]+) was saved; resume with: meldra resume ([0-9a-f-]+)', client.transcript)
+                        assert match and match.group(1) == match.group(2), 'missing resumable interrupted session'
+                        case.steps.append({})
+                        resumed = subprocess.run([str(client.process.args[0]), 'resume', match.group(1).decode(), '--prompt', 'resume check'],
+                                                 cwd=case.workspace, env=case.env, capture_output=True, text=True, timeout=15)
+                        assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
+                    if busy:
+                        assert case.cancelled.wait(10), 'exit did not cancel active inference'
+                case.complete()
+
+
 def control_stop(binary, output, terminal=False):
     name = 'stop-' + ('pty' if terminal else 'line')
     with Case(binary, output, name, [{'stream_wait': True}, {}]) as case:
@@ -698,6 +751,7 @@ def main():
     if args.long_command:
         scenarios['long-command'] = long_command
     if args.controls:
+        scenarios['terminal-exit'] = terminal_exit
         for label, scenario in [('stop', control_stop), ('steer', control_steer), ('modes', control_modes), ('queue', control_queue)]:
             for terminal in (False, True):
                 scenarios['control-' + label + ('-pty' if terminal else '-line')] = lambda binary, output, f=scenario, t=terminal: f(binary, output, t)
