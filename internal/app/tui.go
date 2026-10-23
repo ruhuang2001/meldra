@@ -1080,15 +1080,17 @@ func (m *tuiModel) View() tea.View {
 
 	workspace := sanitizeTerminalText(filepath.Base(m.workspace))
 	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+sanitizeTerminalText(version)+"  "+workspace+"  "+sanitizeTerminalText(m.modelName))
-	if m.executionMode != "" {
-		header += " | Mode: " + m.executionMode
-	}
-	if m.permissionProfile != "" {
-		label := m.permissionProfile
-		if label == "interactive" {
-			label = "ask before changes"
+	switch m.executionMode {
+	case string(ModePlan):
+		header += " | Read-only"
+	case string(ModeBuild):
+		header += " | Editing"
+		switch m.permissionProfile {
+		case string(PermissionInteractive):
+			header += " · Confirm changes"
+		case string(PermissionWorkspaceEdit):
+			header += " · File edits allowed"
 		}
-		header += " | Permissions: " + label
 	}
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""

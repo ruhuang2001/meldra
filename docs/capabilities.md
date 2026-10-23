@@ -201,7 +201,8 @@ runs longer than 120 seconds and is manual. Deterministic runtime tests establis
 permission and lifecycle contracts; this suite makes no claim about real-model
 task completion quality.
 
-**Unreleased:** The TUI header labels the current mode and permission profile
-explicitly. The interactive profile appears as `Permissions: ask before changes`.
-Session IDs are omitted from the header; the exit notice retains the complete
-ID and resume command.
+**Unreleased:** The TUI header shows `Read-only` in Plan mode and `Editing` in
+Build mode. Editing adds `Confirm changes` for the interactive permission
+profile or `File edits allowed` for workspace-edit. These labels describe the
+current policy, not an operation in progress. Session IDs are omitted from the
+header; the exit notice retains the complete ID and resume command.
