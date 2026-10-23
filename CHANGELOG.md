@@ -5,6 +5,20 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.4.1](https://github.com/ruhuang2001/meldra/compare/v0.4.0...v0.4.1) (2026-10-23)
+
+
+### Bug Fixes
+
+* **cli:** restore clean exits and quiet repeated skill notices ([22cd580](https://github.com/ruhuang2001/meldra/commit/22cd580430fda7b5f97b3fe38b5140374d799060))
+* **release:** preserve historical tag validation ([#58](https://github.com/ruhuang2001/meldra/issues/58)) ([2609262](https://github.com/ruhuang2001/meldra/commit/260926285c06087ef283653936feed755f0bd9f6))
+* **release:** remove test bytecode before publishing ([#53](https://github.com/ruhuang2001/meldra/issues/53)) ([581c38a](https://github.com/ruhuang2001/meldra/commit/581c38a4b8f13c4d2c8e92c8ccfb82e486675b25))
+* **release:** run full checks on native arm64 ([#56](https://github.com/ruhuang2001/meldra/issues/56)) ([9970b1f](https://github.com/ruhuang2001/meldra/commit/9970b1fbce9e80a541bbd996e2927ffff385898f))
+* **release:** separate race and coverage validation ([#57](https://github.com/ruhuang2001/meldra/issues/57)) ([1015a9d](https://github.com/ruhuang2001/meldra/commit/1015a9dc24179f60f0c1fd9acbf62668ca799440))
+* **release:** serialize instrumented package checks ([#55](https://github.com/ruhuang2001/meldra/issues/55)) ([d455a52](https://github.com/ruhuang2001/meldra/commit/d455a52d9501e8bdff66a0301f6c6c0ccf469e76))
+* **tui:** describe editing and read-only modes plainly ([9fc1fff](https://github.com/ruhuang2001/meldra/commit/9fc1fff491755f5fb1f2558bba9b205753c1b265))
+* **tui:** simplify session header and label runtime policy ([43ac3b9](https://github.com/ruhuang2001/meldra/commit/43ac3b9f1a0a0f2ee03712c74898b40e99e1481f))
+
 ## [0.4.0](https://github.com/ruhuang2001/meldra/compare/v0.3.0...v0.4.0) (2026-10-22)
 
 
