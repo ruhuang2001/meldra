@@ -5,6 +5,13 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.4.2](https://github.com/ruhuang2001/meldra/compare/v0.4.1...v0.4.2) (2026-10-23)
+
+
+### Bug Fixes
+
+* **cli:** show self-update progress ([489d7b2](https://github.com/ruhuang2001/meldra/commit/489d7b29b97f26f726c190e1106629978bab466d))
+
 ## [0.4.1](https://github.com/ruhuang2001/meldra/compare/v0.4.0...v0.4.1) (2026-10-23)
 
 
