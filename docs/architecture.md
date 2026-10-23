@@ -180,7 +180,7 @@ five-second context independent of the cancelled request. Normal EOF after
 `--prompt` finishes the request before ending input. A real terminal hangup ends
 the foreground task.
 
-**Unreleased:** TUI output remains writable during cancellation until terminal
+**Available since v0.4.1:** TUI output remains writable during cancellation until terminal
 cleanup finishes, so Ctrl-C and SIGTERM can restore keyboard protocols and
 cursor modes before returning to the shell. Each terminal write retains its
 one-second deadline.

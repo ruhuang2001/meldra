@@ -16,6 +16,10 @@ credentials, legacy snapshots, `tasks/`, and any SQLite WAL/SHM files. Copying o
 binary alongside the backup. Execution locks in `~/.meldra-locks` and the user cache must not be
 removed while held.
 
+**Upgrade from v0.4.0 to v0.4.1:** Run `meldra update`, then restart Meldra
+to use the terminal-exit, Skill-warning, and TUI policy-label fixes. This patch
+introduces no task-store schema migration.
+
 **Upgrade to v0.4.0 from v0.3.0 and earlier:** these versions do not provide
 `meldra update`. Use the installer in the [Quickstart](quickstart.md) or a checksum-verified v0.4.0 platform
 archive. Before first opening its ledger, stop all old processes and make the

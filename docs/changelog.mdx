@@ -8,6 +8,26 @@ see the [generated changelog](https://github.com/ruhuang2001/meldra/blob/main/CH
 and [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
 Features on the development branch are not necessarily available in a release.
 
+<Update label="v0.4.1" description="October 23, 2026">
+  ## Cleaner exits and clearer session controls
+
+  - **Clean terminal exits:** Ctrl-C and SIGTERM restore keyboard and cursor
+    modes before returning to the shell, including during inference.
+  - **Resumable interruptions:** Interrupted TUI sessions remain available for
+    explicit resume, with the full session ID and resume command printed on exit.
+  - **Quieter Skills:** Identical discovery warnings appear once per Meldra home
+    across restarts and resumes. Changed diagnostics still appear.
+  - **Clearer policy:** The TUI header shows `Read-only` or `Editing`, with
+    `Confirm changes` or `File edits allowed` for the active permission profile.
+
+  **Upgrade note:** From v0.4.0, run `meldra update`, then restart Meldra to use
+  these improvements. This patch adds no task-store schema migration. Users on
+  v0.3.0 or earlier should follow the [upgrade guide](upgrading.md).
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.4.1)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.4.0...v0.4.1)
+</Update>
+
 <Update label="v0.4.0" description="October 22, 2026">
   ## Guide foreground work with explicit context and controls
 

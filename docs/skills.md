@@ -119,7 +119,7 @@ Add a frontend selector when deterministic selection is needed. Explicit-only in
 
 ## Discovery notices
 
-**Unreleased:** Identical discovery warnings are shown once per Meldra home,
+**Available since v0.4.1:** Identical discovery warnings are shown once per Meldra home,
 including across restarts and resumes. Warning fingerprints are stored privately
 in `skill-warnings.json`. Changed diagnostics are shown again; failure to read or
 save the cache leaves warnings visible. Invalid packages remain excluded.

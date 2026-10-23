@@ -63,7 +63,7 @@ before merging.
 
 ## Faster local feedback
 
-**Unreleased:** `make check-fast` runs ordinary Go tests and the capability E2E
+**Available since v0.4.1:** `make check-fast` runs ordinary Go tests and the capability E2E
 suite, including PTY exit checks. It skips race, coverage, and MCP-specific E2E
 suites and does not replace `coverage.out`. Run the full `make check` before
 submitting changes.

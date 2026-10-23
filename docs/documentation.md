@@ -104,6 +104,20 @@ retains full-check and binary metadata evidence; the
 covers that same source revision. Future releases still require explicit
 publication authorization.
 
+## Verified patch release v0.4.1
+
+v0.4.1 was published on October 23, 2026 at immutable tag revision
+`53c46682da032cf5e9a1d7fcd2e618a62abb7781`. All four platform archives and
+`meldra_checksums.txt` were downloaded and SHA-256 verified. Each binary reports
+Go 1.26.10, the matching target, disabled CGO, and the clean tagged source
+revision. The downloaded macOS arm64 binary reports version `0.4.1`.
+
+The [release workflow](https://github.com/ruhuang2001/meldra/actions/runs/39927918397)
+passed full source validation and retained its reports and binary metadata.
+The [four-platform native checks](https://github.com/ruhuang2001/meldra/actions/runs/39927960940)
+also passed at the exact release tag. See the [release highlights](changelog.mdx)
+and [upgrade guide](upgrading.md).
+
 ## Local preview
 
 Documentation tooling is separate from the Go build and test workflow. Install

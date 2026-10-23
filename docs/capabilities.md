@@ -201,7 +201,7 @@ runs longer than 120 seconds and is manual. Deterministic runtime tests establis
 permission and lifecycle contracts; this suite makes no claim about real-model
 task completion quality.
 
-**Unreleased:** The TUI header shows `Read-only` in Plan mode and `Editing` in
+**Available since v0.4.1:** The TUI header shows `Read-only` in Plan mode and `Editing` in
 Build mode. Editing adds `Confirm changes` for the interactive permission
 profile or `File edits allowed` for workspace-edit. These labels describe the
 current policy, not an operation in progress. Session IDs are omitted from the
