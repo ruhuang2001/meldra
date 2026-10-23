@@ -3,6 +3,8 @@ title: "Meldra"
 description: "A local, foreground coding agent with explicit safety boundaries and durable execution records."
 ---
 
+<img src="/assets/icon.png" alt="Meldra application icon" width="144" height="144" className="rounded-3xl not-prose" />
+
 Meldra helps you inspect and change a project from your terminal. It runs locally
 in the foreground, streams responses in an interactive TUI, and records task
 execution so you can inspect outcomes and explicitly recover interrupted work.
@@ -27,7 +29,7 @@ v0.4.0.
   files and explicit file references provide context for the paths you work on.
 - **Stay in control.** Foreground controls let you steer a turn,
   queue a follow-up, or stop the current turn without leaving the session.
-- **Connect tools and guidance.** Use [MCP servers](mcp.md) for integrations and
+- **Connect tools and guidance.** Use [MCP servers](mcp-support.md) for integrations and
   [Skills](skills.md) for on-demand workflow instructions.
 - **Inspect execution evidence.** The [task ledger](task-storage.md) records runs,
   tool outcomes, approvals, and managed processes. Recovery is explicit, not an

@@ -131,7 +131,7 @@ func TestUpdateVersionContract(t *testing.T) {
 			want := "old-binary"
 			if tc.available {
 				want = "new-binary"
-				if !strings.Contains(out.String(), "Updated Meldra to v0.3.0") {
+				if !strings.Contains(out.String(), "Updated Meldra: v"+strings.TrimPrefix(tc.current, "v")+" -> v0.3.0.") {
 					t.Fatalf("missing result: %s", out.String())
 				}
 			} else if !tc.development && !strings.Contains(out.String(), "no update installed") {

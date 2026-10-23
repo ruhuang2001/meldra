@@ -86,6 +86,6 @@ not a sandbox and should only be used in an isolated environment.
 ## Continue learning
 
 - [Project instructions, references, modes, and controls](capabilities.md)
-- [MCP configuration and workspace tools](mcp.md)
+- [MCP configuration and workspace tools](mcp-support.md)
 - [On-demand Skills](skills.md)
 - [Upgrade, backup, and downgrade guidance](upgrading.md)

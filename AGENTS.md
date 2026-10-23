@@ -9,7 +9,7 @@ Read affected code and tests before editing, and check the authoritative docs:
 - [docs/architecture.md](docs/architecture.md): dependency direction and runtime boundaries.
 - [docs/task-storage.md](docs/task-storage.md): ledger, ownership, and recovery.
 - [docs/capabilities.md](docs/capabilities.md): project context and foreground controls.
-- [docs/mcp.md](docs/mcp.md) and [docs/skills.md](docs/skills.md): integration contracts.
+- [docs/mcp-support.md](docs/mcp-support.md) and [docs/skills.md](docs/skills.md): integration contracts.
 
 ## Code Ownership
 

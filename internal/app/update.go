@@ -155,7 +155,7 @@ func updateArchiveName() (string, error) {
 
 const updateUsage = `Usage: meldra update
 Check for the latest stable release and install it if newer.
-Existing sessions keep running their current version; new sessions use the update.
+Shows update progress and the current and target versions.
 `
 
 func runUpdateCommand(ctx context.Context, args []string, stdout io.Writer) error {
@@ -173,12 +173,20 @@ func (u releaseUpdater) run(ctx context.Context, args []string, stdout io.Writer
 	if parseUpdateVersion(version) == nil {
 		return errors.New("self-update is unavailable for an unversioned development build; install a release build first")
 	}
+	current := "v" + strings.TrimPrefix(version, "v")
+	if _, err := fmt.Fprintf(stdout, "Checking for updates (current: %s)...\n", current); err != nil {
+		return err
+	}
 	latest, err := u.latest(ctx)
 	if err != nil {
 		return err
 	}
-	if compareSemver(version, latest) >= 0 {
-		_, err := fmt.Fprintln(stdout, "Already at or ahead of the latest stable release; no update installed.")
+	if comparison := compareSemver(version, latest); comparison >= 0 {
+		status := "up to date"
+		if comparison > 0 {
+			status = "ahead of the latest stable release"
+		}
+		_, err := fmt.Fprintf(stdout, "Meldra %s is %s (latest: %s); no update installed.\n", current, status, latest)
 		return err
 	}
 	archiveName, err := updateArchiveName()
@@ -196,6 +204,9 @@ func (u releaseUpdater) run(ctx context.Context, args []string, stdout io.Writer
 	if err := preflightUpdateTarget(target); err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(stdout, "Updating Meldra: %s -> %s\nDownloading checksums...\n", current, latest); err != nil {
+		return err
+	}
 	base := u.downloadURL + "/" + latest + "/"
 	checksums, err := u.fetch(ctx, base+"meldra_checksums.txt", 1<<20)
 	if err != nil {
@@ -205,8 +216,14 @@ func (u releaseUpdater) run(ctx context.Context, args []string, stdout io.Writer
 	if err != nil {
 		return err
 	}
+	if _, err := fmt.Fprintf(stdout, "Downloading %s...\n", archiveName); err != nil {
+		return err
+	}
 	archive, err := u.fetch(ctx, base+archiveName, updateLimit)
 	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(stdout, "Verifying download..."); err != nil {
 		return err
 	}
 	actual := sha256.Sum256(archive)
@@ -217,13 +234,16 @@ func (u releaseUpdater) run(ctx context.Context, args []string, stdout io.Writer
 	if err != nil {
 		return fmt.Errorf("unpack update: %w", err)
 	}
+	if _, err := fmt.Fprintln(stdout, "Installing update..."); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := replaceUpdateBinary(target, binary); err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "Updated Meldra to %s. New sessions use this version; existing sessions keep running their current version.\n", latest)
+	_, err = fmt.Fprintf(stdout, "Updated Meldra: %s -> %s.\n", current, latest)
 	return err
 }
 

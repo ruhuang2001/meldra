@@ -27,11 +27,19 @@
     },
     {
       "source": "/mcp.md",
-      "destination": "/mcp"
+      "destination": "/mcp-support"
+    },
+    {
+      "source": "/mcp-support.md",
+      "destination": "/mcp-support"
     },
     {
       "source": "/mcp-auth-interactions.md",
-      "destination": "/mcp-auth-interactions"
+      "destination": "/mcp-support"
+    },
+    {
+      "source": "/mcp-auth-interactions",
+      "destination": "/mcp-support"
     },
     {
       "source": "/skills.md",
@@ -85,8 +93,7 @@
         "group": "Guides",
         "pages": [
           "capabilities",
-          "mcp",
-          "mcp-auth-interactions",
+          "mcp-support",
           "skills",
           "configuration",
           "upgrading"

@@ -7,6 +7,11 @@ title: "Upgrade and downgrade"
 Binary-only updates can be installed while sessions are running. Existing
 processes keep their current version; newly started processes use the update.
 Updating never restarts sessions or hot-loads new code into them.
+Saved conversations are not pinned to the executable version that created them.
+After updating, exit the running chat normally, then run `meldra resume SESSION_ID`
+to continue that conversation with the installed version. From the same workspace,
+`meldra resume latest` selects its most recently saved session. You do not need to
+start a new conversation.
 
 Stop all Meldra processes before copying data or applying an incompatible data
 migration. Back up the entire `MELDRA_HOME` directory (default `~/.meldra`) with
@@ -48,6 +53,24 @@ This checks the latest stable release and installs it immediately if newer,
 without confirmation or requiring other sessions to close. If already current
 or ahead of the latest release, it leaves the installation unchanged.
 
+**Unreleased:** The update command prints a message before checking for a release,
+then reports download, verification, and installation stages. The result includes
+both the original and installed versions. These are stage notices, not a byte-level
+percentage; they also remain readable when output is redirected. For example:
+
+```text
+Checking for updates (current: v0.4.0)...
+Updating Meldra: v0.4.0 -> v0.4.1
+Downloading checksums...
+Downloading meldra_Darwin_arm64.tar.gz...
+Verifying download...
+Installing update...
+Updated Meldra: v0.4.0 -> v0.4.1.
+```
+
+The versions above illustrate the new output format; the published v0.4.1 updater
+does not yet include these progress messages.
+
 The updater downloads the GitHub release, verifies its archive
 against `meldra_checksums.txt`, and atomically replaces the resolved executable
 with a synced 0755 binary. User symlinks are preserved. It never migrates or
@@ -76,3 +99,19 @@ resuming a closed session. Downgrading to 0.1.x can read only the
 preserved legacy snapshots; it cannot read task history or undo repository
 changes. Prefer a separate data directory when downgrading, and keep your data
 backup. Unknown newer database schemas are rejected, not rewritten.
+
+## Verify updater changes
+
+**Unreleased:** From the source checkout, run the updater E2E suite with a new
+output directory:
+
+```bash
+python3 scripts/update-e2e.py --output .artifacts/checks/update-e2e-run
+```
+
+It builds two version-labeled copies of the current source and uses loopback
+release and model fixtures. It checks progress before delayed responses in pipe
+and PTY modes, replacement and failure behavior, and saved-session continuity.
+The output retains `report.json`, transcripts, binary/source hashes, and a
+`replay.sh` command. It does not download published releases or certify arbitrary
+cross-version storage compatibility. Run `make check` for the full repository gates.

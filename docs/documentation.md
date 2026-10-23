@@ -18,6 +18,12 @@ navigation.
 Keep a matching `.md` or `.mdx` redirect in `docs.json` for each new page. These aliases
 let relative links work both on GitHub and on the site's extensionless routes.
 
+Mintlify reserves `/mcp` and `/authed/mcp` for its hosted search MCP servers.
+Use `mcp-support.md` and the `/mcp-support` route for Meldra's MCP guide; keep
+navigation entries and page links off those reserved endpoints. The legacy
+`/mcp.md` alias redirects to `/mcp-support`, but `/mcp` must remain available
+to the hosted service. See the [reserved MCP paths](https://www.mintlify.com/docs/ai/model-context-protocol#access-your-search-mcp-server).
+
 ## Release notes
 
 The site [Changelog](changelog.mdx) is a curated, user-facing summary. Use one
