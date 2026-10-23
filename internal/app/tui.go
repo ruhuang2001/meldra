@@ -1080,16 +1080,15 @@ func (m *tuiModel) View() tea.View {
 
 	workspace := sanitizeTerminalText(filepath.Base(m.workspace))
 	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+sanitizeTerminalText(version)+"  "+workspace+"  "+sanitizeTerminalText(m.modelName))
-	if m.sessionID != "" {
-		label := sanitizeTerminalText(m.sessionID)
-		if index := strings.LastIndexByte(label, '-'); index >= 0 {
-			label = label[index+1:]
-		}
-		header += tuiDimStyle.Render("  session " + ansi.Truncate(label, 9, "…"))
-	}
-
 	if m.executionMode != "" {
-		header += " | " + m.executionMode + " / " + m.permissionProfile
+		header += " | Mode: " + m.executionMode
+	}
+	if m.permissionProfile != "" {
+		label := m.permissionProfile
+		if label == "interactive" {
+			label = "ask before changes"
+		}
+		header += " | Permissions: " + label
 	}
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""

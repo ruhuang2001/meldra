@@ -200,3 +200,8 @@ requests, task records, and checksummed reports. The long-command check really
 runs longer than 120 seconds and is manual. Deterministic runtime tests establish
 permission and lifecycle contracts; this suite makes no claim about real-model
 task completion quality.
+
+**Unreleased:** The TUI header labels the current mode and permission profile
+explicitly. The interactive profile appears as `Permissions: ask before changes`.
+Session IDs are omitted from the header; the exit notice retains the complete
+ID and resume command.
