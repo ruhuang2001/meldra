@@ -8,6 +8,27 @@ see the [generated changelog](https://github.com/ruhuang2001/meldra/blob/main/CH
 and [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
 Features on the development branch are not necessarily available in a release.
 
+<Update label="v0.4.2" description="October 23, 2026">
+  ## See each stage of a self-update
+
+  - **Visible progress:** `meldra update` reports checking, downloading,
+    verification, and installation instead of staying silent until completion.
+    These are stage notices, not a percentage progress bar.
+  - **Clear version information:** The command shows the current and target
+    versions, including when the installed version is already current or ahead
+    of the latest stable release.
+  - **Readable redirected output:** Progress messages also work in pipes and
+    captured logs, without requiring an interactive terminal.
+
+  **Upgrade note:** Run `meldra update`, then restart Meldra to use the new
+  updater output. The update is performed by your currently installed version,
+  so v0.4.0 and v0.4.1 do not show the new progress messages during this upgrade.
+  This patch adds no task-store schema migration.
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.4.2)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.4.1...v0.4.2)
+</Update>
+
 <Update label="v0.4.1" description="October 23, 2026">
   ## Cleaner exits and clearer session controls
 

@@ -21,6 +21,11 @@ credentials, legacy snapshots, `tasks/`, and any SQLite WAL/SHM files. Copying o
 binary alongside the backup. Execution locks in `~/.meldra-locks` and the user cache must not be
 removed while held.
 
+**Upgrade from v0.4.0 or v0.4.1 to v0.4.2:** Run `meldra update`, then restart
+Meldra to use the self-update stage notices and version details. The old updater
+performs this upgrade, so the new progress output appears only in subsequent
+invocations. This patch introduces no task-store schema migration.
+
 **Upgrade from v0.4.0 to v0.4.1:** Run `meldra update`, then restart Meldra
 to use the terminal-exit, Skill-warning, and TUI policy-label fixes. This patch
 introduces no task-store schema migration.
@@ -53,7 +58,7 @@ This checks the latest stable release and installs it immediately if newer,
 without confirmation or requiring other sessions to close. If already current
 or ahead of the latest release, it leaves the installation unchanged.
 
-**Unreleased:** The update command prints a message before checking for a release,
+**Available since v0.4.2:** The update command prints a message before checking for a release,
 then reports download, verification, and installation stages. The result includes
 both the original and installed versions. These are stage notices, not a byte-level
 percentage; they also remain readable when output is redirected. For example:
@@ -102,7 +107,7 @@ backup. Unknown newer database schemas are rejected, not rewritten.
 
 ## Verify updater changes
 
-**Unreleased:** From the source checkout, run the updater E2E suite with a new
+**Available since v0.4.2:** From the source checkout, run the updater E2E suite with a new
 output directory:
 
 ```bash

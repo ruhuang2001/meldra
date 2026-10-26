@@ -124,6 +124,21 @@ The [four-platform native checks](https://github.com/ruhuang2001/meldra/actions/
 also passed at the exact release tag. See the [release highlights](changelog.mdx)
 and [upgrade guide](upgrading.md).
 
+## Verified patch release v0.4.2
+
+v0.4.2 was published on October 23, 2026 at immutable tag revision
+`9f9902d171010490696743d8686ba6526d8e12b4`. All four platform archives and
+`meldra_checksums.txt` were downloaded on October 26, 2026; all four archive
+SHA-256 checks passed. The
+[release workflow](https://github.com/ruhuang2001/meldra/actions/runs/39936904798)
+succeeded. See the [release highlights](changelog.mdx) and
+[upgrade guide](upgrading.md) for the self-update output changes.
+
+The site timeline is not synchronized by Release Please. After each successful
+publication, verify the release assets, add its curated timeline entry, and
+replace the relevant unreleased notices. Documentation deployment alone does
+not generate these updates.
+
 ## Local preview
 
 Documentation tooling is separate from the Go build and test workflow. Install
