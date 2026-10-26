@@ -606,6 +606,9 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 	hits := 0
 	filesScanned := 0
 	bytesScanned := int64(0)
+	query := []byte(in.Query)
+	// Files are scanned serially; reuse scratch space without retaining lines.
+	scanBuffer := make([]byte, 64<<10)
 	bounded := false
 	errStop := errors.New("bounded")
 	err = w.walk(p, func(path string, d fs.DirEntry, _ error) error {
@@ -656,7 +659,7 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 			return nil
 		}
 		scanner := bufio.NewScanner(file)
-		scanner.Buffer(make([]byte, 64<<10), maxLineBytes)
+		scanner.Buffer(scanBuffer, maxLineBytes)
 		lineNumber := 0
 		stop := false
 		binary := false
@@ -666,18 +669,18 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 				return err
 			}
 			lineNumber++
-			line := scanner.Text()
-			bytesScanned += int64(len(scanner.Bytes()) + 1)
+			line := scanner.Bytes()
+			bytesScanned += int64(len(line) + 1)
 			if bytesScanned > maxSearchBytes*4 {
 				bounded = true
 				stop = true
 				break
 			}
-			if strings.ContainsRune(line, '\x00') {
+			if bytes.IndexByte(line, 0) >= 0 {
 				binary = true
 				break
 			}
-			if strings.Contains(line, in.Query) {
+			if bytes.Contains(line, query) {
 				fmt.Fprintf(&out, "%s:%d:%s\n", rel, lineNumber, line)
 				hits++
 				if hits >= max || out.Len() >= maxToolOutput {

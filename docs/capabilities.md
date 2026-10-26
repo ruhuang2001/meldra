@@ -7,6 +7,11 @@ Meldra's foreground runtime supports scoped project instructions, explicit file
 references, Plan/Build execution modes, managed processes, and interactive turn
 controls.
 
+**Unreleased performance improvement:** `search_files` reuses its scan buffer
+across files and matches lines without allocating a string for every line.
+Literal matching, line numbers, glob filtering, cancellation, and existing
+resource limits are unchanged. This optimization is not included in v0.4.2.
+
 ## Project instructions
 
 Meldra reads `AGENTS.md` from the canonical workspace root before requesting a
