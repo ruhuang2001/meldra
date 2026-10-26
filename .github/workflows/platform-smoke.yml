@@ -59,7 +59,7 @@ jobs:
         run: python3 scripts/capability-e2e.py --binary dist/meldra --output .artifacts/platform-smoke/capability --only plan-denials --only workspace-edit-policy
       - name: Retain native verification evidence
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: platform-smoke-${{ matrix.target }}
           path: .artifacts/platform-smoke
