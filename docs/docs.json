@@ -72,6 +72,14 @@
     {
       "source": "/development.md",
       "destination": "/development"
+    },
+    {
+      "source": "/benchmarking.md",
+      "destination": "/benchmarking"
+    },
+    {
+      "source": "/swe-bench-setup.md",
+      "destination": "/swe-bench-setup"
     }
   ],
   "navigation": {
@@ -111,7 +119,9 @@
         "group": "Contributing",
         "pages": [
           "documentation",
-          "development"
+          "development",
+          "benchmarking",
+          "swe-bench-setup"
         ]
       }
     ]

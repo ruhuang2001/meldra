@@ -344,3 +344,92 @@ func TestToolOutputWireIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestUserItemsWithImagesWireFormat(t *testing.T) {
+	tests := []struct {
+		name      string
+		text      string
+		images    []ImageContent
+		wantParts []map[string]any
+	}{
+		{
+			name: "text and image defaults detail",
+			text: "fix the screenshot",
+			images: []ImageContent{
+				{URL: "https://example.com/shot.png"},
+			},
+			wantParts: []map[string]any{
+				{"type": "input_text", "text": "fix the screenshot"},
+				{"type": "input_image", "image_url": "https://example.com/shot.png", "detail": "auto"},
+			},
+		},
+		{
+			name: "data url with explicit detail",
+			text: "describe",
+			images: []ImageContent{
+				{URL: "data:image/png;base64,AAAA", Detail: "high"},
+			},
+			wantParts: []map[string]any{
+				{"type": "input_text", "text": "describe"},
+				{"type": "input_image", "image_url": "data:image/png;base64,AAAA", "detail": "high"},
+			},
+		},
+		{
+			name:   "images only",
+			images: []ImageContent{{URL: "https://example.com/a.png", Detail: "original"}},
+			wantParts: []map[string]any{
+				{"type": "input_image", "image_url": "https://example.com/a.png", "detail": "original"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			items, err := UserItemsWithImages(test.text, test.images)
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(items)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var messages []map[string]any
+			if err := json.Unmarshal(encoded, &messages); err != nil {
+				t.Fatal(err)
+			}
+			if len(messages) != 1 || messages[0]["role"] != "user" {
+				t.Fatalf("expected one user message: %s", encoded)
+			}
+			content, _ := messages[0]["content"].([]any)
+			if len(content) != len(test.wantParts) {
+				t.Fatalf("got %d content parts, want %d: %s", len(content), len(test.wantParts), encoded)
+			}
+			for i, want := range test.wantParts {
+				got, _ := content[i].(map[string]any)
+				for key, value := range want {
+					if got[key] != value {
+						t.Fatalf("part %d field %q = %v, want %v: %s", i, key, got[key], value, encoded)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestUserItemsWithImagesRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name   string
+		text   string
+		images []ImageContent
+	}{
+		{name: "no content", text: "", images: nil},
+		{name: "image without url", text: "hi", images: []ImageContent{{Detail: "high"}}},
+		{name: "unsupported detail", text: "hi", images: []ImageContent{{URL: "https://x/y.png", Detail: "ultra"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := UserItemsWithImages(test.text, test.images); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}

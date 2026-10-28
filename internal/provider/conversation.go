@@ -140,6 +140,52 @@ func UserItems(text string) Items {
 func MessageItems(role, text string) Items {
 	return Items{{value: responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))}}
 }
+
+// ImageContent represents an image input for multimodal requests.
+type ImageContent struct {
+	URL    string // https://, http://, or a data: URL carrying base64 image data
+	Detail string // "low", "high", "auto", or "original"; empty selects "auto"
+}
+
+// UserItemsWithImages creates a user message containing text and images.
+// It fails locally for images without a URL and for messages with no content
+// instead of emitting a request the Responses API cannot interpret.
+func UserItemsWithImages(text string, images []ImageContent) (Items, error) {
+	content := make(responses.ResponseInputMessageContentListParam, 0, 1+len(images))
+	if text != "" {
+		content = append(content, responses.ResponseInputContentParamOfInputText(text))
+	}
+	for _, img := range images {
+		if img.URL == "" {
+			return nil, errors.New("image content requires a URL or data URL")
+		}
+		detail, err := imageDetail(img.Detail)
+		if err != nil {
+			return nil, err
+		}
+		image := responses.ResponseInputContentParamOfInputImage(detail)
+		image.OfInputImage.ImageURL = param.NewOpt(img.URL)
+		content = append(content, image)
+	}
+	if len(content) == 0 {
+		return nil, errors.New("user message requires text or at least one image")
+	}
+	return Items{{value: responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser)}}, nil
+}
+
+// imageDetail maps an optional detail level to the API-required enum, defaulting
+// to "auto" as documented by responses.ResponseInputImageParam.
+func imageDetail(detail string) (responses.ResponseInputImageDetail, error) {
+	switch responses.ResponseInputImageDetail(detail) {
+	case "":
+		return responses.ResponseInputImageDetailAuto, nil
+	case responses.ResponseInputImageDetailLow, responses.ResponseInputImageDetailHigh,
+		responses.ResponseInputImageDetailAuto, responses.ResponseInputImageDetailOriginal:
+		return responses.ResponseInputImageDetail(detail), nil
+	default:
+		return "", fmt.Errorf("unsupported image detail %q", detail)
+	}
+}
 func ToolOutput(callID, output string) Item {
 	return Item{value: functionCallOutput(callID, output)}
 }

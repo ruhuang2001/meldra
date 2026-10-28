@@ -7,3 +7,18 @@
 meldra
 *.swp
 .DS_Store
+
+# Benchmarking artifacts (local only). baseline-* files are committed on purpose
+# so benchmark comparisons have a checked-in reference.
+/benchmarks/swe-bench/
+/benchmarks/runs/
+/output/
+BENCHMARKING_*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Playwright CLI
+.playwright-cli/

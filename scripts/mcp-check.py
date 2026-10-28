@@ -136,6 +136,17 @@ def main():
                'suite_seconds': {}}
     print('MCP check artifacts: ' + str(directory), flush=True)
     try:
+        # The release workflow also uses this driver against older immutable tags.
+        if Path('scripts/swe-bench-lite.py').exists():
+            adapter_output = directory / 'swe-bench-adapter-e2e'
+            run([sys.executable, 'scripts/swe-bench-adapter-e2e.py', '--output', str(adapter_output)],
+                directory, 'swe-bench-adapter-e2e')
+            adapter_report = json.loads((adapter_output / 'report.json').read_text())
+            if not adapter_report.get('passed'):
+                raise RuntimeError('SWE-bench adapter E2E did not report passing checks')
+            summary['swe-bench-adapter-e2e'] = len(adapter_report['scenarios'])
+        else:
+            summary['omitted_checks'].append('SWE-bench adapter absent from source revision')
         # Keep both full-suite gates without compounding race and coverage
         # overhead in deadline-sensitive child-process fixtures.
         if args.fast:
