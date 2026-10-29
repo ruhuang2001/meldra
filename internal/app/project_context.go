@@ -260,6 +260,12 @@ func (w *Workspace) contextObservePath(path string) error {
 // readContextFile applies the same workspace/protected-path policy as file
 // tools and verifies identity across opening before consuming bounded text.
 func (w *Workspace) readContextFile(path string, limit int) ([]byte, error) {
+	return w.readReferenceFile(path, limit, false)
+}
+
+// readReferenceFile permits binary image snapshots only for explicit references.
+// It retains path confinement and rejects linked/special image files before IO.
+func (w *Workspace) readReferenceFile(path string, limit int, binary bool) ([]byte, error) {
 	resolved, err := w.resolve(path, false)
 	if err != nil {
 		return nil, err
@@ -302,7 +308,12 @@ func (w *Workspace) readContextFile(path string, limit int) ([]byte, error) {
 	if info.Size() > int64(limit) {
 		return nil, fmt.Errorf("file exceeds the %d byte limit", limit)
 	}
-	f, err := root.Open(name)
+	if binary {
+		if err := checkSkillLinkCount(info); err != nil {
+			return nil, err
+		}
+	}
+	f, err := root.OpenFile(name, skillReadFlags, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -311,6 +322,11 @@ func (w *Workspace) readContextFile(path string, limit int) ([]byte, error) {
 	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() {
 		return nil, fmt.Errorf("context file changed while opening")
 	}
+	if binary {
+		if err := checkSkillLinkCount(opened); err != nil {
+			return nil, err
+		}
+	}
 	data, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
 		return nil, err
@@ -318,7 +334,7 @@ func (w *Workspace) readContextFile(path string, limit int) ([]byte, error) {
 	if len(data) > limit {
 		return nil, fmt.Errorf("file exceeds the %d byte limit", limit)
 	}
-	if !utf8.Valid(data) || strings.ContainsRune(string(data), '\x00') || binarySample(data) {
+	if !binary && (!utf8.Valid(data) || strings.ContainsRune(string(data), '\x00') || binarySample(data)) {
 		return nil, fmt.Errorf("file must contain valid UTF-8 text, not binary data")
 	}
 	return data, nil

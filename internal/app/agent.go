@@ -364,8 +364,10 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	if err := a.finishSelected(); err != nil {
 		return err
 	}
-	input := provider.UserInput(modelInput)
-	customBaseURLInput := provider.UserItems(modelInput)
+	input, customBaseURLInput, err := a.userInferenceInput(ctx, modelInput, references)
+	if err != nil {
+		return err
+	}
 
 	metrics := UIMetrics{}
 	if a.customProvider {
@@ -393,8 +395,10 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 					return err
 				}
 			}
-			input = provider.UserInput(modelInput)
-			customBaseURLInput = provider.UserItems(modelInput)
+			input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
+			if err != nil {
+				return err
+			}
 			if a.customProvider {
 				bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
 				if boundErr != nil {
@@ -435,8 +439,10 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 						return err
 					}
 				}
-				input = provider.UserInput(modelInput)
-				customBaseURLInput = provider.UserItems(modelInput)
+				input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
+				if err != nil {
+					return err
+				}
 				if a.customProvider {
 					bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
 					if boundErr != nil {

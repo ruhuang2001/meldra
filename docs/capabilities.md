@@ -78,8 +78,8 @@ while an approval or MCP form owns input.
 Ranges use one-based, inclusive line numbers. Quote paths containing spaces;
 Unicode paths are supported. Escape a literal reference as `\@example.txt`.
 Email addresses and references inside inline code or fenced code blocks remain
-ordinary text. Missing files, invalid ranges, protected paths, and non-text
-references are rejected before submission to the model.
+ordinary text. Missing files, invalid ranges, protected paths, and unsupported
+binary references are rejected before submission to the model.
 
 References save the original request, path, range, digest, and a content snapshot
 in local task artifacts. A resumed task can identify the submitted snapshot even
@@ -88,10 +88,49 @@ grant instructions or permissions. Only the dedicated `AGENTS.md` loader assigns
 project-instruction meaning. References embedded in a remote MCP prompt do not
 automatically attach local files.
 
-A source file may be at most 1 MiB. Retained content is bounded to 64 KiB per
+A source file may be at most 1 MiB. Retained text is bounded to 64 KiB per
 reference and 128 KiB per request, with at most 32 references. Truncation is
 marked; use narrower line ranges for large files. Snapshots remain private local
 history and are subject to task storage limits.
+
+### Image references
+
+**Unreleased.** Attach a PNG or JPEG using the same file syntax, for example
+`Describe @screenshot.png` or `Compare @before.jpg and @after.png`. The TUI file
+picker can insert these paths. Supported image signatures are recognized even
+without a filename extension; other raster/vector formats and corrupt images
+are rejected. Clipboard image paste is not implemented.
+
+Images are fully validated before inference and sent as provider image content
+with automatic detail selection. They remain untrusted attachments and grant no
+permissions. Text references retain their existing line/range behavior; image
+references cannot include a line range. Paths retain workspace/protected-state
+checks, and symlinks, hard links and special files are rejected.
+
+Each image is limited to 1 MiB encoded bytes and 16 million decoded pixels. The
+current request may carry at most 2 MiB of image data, within the 32-reference
+limit. History reconstruction keeps the most recent distinct images up to
+2 MiB and 32 images; omitted older images are explicitly identified as omitted
+by the budget. Compatible providers also apply the existing total context limit
+to the encoded multimodal input, so large text histories may require a smaller
+image or a fresh session. Native tool follow-ups retain images through the
+provider response chain; compatible providers replay them with tool history.
+
+Image bytes are saved in immutable digest-addressed artifacts. Session messages
+retain one reference record with path, MIME type, digest and artifact identity;
+base64 is created only for the transient model request. Resume and accepted
+queued/steering requests read their original artifacts after source files change
+or disappear. Missing/corrupt retained artifacts fail before inference. Images
+are sent to the configured model provider when submitted or restored as context.
+
+Run the offline real-binary suite with a new output directory:
+
+    python3 scripts/images-e2e.py --binary dist/meldra --output dist/images-e2e
+
+The [image failure matrix](images-failure-matrix.md) describes rejection and
+recovery cases. The suite runs in `make check` and `make check-fast` and retains
+provider requests, task/session records, immutable artifacts and source/binary
+checksums. It tests the application boundary, not model vision accuracy.
 
 ## Plan and Build modes
 
