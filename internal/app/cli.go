@@ -63,6 +63,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 		switch args[0] {
 		case "context":
 			return runContextCommand(ctx, args[1:], stdout)
+		case "commands":
+			return runCommandsCommand(ctx, args[1:], stdout)
 		case "skills":
 			return runSkillsCommand(ctx, args[1:], stdout)
 		case "mcp":
@@ -781,6 +783,10 @@ func newChatRuntime(
 	if len(skills.Skills) > 0 {
 		tools = append(tools, skills.definition())
 	}
+	commands, err := discoverCommands(ctx, workspace, paths)
+	if err != nil {
+		return nil, err
+	}
 	external := &mcpConnections{}
 	if err := checkApprovalConnections(ctx, paths, options, workspace); err != nil {
 		return nil, err
@@ -811,6 +817,7 @@ func newChatRuntime(
 		}
 		return nil
 	}
+	agent.commands = commands
 	agent.skills = skills
 	agent.policy = policy
 	agent.workspace = workspace
@@ -1039,6 +1046,7 @@ const usageText = `Usage:
   meldra [options]               Start a chat in a bounded workspace.
   meldra resume [session-id]     Select a saved session, or resume the specified session.
   meldra sessions                List saved sessions.
+  meldra commands [--json]       List custom slash commands; accepts --workspace PATH.
   meldra skills [--json]         List skills; accepts --workspace PATH.
   meldra tasks [--json]           List recorded tasks.
   meldra task show ID [--json]    Inspect task runs, tools, processes, and approvals.

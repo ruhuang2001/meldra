@@ -84,6 +84,7 @@ func tuiInputStyles(darkBackground *bool) textarea.Styles {
 type tuiController struct {
 	messages       chan string
 	submitControl  func(string, string) error
+	commands       []slashCommand
 	referenceFiles func() (referenceCandidateList, error)
 	done           chan struct{}
 	ready          chan struct{}
@@ -468,6 +469,8 @@ type tuiModel struct {
 	mcpPending        *tuiMCPInputMsg
 	correcting        bool
 	referencePicker   *tuiReferencePicker
+	commandCursor     int
+	commandDismissed  string
 
 	completedPrefix        string
 	completedPrefixWidth   int
@@ -751,6 +754,10 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
+	if m.handleCommandCompletion(key) {
+		m.resize()
+		return nil
+	}
 	switch key.String() {
 	case "enter":
 		message := m.input.Value()
@@ -926,7 +933,7 @@ func (m *tuiModel) resize() {
 	width := max(12, m.width-2)
 	m.input.SetWidth(width - tuiInputStyle.GetHorizontalFrameSize())
 	m.viewport.SetWidth(width)
-	composerHeight := m.input.Height() + tuiInputStyle.GetVerticalFrameSize()
+	composerHeight := m.input.Height() + tuiInputStyle.GetVerticalFrameSize() + m.commandCompletionHeight()
 	m.viewport.SetHeight(max(1, m.height-tuiHeaderHeight-tuiFooterHeight-tuiLayoutSeparators-composerHeight))
 	m.refreshViewport()
 }
@@ -1109,6 +1116,9 @@ func (m *tuiModel) View() tea.View {
 		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	}
 
+	if completion := m.commandCompletionView(); completion != "" {
+		composer = completion + "\n" + composer
+	}
 	footerText := sanitizeTerminalText(m.status)
 	if m.pending != nil {
 		footerText += "  Approval: y approve · n/Enter reject"
@@ -1121,7 +1131,7 @@ func (m *tuiModel) View() tea.View {
 	if (m.pending == nil || m.correcting) && !m.stopped && m.input.Focused() {
 		if cursor := m.input.Cursor(); cursor != nil {
 			cursor.Position.X += tuiInputStyle.GetBorderLeftSize() + tuiInputStyle.GetPaddingLeft()
-			cursor.Position.Y += tuiHeaderHeight + m.viewport.Height() + tuiInputStyle.GetBorderTopSize() + tuiInputStyle.GetPaddingTop()
+			cursor.Position.Y += tuiHeaderHeight + m.viewport.Height() + m.commandCompletionHeight() + tuiInputStyle.GetBorderTopSize() + tuiInputStyle.GetPaddingTop()
 			view.Cursor = cursor
 		}
 	}
@@ -1176,6 +1186,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	defer runtime.deleteEmptyNewSession()
 	defer runtime.mcp.close()
 	runtime.workspace.mcpInput = controller.mcpInput
+	controller.commands = append(append([]slashCommand(nil), builtinSlashCommands...), runtime.agent.commands.Commands...)
 	controller.submitControl = runtime.agent.SubmitControl
 	controller.referenceFiles = referenceFileLoader(chatCtx, runtime.workspace)
 	runtime.workspace.SetApprovalFunc(controller.approve)

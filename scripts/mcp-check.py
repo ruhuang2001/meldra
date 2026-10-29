@@ -160,9 +160,9 @@ def main():
         build_flags = [] if args.fast else ['-race', '-cover', '-coverpkg=./...', '-covermode=atomic']
         build_env = dict(os.environ, CGO_ENABLED='0') if args.fast else None
         run(['go', 'build', *build_flags, '-o', str(binary), '.'], directory, 'go-build', build_env)
-        scripts = ('capability-e2e', 'images-e2e', 'stream-review-e2e') if args.fast else (
+        scripts = ('capability-e2e', 'images-e2e', 'stream-review-e2e', 'commands-e2e') if args.fast else (
             'mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e',
-            'mcp-oauth-regression-e2e', 'capability-e2e', 'quality-of-life-e2e', 'provider-compat-e2e', 'images-e2e', 'stream-review-e2e')
+            'mcp-oauth-regression-e2e', 'capability-e2e', 'quality-of-life-e2e', 'provider-compat-e2e', 'images-e2e', 'stream-review-e2e', 'commands-e2e')
         if not args.fast and Path('scripts/web-e2e.py').exists():
             scripts += ('web-e2e',)
         elif args.fast and Path('scripts/web-e2e.py').exists():

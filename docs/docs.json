@@ -100,6 +100,14 @@
     {
       "source": "/verification/web-failure-matrix.md",
       "destination": "/verification/web-failure-matrix"
+    },
+    {
+      "source": "/commands-failure-matrix.md",
+      "destination": "/commands-failure-matrix"
+    },
+    {
+      "source": "/verification/plan-integration-failures.md",
+      "destination": "/verification/plan-integration-failures"
     }
   ],
   "navigation": {
@@ -137,7 +145,9 @@
           "task-storage",
           "skills-failure-matrix",
           "verification/web-failure-matrix",
-          "verification/stream-json-failures"
+          "verification/stream-json-failures",
+          "commands-failure-matrix",
+          "verification/plan-integration-failures"
         ]
       },
       {

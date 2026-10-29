@@ -256,6 +256,79 @@ is not interpreted as an ordinary task message.
 Press `Ctrl-G` in the TUI to compose a correction while an approval or MCP form
 is pending. `Escape` returns to that interaction without submitting a correction.
 
+## Custom slash commands
+
+**Unreleased.** Custom commands expand local Markdown templates into ordinary
+user messages. Create direct `*.md` files under workspace `.meldra/commands` or
+`$MELDRA_HOME/commands` (default `~/.meldra/commands`). Only those two directories
+are searched. The project source wins duplicate names; built-in commands always
+win. Invalid or shadowed files produce warnings and do not replace valid entries.
+
+For example, save `.meldra/commands/review.md`:
+
+    ---
+    description: Review the current diff for correctness bugs
+    argument-hint: "[focus area]"
+    ---
+    Review the uncommitted diff. Pay special attention to: $ARGUMENTS
+    Report findings with file locations and a one-line explanation.
+
+Invoke `/review error handling` in line mode or the TUI, or pass it to `--prompt`:
+
+    meldra commands --workspace /path/to/project
+    meldra commands --workspace /path/to/project --json
+    meldra --prompt '/review error handling'
+
+Listing is offline and needs no API credentials. JSON contains `commands` and
+`warnings`; each command includes `name`, `description`, `argument_hint` when present,
+and its source path. Bodies are not included. Restart or resume to refresh both
+metadata and template bodies; an active process uses an immutable snapshot.
+
+`$ARGUMENTS` receives the full trimmed argument string, preserving interior
+whitespace. `$1` through `$9` receive whitespace-separated positions; missing
+positions become empty text. Quoting has no shell meaning. Substitution happens
+once: dollar placeholders inside arguments are literal, and expanded slash text
+never invokes another command or a built-in control. Unknown slash names remain
+ordinary user text. Command templates perform no shell evaluation.
+
+Commands use the normal reference, policy, approval, session and execution-ledger
+path. Plan restrictions and command approvals are unchanged. Expanded text is
+retained as the user request. `/steer /review focus` and `/queue /review focus` expand
+before their control requests are recorded; recovered requests retain the saved
+expansion. A remote MCP prompt never activates local command expansion.
+
+In the TUI, typing `/` shows built-in and custom completions. Type a prefix to
+filter, use Up/Down to select and Tab to insert the command, then Enter to send.
+Escape dismisses suggestions without changing the draft. Completion is disabled
+while an approval, MCP form, or dedicated correction composer owns input.
+
+Filenames must contain 1–64 lowercase ASCII letters, digits or single hyphens,
+without leading, trailing or repeated hyphens. YAML frontmatter requires a
+nonempty `description` of at most 512 Unicode characters; `argument-hint` is an
+optional string. Quoted/folded YAML, UTF-8, BOM and CRLF are supported. Duplicate
+keys, incorrect types, empty bodies, binary data, symbolic/hard links and special
+files are rejected. Runtime state and execution-lock paths remain protected,
+with only the native `$MELDRA_HOME/commands` directory allowed for discovery.
+
+A file may be at most 32 KiB. Discovery admits at most 128 candidate Markdown
+files across the two sources, counting invalid and shadowed entries. An overfull
+source and later sources are skipped with a warning, rather than choosing a
+filesystem-order subset. Expansion above the existing 16 KiB user-message limit
+is rejected before submission; it is never truncated. Other directory entries
+are bounded by the existing workspace traversal limit.
+
+The [failure matrix](commands-failure-matrix.md) and real-binary E2E suite cover
+catalogs, boundaries, single-pass substitution, policy/approval evidence,
+line-mode controls, PTY completion and fresh discovery on resume:
+
+    CGO_ENABLED=0 go build -o dist/meldra .
+    python3 scripts/commands-e2e.py --binary dist/meldra --output dist/commands-e2e
+
+Use a new output directory. The suite retains fixtures, provider requests, CLI
+and PTY transcripts, task/event JSON, source/binary hashes and checksums. It runs
+in `make check` and `make check-fast` using isolated homes and a loopback provider;
+it does not assess live-model behavior.
+
 ## Local verification
 
 The offline capability suite uses a real binary, isolated directories, and a

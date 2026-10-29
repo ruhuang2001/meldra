@@ -75,6 +75,13 @@ func (a *Agent) SubmitControl(kind, text string) error {
 	if kind != "steer" && kind != "queue" && kind != "stop" && kind != "mode" {
 		return fmt.Errorf("unknown control %q", kind)
 	}
+	if kind == "steer" || kind == "queue" {
+		var err error
+		text, err = a.commands.expand(text)
+		if err != nil {
+			return err
+		}
+	}
 	if (kind == "steer" || kind == "queue") && (strings.TrimSpace(text) == "" || len(text) > maxSessionMessageBytes) {
 		return fmt.Errorf("control text must be nonempty and at most %d bytes", maxSessionMessageBytes)
 	}
@@ -221,7 +228,7 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 }
 
 func parseControlText(text string) (kind, value string, ok bool) {
-	command, rest, _ := strings.Cut(strings.TrimSpace(text), " ")
+	command, rest := splitSlashInput(text)
 	switch command {
 	case "/stop":
 		return "stop", "", true
