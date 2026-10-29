@@ -189,7 +189,7 @@ def main():
             env = dict(os.environ, **go_caches, **{key: str(path) for key, path in paths.items()},
                        GOCOVERDIR=str(suite_covdir), PYTHONDONTWRITEBYTECODE='1',
                        MELDRA_DISABLE_UPDATE_CHECK='1')
-            arguments = ['--controls', '--processes'] if script == 'capability-e2e' else []
+            arguments = ['--controls', '--processes', '--stream-json'] if script == 'capability-e2e' else []
             run([sys.executable, 'scripts/' + script + '.py', '--binary', str(binary), '--output', str(output), *arguments], directory, script, env)
             report = json.loads((output / 'report.json').read_text())
             checks = report['scenarios'] if isinstance(report, dict) else report

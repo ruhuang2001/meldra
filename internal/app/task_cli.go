@@ -67,11 +67,11 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	out = checked
 	defer func() { err = errors.Join(err, checked.err) }()
 	if len(args) < 2 {
-		return fmt.Errorf("usage: meldra task show|events|resume|resolve|resolve-process TASK_ID [options]")
+		return &usageError{fmt.Errorf("usage: meldra task show|events|resume|resolve|resolve-process TASK_ID [options]")}
 	}
 	action, id := args[0], args[1]
 	if !validSessionID(id) {
-		return fmt.Errorf("invalid task ID")
+		return &usageError{fmt.Errorf("invalid task ID")}
 	}
 	paths, err := ResolveConfigPaths()
 	if err != nil {
@@ -199,12 +199,42 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		}
 		return nil
 	case "resume":
-		options, err := parseChatOptions(args[2:])
+		optionArgs := make([]string, 0, len(args)-2)
+		approvalHash := ""
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--approve-detail-hash" {
+				i++
+				if i >= len(args) || approvalHash != "" {
+					return &usageError{fmt.Errorf("--approve-detail-hash requires one SHA-256 hash")}
+				}
+				approvalHash = args[i]
+			} else if value, ok := strings.CutPrefix(args[i], "--approve-detail-hash="); ok {
+				if approvalHash != "" || value == "" {
+					return &usageError{fmt.Errorf("--approve-detail-hash requires one SHA-256 hash")}
+				}
+				approvalHash = value
+			} else {
+				optionArgs = append(optionArgs, args[i])
+			}
+		}
+		options, err := parseChatOptions(optionArgs)
 		if err != nil {
 			return err
 		}
+		if approvalHash != "" {
+			if len(approvalHash) != 64 || strings.Trim(approvalHash, "0123456789abcdef") != "" {
+				return &usageError{fmt.Errorf("--approve-detail-hash requires a lowercase SHA-256 hash")}
+			}
+			if options.AutoApprove {
+				return &usageError{fmt.Errorf("--approve-detail-hash cannot be combined with --auto-approve")}
+			}
+			options.ApproveDetailHash = approvalHash
+			if options.OutputFormat == "" {
+				options.OutputFormat = "stream-json"
+			}
+		}
 		if options.Resume != "" {
-			return fmt.Errorf("task resume does not accept --resume")
+			return &usageError{fmt.Errorf("task resume does not accept --resume")}
 		}
 		if options.workspaceExplicit {
 			canonical, err := canonicalWorkspacePath(options.Workspace)

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,6 +21,13 @@ import (
 // taskExecution is the foreground composition adapter. Its lease spans every
 // side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
+	noninteractive     bool
+	stream             *jsonStream
+	waitingApproval    bool
+	approveDetailHash  string
+	resumeApproval     *task.Approval
+	resumeCall         *task.ToolCall
+	approvalMatched    bool
 	requestControlID   string
 	requestControlRefs []ReferenceSnapshot
 	requestSequence    int64
@@ -60,6 +68,8 @@ func providerIdentity(base string) string {
 func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.err = nil
 	e.paused = false
+	e.waitingApproval = false
+	e.approvalMatched = false
 	e.current = nil
 	e.context = ""
 	started := false
@@ -116,6 +126,9 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		return err
 	}
 	if e.resume {
+		if err = e.loadApproval(ctx); err != nil {
+			return err
+		}
 		if err = e.db.RecoverInterrupted(ctx, e.lease, record.ID); err != nil {
 			return err
 		}
@@ -177,6 +190,11 @@ func (e *taskExecution) close() error {
 func (e *taskExecution) finish(ctx context.Context, runErr error) error {
 	if e.db == nil {
 		return nil
+	}
+	if e.waitingApproval && e.err == nil && onlyError(runErr, errApprovalRequired) {
+		// RecordApproval committed waiting_approval. Release ownership without
+		// expiring the approval or claiming the suspended operation completed.
+		return e.close()
 	}
 	// Record cancellation even when the request context is already cancelled.
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -303,6 +321,12 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	if e.err != nil {
 		return result, e.err
 	}
+	if e.waitingApproval {
+		result.Status = tool.Cancelled
+		result.Output = "Awaiting explicit approval; operation not admitted."
+		result.Error = ""
+		callErr = errApprovalRequired
+	}
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	stored := task.Result{Status: task.ToolStatus(result.Status), Output: capText(result.Output), ExitCode: result.ExitCode, DurationMS: result.DurationMS, Truncated: result.Truncated || len(result.Output) > maxToolOutput, Retryable: result.Retryable, Error: truncateSessionMessage(result.Error)}
@@ -360,16 +384,60 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 	}
 	e.pendingApprovalID = ""
 	mode, permissions, generation := e.workspace.policy.snapshot()
-	detail, _ := json.Marshal(map[string]any{"title": request.Title, "detail": truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]"), "source": request.Source, "mode": mode, "permissions": permissions, "generation": generation})
+	preview := approvalDetail{Title: request.Title, Detail: truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]"), Source: request.Source, Mode: mode, Permissions: permissions, Generation: generation}
+	if e.noninteractive || e.resumeApproval != nil {
+		preview.FullDetailHash = digest([]byte(request.Detail))
+		if p := e.workspace.projectContext; p != nil {
+			snapshot, err := p.Refresh()
+			if err != nil {
+				return err
+			}
+			preview.ContextDigest = snapshot.Digest
+			p.mu.Lock()
+			for path := range p.paths {
+				preview.ContextPaths = append(preview.ContextPaths, path)
+			}
+			p.mu.Unlock()
+			slices.Sort(preview.ContextPaths)
+		}
+	}
+	if e.resumeApproval != nil {
+		if !e.matchesApproval(request, preview) {
+			return fmt.Errorf("approval details changed; operation not admitted; request a new approval")
+		}
+		e.approvalMatched = true
+		preview.Source = "detail-hash"
+		preview.ApprovedDetailHash = e.approveDetailHash
+	}
+	detail, _ := json.Marshal(preview)
 	approval, err := e.db.RecordApproval(ctx, e.lease, task.Approval{TaskID: e.session.ID, RunID: e.run.ID, ToolCallID: e.current.ID, Operation: string(request.Kind), ParameterHash: e.current.ParameterHash, WorkspaceState: request.WorkspaceState, Detail: detail, Decision: task.Pending, Scope: "single_call"})
 	if err != nil {
 		return e.recordingError(ctx, err)
 	}
 	e.pendingApprovalID = approval.ID
+	if e.approvalMatched {
+		return nil
+	}
+	if e.noninteractive && request.Source == "human" {
+		e.waitingApproval = true
+		if e.stream != nil {
+			e.stream.write("approval_required", e.session.ID, e.run.ID, e.current.ProviderCallID, struct {
+				ToolCallID string `json:"tool_call_id"`
+				Operation  string `json:"operation"`
+				Title      string `json:"title"`
+				Detail     string `json:"detail"`
+				DetailHash string `json:"detail_hash"`
+			}{e.current.ProviderCallID, string(request.Kind), request.Title, request.Detail, approvalHash(approval)})
+		}
+		return errApprovalRequired
+	}
 	return nil
 }
 func (e *taskExecution) approval(ctx context.Context, request ApprovalRequest, approved bool) error {
 	if e == nil || e.current == nil || e.pendingApprovalID == "" {
+		return nil
+	}
+	if e.waitingApproval {
 		return nil
 	}
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -380,6 +448,10 @@ func (e *taskExecution) approval(ctx context.Context, request ApprovalRequest, a
 	}
 	err := e.db.DecideApproval(saveCtx, e.lease, e.pendingApprovalID, decision)
 	e.pendingApprovalID = ""
+	if e.approvalMatched {
+		e.resumeApproval = nil
+		e.approvalMatched = false
+	}
 	if err != nil {
 		return e.recordingError(ctx, err)
 	}

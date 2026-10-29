@@ -8,11 +8,17 @@ import (
 // UIEvent is a presentation-safe update emitted by the agent while it works.
 // It deliberately excludes raw requests, model reasoning, and credentials.
 type UIEvent struct {
-	Kind    UIEventKind
-	Text    string
-	Name    string
-	Detail  string
-	Metrics *UIMetrics
+	TaskID, RunID, ToolCallID string
+	Status                    string
+	DurationMS                int64
+	TurnIndex                 int64
+	Truncated                 bool
+	Error                     string
+	Kind                      UIEventKind
+	Text                      string
+	Name                      string
+	Detail                    string
+	Metrics                   *UIMetrics
 }
 
 // UIMetrics contains safe per-turn provider usage totals.
@@ -25,6 +31,8 @@ type UIMetrics struct {
 type UIEventKind string
 
 const (
+	UIEventTurnStart        UIEventKind = "turn_start"
+	UIEventTurnEnd          UIEventKind = "turn_end"
 	UIEventMode             UIEventKind = "mode"
 	UIEventCommandOutput    UIEventKind = "command_output"
 	UIEventStatus           UIEventKind = "status"

@@ -1,5 +1,8 @@
 # Project context, execution modes, and foreground control
 
+**Unreleased:** [Stream JSON output](stream-json.md) provides a one-prompt JSONL
+protocol, noninteractive approval suspension and exact-operation resume.
+
 **Available since v0.4.0:** Project context, execution modes, managed processes,
 and foreground controls are included in the published platform archives.
 

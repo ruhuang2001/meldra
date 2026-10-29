@@ -1,0 +1,30 @@
+{
+  "envelope": ["schema_version", "seq", "time", "kind", "task_id", "run_id", "tool_call_id", "data"],
+  "required_envelope": ["schema_version", "seq", "time", "kind", "data"],
+  "data": {
+    "session_start": {"session_id": "str", "workspace": "str", "mode": "str", "permissions": "str"},
+    "turn_start": {"turn_id": "str", "index": "int"},
+    "assistant_delta": {"text": "str"},
+    "assistant_message": {"text": "str"},
+    "tool_started": {"tool_call_id": "str", "name": "str"},
+    "tool_finished": {"tool_call_id": "str", "name": "str", "status": "str", "duration_ms": "int", "truncated": "bool", "error": "str"},
+    "approval_required": {"tool_call_id": "str", "operation": "str", "title": "str", "detail": "str", "detail_hash": "str"},
+    "notice": {"text": "str"},
+    "error": {"text": "str"},
+    "metrics": {"input_tokens": "int", "output_tokens": "int", "context_bytes": "int"},
+    "turn_end": {"status": "str"},
+    "session_end": {"status": "str", "exit_reason": "str"}
+  },
+  "required_data": {
+    "session_start": ["session_id", "workspace", "mode", "permissions"],
+    "turn_start": ["turn_id", "index"],
+    "assistant_delta": ["text"],
+    "assistant_message": ["text"],
+    "tool_started": ["tool_call_id", "name"],
+    "tool_finished": ["tool_call_id", "name", "status", "duration_ms", "truncated"],
+    "approval_required": ["tool_call_id", "operation", "title", "detail", "detail_hash"],
+    "notice": ["text"], "error": ["text"],
+    "metrics": ["input_tokens", "output_tokens", "context_bytes"],
+    "turn_end": ["status"], "session_end": ["status", "exit_reason"]
+  }
+}

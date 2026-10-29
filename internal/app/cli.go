@@ -40,7 +40,7 @@ func Main(buildVersion string) {
 	}
 	if err := runCLIContext(ctx, os.Args[1:], os.Stdin, os.Stdout); err != nil {
 		printCLIError(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(cliExitCode(err))
 	}
 }
 
@@ -161,7 +161,11 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 					return err
 				}
 				if diagnostics.SkippedFiles > 0 {
-					if _, err := fmt.Fprintln(stdout, sessionListDiagnosticsWarning(diagnostics)); err != nil {
+					warnings := stdout
+					if options.OutputFormat == "stream-json" {
+						warnings = os.Stderr
+					}
+					if _, err := fmt.Fprintln(warnings, sessionListDiagnosticsWarning(diagnostics)); err != nil {
 						return err
 					}
 				}
@@ -173,7 +177,7 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			return runChat(ctx, chatInput, stdout, options)
 		default:
 			if !strings.HasPrefix(args[0], "-") {
-				return fmt.Errorf("unknown command %q\n\n%s", args[0], usageText)
+				return &usageError{fmt.Errorf("unknown command %q\n\n%s", args[0], usageText)}
 			}
 			options, err := parseChatOptions(args)
 			if err != nil {
@@ -238,16 +242,34 @@ type ChatOptions struct {
 	Workspace          string
 	Resume             string
 	Prompt             string
+	OutputFormat       string
+	ApproveDetailHash  string
 	AutoApprove        bool
 	workspaceExplicit  bool
 	selectResume       bool
 }
 
-func parseChatOptions(args []string) (ChatOptions, error) {
+func parseChatOptions(args []string) (result ChatOptions, err error) {
+	defer func() {
+		if err != nil {
+			err = &usageError{err}
+		}
+	}()
 	var options ChatOptions
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch {
+		case argument == "--output-format":
+			index++
+			if index >= len(args) {
+				return ChatOptions{}, fmt.Errorf("--output-format requires text or stream-json")
+			}
+			options.OutputFormat = args[index]
+		case strings.HasPrefix(argument, "--output-format="):
+			options.OutputFormat = strings.TrimPrefix(argument, "--output-format=")
+			if options.OutputFormat == "" {
+				return ChatOptions{}, fmt.Errorf("--output-format requires text or stream-json")
+			}
 		case argument == "--mode" || argument == "--permissions" || argument == "--command-timeout" || argument == "--allow-executable":
 			index++
 			if index >= len(args) {
@@ -321,15 +343,25 @@ func parseChatOptions(args []string) (ChatOptions, error) {
 	if _, err := newRuntimePolicy(options.Mode, options.Permissions); err != nil {
 		return ChatOptions{}, err
 	}
+	if options.OutputFormat != "" && options.OutputFormat != "text" && options.OutputFormat != "stream-json" {
+		return ChatOptions{}, fmt.Errorf("--output-format requires text or stream-json")
+	}
 	return options, nil
 }
 
-func parseResumeOptions(args []string) (ChatOptions, error) {
+func parseResumeOptions(args []string) (result ChatOptions, err error) {
+	defer func() {
+		if err != nil {
+			if _, ok := errors.AsType[*usageError](err); !ok {
+				err = &usageError{err}
+			}
+		}
+	}()
 	optionArgs := make([]string, 0, len(args))
 	var sessionID string
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
-		if argument == "--workspace" || argument == "--resume" || argument == "--prompt" || argument == "--mode" || argument == "--permissions" || argument == "--command-timeout" || argument == "--allow-executable" {
+		if argument == "--output-format" || argument == "--workspace" || argument == "--resume" || argument == "--prompt" || argument == "--mode" || argument == "--permissions" || argument == "--command-timeout" || argument == "--allow-executable" {
 			optionArgs = append(optionArgs, argument)
 			if index+1 < len(args) {
 				index++
@@ -358,6 +390,9 @@ func parseResumeOptions(args []string) (ChatOptions, error) {
 		options.selectResume = true
 	} else if options.Resume == "" {
 		options.Resume = sessionID
+	}
+	if options.OutputFormat == "stream-json" && options.selectResume {
+		return ChatOptions{}, &usageError{fmt.Errorf("stream-json requires an explicit session ID")}
 	}
 	return options, nil
 }
@@ -786,6 +821,7 @@ func newChatRuntime(
 	agent.session = session
 	agent.store = store
 	agent.execution = &taskExecution{paths: paths, workspace: workspace, session: session, resume: options.Resume != "", config: task.Config{Model: settings.Model, Provider: providerIdentity(settings.BaseURL), Workspace: workspace.root}}
+	agent.execution.approveDetailHash = options.ApproveDetailHash
 	if options.Resume != "" && session.taskSnapshot {
 		if err := agent.loadPendingControls(); err != nil {
 			return nil, err
@@ -793,6 +829,7 @@ func newChatRuntime(
 	}
 	workspace.approvalRecord = agent.execution.approval
 	workspace.approvalPending = agent.execution.pendingApproval
+	workspace.approvalGrant = func() bool { return agent.execution.approvalMatched }
 	return &chatRuntime{
 		store:      store,
 		session:    session,
@@ -816,6 +853,12 @@ func (runtime *chatRuntime) preserveSession() {
 }
 
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
+	if options.OutputFormat == "stream-json" {
+		if strings.TrimSpace(options.Prompt) == "" {
+			return &usageError{fmt.Errorf("stream-json requires --prompt; stdin is never read")}
+		}
+		return runJSONChat(ctx, stdout, options)
+	}
 	ctx, cancelUpdateCheck := context.WithCancel(ctx)
 	defer cancelUpdateCheck()
 	interactiveUpdates := options.Prompt == "" && interactiveTerminal(stdin, stdout)
@@ -1011,6 +1054,9 @@ Options:
   --workspace PATH               Restrict all file and command tools to PATH.
   --resume ID                    Resume ID (or "latest") in its saved workspace.
   --prompt TEXT                  Start with a non-interactive prompt; stdin is still read for follow-ups.
+  --output-format text|stream-json  Output text (default) or noninteractive JSONL; stream-json requires --prompt.
+  task resume ID --approve-detail-hash HASH
+                                 Approve exactly one recorded operation; defaults to stream-json.
   --auto-approve                 Skip operation approvals; use only in an isolated container or VM.
 
 Configuration:

@@ -108,8 +108,15 @@ class Case:
                                    'content': [{'type': 'output_text', 'text': step.get('text', 'CAPABILITY_COMPLETE'), 'annotations': []}]}]
                     response = {'id': f'resp_{index}', 'object': 'response', 'status': 'completed', 'output': output,
                                 'usage': {'input_tokens': 1, 'output_tokens': 1, 'total_tokens': 2}}
+                    if step.get('reasoning'):
+                        response['output'].insert(0, {'type': 'reasoning', 'id': f'reason_{index}',
+                                                     'summary': [{'type': 'summary_text', 'text': 'PRIVATE_REASONING_CANARY'}]})
                     event = {'type': 'response.completed', 'response': response}
                     payload = ('event: response.completed\ndata: ' + text(event) + '\n\n').encode()
+                    if step.get('delta'):
+                        delta = {'type': 'response.output_text.delta', 'item_id': f'msg_{index}',
+                                 'output_index': 0, 'content_index': 0, 'delta': step['delta']}
+                        payload = ('event: response.output_text.delta\ndata: ' + text(delta) + '\n\n').encode() + payload
                     if not step.get('stream_wait'):
                         self.send_response(200)
                         self.send_header('Content-Type', 'text/event-stream')
@@ -732,6 +739,178 @@ def managed_stop(binary, output):
         case.complete()
 
 
+def stream_json(binary, output):
+    schema = json.loads((ROOT / 'scripts/fixtures/stream-json-v1.json').read_text())
+
+    def transcript(result, final='succeeded'):
+        events = [json.loads(line) for line in result.stdout.splitlines()]
+        assert events and events[-1]['kind'] == 'session_end', events
+        assert events[-1]['data']['status'] == final, events
+        assert [event['seq'] for event in events] == list(range(1, len(events) + 1))
+        for event in events:
+            assert event['schema_version'] == 1 and event['time'].endswith('Z'), event
+            assert set(event) <= set(schema['envelope']), event
+            assert set(schema['required_envelope']) <= set(event), event
+            allowed = schema['data'][event['kind']]
+            assert set(event['data']) <= set(allowed), event
+            assert set(schema['required_data'][event['kind']]) <= set(event['data']), event
+            if event['kind'] in ('tool_started', 'tool_finished', 'approval_required'):
+                assert event['task_id'] and event['run_id'] and event['tool_call_id'], event
+                assert event['tool_call_id'] == event['data']['tool_call_id'], event
+            for key, value in event['data'].items():
+                assert type(value).__name__ == allowed[key], (key, value, allowed[key])
+        for line in result.stderr.splitlines():
+            try:
+                json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            raise AssertionError('JSON leaked to stderr: ' + line)
+        assert 'reasoning' not in result.stdout.lower()
+        assert 'PRIVATE_REASONING_CANARY' not in result.stdout
+        assert 'offline-fixture-not-a-credential' not in result.stdout
+        return events
+
+    with Case(binary, output, 'stream-success', [{'calls': [('list_files', {'path': '.'})], 'reasoning': True},
+                                               {'text': 'STREAM_COMPLETE', 'delta': 'STREAM_COMPLETE'}]) as case:
+        events = transcript(case.chat(flags=['--output-format', 'stream-json'], stdin='DO NOT READ STDIN\n'))
+        assert len(case.requests) == 2
+        assert next(event['data']['text'] for event in events if event['kind'] == 'assistant_delta') == 'STREAM_COMPLETE'
+        assert next(event['data']['text'] for event in events if event['kind'] == 'assistant_message') == 'STREAM_COMPLETE'
+        assert [event['kind'] for event in events].count('turn_start') == 1
+        assert [event['kind'] for event in events].count('turn_end') == 1
+        case.complete()
+
+    with Case(binary, output, 'stream-approval', [{'calls': [edit('approved.txt', 'APPROVED'), edit('later.txt', 'FORBIDDEN')]}]) as case:
+        pending = case.chat(flags=['--output-format=stream-json'], stdin='y\ny\n', success=False)
+        assert pending.returncode == 3
+        events = transcript(pending, 'waiting_approval')
+        approval = next(event for event in events if event['kind'] == 'approval_required')
+        assert not (case.workspace / 'approved.txt').exists() and not (case.workspace / 'later.txt').exists()
+        task_id, detail_hash = approval['task_id'], approval['data']['detail_hash']
+        records = case.audit()
+        assert records[0]['task']['status'] == 'waiting_approval'
+        assert records[0]['approvals'][0]['decision'] == 'pending'
+        assert len(records[0]['tool_calls']) == 1
+        assert records[0]['tool_calls'][0]['status'] == 'cancelled'
+        before = len(case.requests)
+        wrong = case.run(['task', 'resume', task_id, '--approve-detail-hash', '0' * 64], success=False, label='wrong-hash')
+        assert wrong.returncode == 1 and len(case.requests) == before
+        transcript(wrong, 'failed')
+        assert case.audit()[0]['task']['status'] == 'waiting_approval'
+        policy = case.run(['task', 'resume', task_id, '--approve-detail-hash', detail_hash, '--mode', 'plan'], success=False, label='changed-policy')
+        assert policy.returncode == 1 and len(case.requests) == before
+        assert not (case.workspace / 'approved.txt').exists()
+        case.steps.append({'calls': [edit('new-approval.txt', 'NEEDS_NEW_APPROVAL')]})
+        resumed = case.run(['task', 'resume', task_id, '--approve-detail-hash', detail_hash], success=False, label='exact-approval')
+        assert resumed.returncode == 3, resumed.stderr
+        transcript(resumed, 'waiting_approval')
+        assert (case.workspace / 'approved.txt').read_text() == 'APPROVED'
+        assert not (case.workspace / 'new-approval.txt').exists()
+        assert not (case.workspace / 'later.txt').exists()
+        records = case.audit()
+        assert any(a['decision'] == 'approved' and a['detail']['source'] == 'detail-hash' for a in records[0]['approvals'])
+        before = len(case.requests)
+        replay = case.run(['task', 'resume', task_id, '--approve-detail-hash', detail_hash], success=False, label='replay-hash')
+        assert replay.returncode == 1 and len(case.requests) == before
+        case.complete()
+
+    with Case(binary, output, 'stream-command', [{'calls': [command('once.py')]}, {}]) as case:
+        write(case.workspace / 'once.py', 'from pathlib import Path\np=Path("runs.txt")\np.write_text(p.read_text()+"run\\n" if p.exists() else "run\\n")\n')
+        events = transcript(case.chat(flags=['--output-format', 'stream-json'], success=False), 'waiting_approval')
+        approval = next(event for event in events if event['kind'] == 'approval_required')
+        assert not (case.workspace / 'runs.txt').exists()
+        resumed = case.run(['task', 'resume', approval['task_id'], '--approve-detail-hash', approval['data']['detail_hash']], label='command-resume')
+        transcript(resumed)
+        assert (case.workspace / 'runs.txt').read_text() == 'run\n'
+        record = case.audit()[0]
+        assert record['task']['status'] == 'completed'
+        assert any(a['detail'].get('approved_detail_hash') == approval['data']['detail_hash'] for a in record['approvals'])
+        assert len([c for c in record['tool_calls'] if c['status'] == 'succeeded']) == 1
+        case.complete()
+
+    with Case(binary, output, 'stream-error', [{'text': ''}]) as case:
+        result = case.chat(flags=['--output-format', 'stream-json'], success=False)
+        assert result.returncode == 1
+        events = transcript(result, 'failed')
+        assert any(event['kind'] == 'error' for event in events)
+        assert case.audit()[0]['task']['status'] == 'failed'
+        case.complete()
+
+    with Case(binary, output, 'stream-plan', [{'calls': [edit('forbidden.txt', 'NO')]}, {}]) as case:
+        events = transcript(case.chat(flags=['--output-format', 'stream-json', '--mode', 'plan', '--auto-approve']))
+        assert not (case.workspace / 'forbidden.txt').exists()
+        assert next(event['data']['status'] for event in events if event['kind'] == 'tool_finished') == 'declined'
+        case.complete()
+
+    with Case(binary, output, 'stream-output-closed') as case:
+        receiver, sender = os.pipe()
+        os.close(receiver)
+        process = subprocess.Popen([str(binary), '--prompt', 'Output cannot be delivered.', '--output-format', 'stream-json'],
+                                   cwd=case.workspace, env=case.env, stdin=subprocess.DEVNULL, stdout=sender, stderr=subprocess.PIPE)
+        os.close(sender)
+        _, stderr = process.communicate(timeout=10)
+        write(case.directory / 'closed.stderr.txt', stderr)
+        assert process.returncode != 0 and not case.requests
+        assert all(not record['tool_calls'] for record in case.audit())
+        case.complete()
+
+    with Case(binary, output, 'stream-output-stalled', [{'delta': 'x' * (512 * 1024), 'calls': [edit('forbidden.txt', 'NO')]}]) as case:
+        process = subprocess.Popen([str(binary), '--prompt', 'Stop when output fails.', '--output-format', 'stream-json', '--auto-approve'],
+                                   cwd=case.workspace, env=case.env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        case.processes.append(process)
+        process.wait(timeout=10)
+        stdout, stderr = process.communicate()
+        write(case.directory / 'stalled.stdout.txt', stdout)
+        write(case.directory / 'stalled.stderr.txt', stderr)
+        assert process.returncode == 1
+        assert not (case.workspace / 'forbidden.txt').exists()
+        assert len(case.requests) == 1
+        case.complete()
+
+    for mutation in ('file', 'instructions'):
+        with Case(binary, output, 'stream-changed-' + mutation, [{'calls': [('edit_file', {'path': 'target.txt', 'old_str': 'BEFORE', 'new_str': 'AFTER'})]}]) as case:
+            write(case.workspace / 'target.txt', 'BEFORE')
+            events = transcript(case.chat(flags=['--output-format', 'stream-json'], success=False), 'waiting_approval')
+            approval = next(event for event in events if event['kind'] == 'approval_required')
+            write(case.workspace / ('target.txt' if mutation == 'file' else 'AGENTS.md'), 'CHANGED')
+            before = len(case.requests)
+            failed = case.run(['task', 'resume', approval['task_id'], '--approve-detail-hash', approval['data']['detail_hash']],
+                              success=False, label='changed-resume')
+            assert failed.returncode == 1 and len(case.requests) == before
+            assert (case.workspace / 'target.txt').read_text() == ('CHANGED' if mutation == 'file' else 'BEFORE')
+            assert not any(call['status'] == 'unknown' for call in case.audit()[0]['tool_calls'])
+            case.complete()
+
+    with Case(binary, output, 'stream-cross-task', [{'calls': [edit('one.txt', 'ONE')]}, {'calls': [edit('two.txt', 'TWO')]}]) as case:
+        first = transcript(case.chat(flags=['--output-format', 'stream-json'], success=False, label='first'), 'waiting_approval')
+        second = transcript(case.chat(flags=['--output-format', 'stream-json'], success=False, label='second'), 'waiting_approval')
+        one = next(event for event in first if event['kind'] == 'approval_required')
+        two = next(event for event in second if event['kind'] == 'approval_required')
+        result = case.run(['task', 'resume', two['task_id'], '--approve-detail-hash', one['data']['detail_hash']], success=False, label='cross-task')
+        assert result.returncode == 1 and len(case.requests) == 2
+        assert not (case.workspace / 'one.txt').exists() and not (case.workspace / 'two.txt').exists()
+        case.complete()
+
+    with Case(binary, output, 'stream-command-changed', [{'calls': [('run_command', {'command': 'python3', 'args': ['once.py'], 'timeout': 0})]}]) as case:
+        write(case.workspace / 'once.py', 'raise SystemExit(0)\n')
+        events = transcript(case.chat(flags=['--output-format', 'stream-json'], success=False), 'waiting_approval')
+        approval = next(event for event in events if event['kind'] == 'approval_required')
+        result = case.run(['task', 'resume', approval['task_id'], '--approve-detail-hash', approval['data']['detail_hash'],
+                           '--command-timeout', '99'], success=False, label='changed-command')
+        assert result.returncode == 1 and len(case.requests) == 1
+        assert not any(call['status'] == 'unknown' for call in case.audit()[0]['tool_calls'])
+        case.complete()
+
+    with Case(binary, output, 'stream-options', [{'calls': [edit('auto.txt', 'AUTO')]}, {}]) as case:
+        invalid = case.chat(flags=['--output-format', 'invalid'], success=False, label='invalid-format')
+        assert invalid.returncode == 2 and invalid.stdout == ''
+        missing = case.run(['--output-format', 'stream-json'], success=False, label='missing-prompt')
+        assert missing.returncode == 2 and missing.stdout == ''
+        transcript(case.chat(flags=['--output-format', 'stream-json', '--auto-approve']))
+        assert (case.workspace / 'auto.txt').read_text() == 'AUTO'
+        case.complete()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', type=Path, required=True)
@@ -740,6 +919,7 @@ def main():
     parser.add_argument('--long-command', action='store_true', help='Include the real 121-second execution check.')
     parser.add_argument('--controls', action='store_true', help='Include line-mode and real PTY stop/steer/mode-switch checks.')
     parser.add_argument('--processes', action='store_true', help='Include Run-scoped process start/read/wait and ownership checks.')
+    parser.add_argument('--stream-json', action='store_true', help='Include JSONL schema, approval suspension and exact resume checks.')
     args = parser.parse_args()
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -750,6 +930,8 @@ def main():
                  'reference-resume': reference_resume, 'nested-retry': nested_retry}
     if args.long_command:
         scenarios['long-command'] = long_command
+    if args.stream_json:
+        scenarios['stream-json'] = stream_json
     if args.controls:
         scenarios['terminal-exit'] = terminal_exit
         for label, scenario in [('stop', control_stop), ('steer', control_steer), ('modes', control_modes), ('queue', control_queue)]:
