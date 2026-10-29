@@ -14,3 +14,13 @@ ledger snapshots, request logs, a report and checksums. Before implementation:
 - Persistence/output failure permits effects or claims successful completion.
 - Resume repeats completed effects, executes unknown work or bypasses leases.
 - Usage errors exit 1; runtime errors omit closure; text behavior changes.
+
+PR review regression cases (written before the follow-up implementation):
+
+- A suspended undo loses its before/after contents when Workspace is recreated.
+- Undo replay overwrites files or rules changed while approval was pending.
+- Missing or corrupt undo artifacts are accepted, or oversized evidence truncates.
+- MCP replay redirects to changed URL, command, arguments or environment.
+- MCP transport credentials or literal environment values leak into approval records.
+- Raw MCP tool/catalog argument spacing changes the approval preview after saving.
+- SIGINT/SIGTERM during inference reports successful turn/session completion.

@@ -205,6 +205,13 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 }
 
 func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, config mcpServerConfig, workspace *Workspace) (*mcp.ClientSession, []ToolDefinition, error) {
+	binding, err := mcpConnectionBinding(ctx, paths, name, config, workspace)
+	if err != nil {
+		return nil, nil, err
+	}
+	if expected := workspace.mcpExpectedBinding[name]; expected != "" && expected != binding {
+		return nil, nil, fmt.Errorf("MCP connection configuration changed; request a new approval")
+	}
 	startupCtx, cancel := context.WithTimeout(ctx, mcpTimeout(config.StartupTimeout, 10))
 	defer cancel()
 	var transport mcp.Transport
@@ -299,6 +306,10 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 		}
 	}
 	definitions = append(definitions, mcpCatalogTools(session, name, config, workspace)...)
+	if workspace.mcpBindings == nil {
+		workspace.mcpBindings = map[string]string{}
+	}
+	workspace.mcpBindings[name] = binding
 	oauthReady.Store(true)
 	return session, definitions, nil
 }
@@ -340,8 +351,8 @@ func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, tim
 	if err := schema.Validate(arguments); err != nil {
 		return "", fmt.Errorf("MCP arguments do not match the tool schema: %w", err)
 	}
-	detail := fmt.Sprintf("Server: %s\nTool: %s\nArguments: %s\nExternal tools use server privileges and are not confined to this workspace.", server, name, input)
-	if !w.requestApproval(ApprovalRequest{Kind: ApprovalCommand, Title: "Call MCP tool " + server + "/" + name, Detail: detail, Prompt: detail + "\nAllow MCP call? [y/N] "}) {
+	detail := fmt.Sprintf("Server: %s\nTool: %s\nArguments: %s\nExternal tools use server privileges and are not confined to this workspace.", server, name, mcpApprovalArguments(input))
+	if !w.requestApproval(ApprovalRequest{MCPServer: server, MCPBinding: w.mcpBindings[server], Kind: ApprovalCommand, Title: "Call MCP tool " + server + "/" + name, Detail: detail, Prompt: detail + "\nAllow MCP call? [y/N] "}) {
 		return "Declined; MCP tool was not called.", nil
 	}
 	if err := w.ctx.Err(); err != nil {

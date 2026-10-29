@@ -254,6 +254,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	if a.modeError != nil {
 		return a.modeError
 	}
+	parentContext := ctx
 	turnStarted := false
 	defer func() {
 		if !turnStarted || !a.turnEvents {
@@ -266,7 +267,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if cliExitCode(err) == 3 {
 			status = "waiting_approval"
 		}
-		if errors.Is(err, context.Canceled) {
+		if errors.Is(err, context.Canceled) || parentContext != nil && parentContext.Err() != nil {
 			status = "cancelled"
 		}
 		a.emit(UIEvent{Kind: UIEventTurnEnd, Status: status})

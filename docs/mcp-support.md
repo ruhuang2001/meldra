@@ -8,6 +8,11 @@ Meldra connects to external MCP servers and exposes bounded
 workspace tools through `meldra mcp serve`. It uses the official Go SDK v1.8.0 and
 Meldra's existing approvals, task records, and recovery runtime.
 
+**Unreleased:** [Stream JSON approval resume](stream-json.md) binds each external
+operation to its MCP connection configuration and OAuth login generation.
+Changing the selected server, executable, environment or authentication settings
+requires a new approval before the replacement transport is started.
+
 | Capability | Supported surface |
 | --- | --- |
 | Tools | stdio and Streamable HTTP; discovery, pagination, validation, calls, approvals |

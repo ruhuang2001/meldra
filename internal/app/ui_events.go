@@ -70,6 +70,8 @@ const (
 // ApprovalRequest contains the complete user-visible operation before it is
 // applied. UI implementations must default to rejection when unavailable.
 type ApprovalRequest struct {
+	MCPServer      string          `json:"mcp_server,omitempty"`
+	MCPBinding     string          `json:"mcp_binding,omitempty"`
 	Source         string          `json:"source,omitempty"`
 	WorkspaceState json.RawMessage `json:"workspace_state,omitempty"`
 	Kind           ApprovalKind
