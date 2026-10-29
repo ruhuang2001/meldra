@@ -87,7 +87,7 @@ def command_image_policy(binary, output):
 
 def web_approval(binary, output, origin):
     with Case(binary, output, 'web-approval', [
-        {'calls': [('web_fetch', {'url': 'https://source.example/article'})]}, {'text': 'WEB_RESUME_COMPLETE'}
+        {'calls': [('web_fetch', {'url': 'https://source.example/article?a=1&b=2'})]}, {'text': 'WEB_RESUME_COMPLETE'}
     ]) as case:
         origin.attach(case, hosted=True)
         before = len(origin.calls)
