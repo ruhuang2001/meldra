@@ -25,7 +25,13 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 		if command.Err != nil {
 			return "", fmt.Errorf("MCP executable cannot be resolved")
 		}
-		path, err := filepath.EvalSymlinks(command.Path)
+		path := command.Path
+		// exec.Cmd resolves a relative executable after changing to Cmd.Dir.
+		// Use the same base, including PATH lookups that retain a relative path.
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(command.Dir, path)
+		}
+		path, err := filepath.EvalSymlinks(path)
 		if err != nil {
 			return "", fmt.Errorf("MCP executable cannot be resolved")
 		}

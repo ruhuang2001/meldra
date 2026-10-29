@@ -152,8 +152,8 @@ class Case:
         dump(self.directory / 'provider-requests.json', self.requests)
         dump(self.directory / 'server-errors.json', self.errors)
 
-    def run(self, args, stdin='', timeout=30, success=True, label='cli'):
-        result = subprocess.run([str(self.binary), *args], cwd=self.workspace, env=self.env,
+    def run(self, args, stdin='', timeout=30, success=True, label='cli', run_cwd=None):
+        result = subprocess.run([str(self.binary), *args], cwd=run_cwd or self.workspace, env=self.env,
                                 input=stdin, capture_output=True, text=True, timeout=timeout)
         write(self.directory / (label + '.stdout.txt'), result.stdout)
         write(self.directory / (label + '.stderr.txt'), result.stderr)

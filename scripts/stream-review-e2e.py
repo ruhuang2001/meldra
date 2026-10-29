@@ -101,10 +101,19 @@ def mcp(binary, output, variant):
         log = case.directory / 'mcp-operations.jsonl'
         config = {'command': sys.executable, 'args': [str(script), 'original', str(log)],
                   'env': {'FIXTURE_CONFIG_SECRET': 'PRIVATE_MCP_CONFIG_CANARY'}, 'env_vars': ['FIXTURE_INHERITED']}
+        relative = variant in ('relative','relative-changed')
+        if relative:
+            executable = write(case.workspace / 'server', '#!/bin/sh\nexec '+sys.executable+' "$@"\n')
+            executable.chmod(0o700)
+            config['command'] = './server'
         case.env['FIXTURE_INHERITED'] = 'original'
         dump(case.state / 'mcp.json', {'mcpServers': {'fixture': config}})
         (case.state / 'mcp.json').chmod(0o600)
-        first = approval(case.chat(flags=['--output-format', 'stream-json'], success=False))
+        if relative:
+            first = approval(case.run(['--workspace', str(case.workspace), '--prompt', 'Review relative command.', '--output-format', 'stream-json'],
+                                      success=False, label='relative-first', run_cwd=case.directory))
+        else:
+            first = approval(case.chat(flags=['--output-format', 'stream-json'], success=False))
         if variant == 'args': config['args'][1] = 'replacement'
         if variant == 'env': config['env']['FIXTURE_CONFIG_SECRET'] = 'CHANGED_SECRET_CANARY'
         if variant == 'inherited': case.env['FIXTURE_INHERITED'] = 'replacement'
@@ -116,10 +125,13 @@ def mcp(binary, output, variant):
             fifo = case.directory / 'executable-fifo'
             os.mkfifo(fifo,0o700)
             config['command'] = str(fifo)
+        if variant == 'relative-changed':
+            write(executable, '#!/bin/sh\n# changed executable content\nexec '+sys.executable+' "$@"\n')
+            executable.chmod(0o700)
         dump(case.state / 'mcp.json', {'mcpServers': {'fixture': config}})
-        success = variant in ('tool', 'catalog')
+        success = variant in ('tool', 'catalog', 'relative')
         if success: case.steps.append({})
-        result = resume(case, first, success=success, label='mcp-resume')
+        result = resume(case, first, success=success, label='mcp-resume', **({'run_cwd':case.directory} if relative else {}))
         records = case.audit()
         operations = [json.loads(line) for line in log.read_text().splitlines()]
         calls = [row for row in operations if row['method'] in ('tools/call', 'resources/read')]
@@ -231,7 +243,7 @@ def main():
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     scenarios = {**{'undo-' + variant: lambda v=variant: undo(binary, output, v) for variant in ('none','file','rules','missing','corrupt')},
-                 **{'mcp-' + variant: lambda v=variant: mcp(binary, output, v) for variant in ('tool','catalog','args','env','inherited','executable','fifo')},
+                 **{'mcp-' + variant: lambda v=variant: mcp(binary, output, v) for variant in ('tool','catalog','args','env','inherited','executable','fifo','relative','relative-changed')},
                  **{'mcp-http-' + variant: lambda v=variant: mcp_http(binary, output, v) for variant in ('same','url','auth','auth-name','oauth-generation')},
                  **{'signal-' + label: lambda s=signum: cancellation(binary, output, s) for label, signum in [('int', signal.SIGINT),('term', signal.SIGTERM)]}}
     report = {'passed': False, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'scenarios': []}
