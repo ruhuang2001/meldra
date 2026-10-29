@@ -259,7 +259,7 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 	return w.guardedDefinitions([]ToolDefinition{
 		{Name: "read_file", Description: "Read a file inside the workspace (never .git), with numbered, bounded line chunks.", Parameters: objectSchema(map[string]any{"path": str("Workspace-relative path, or an absolute path inside the workspace."), "offset": nullableInteger("Optional 1-based starting line; use null for 1."), "limit": nullableInteger("Optional line count; use null for 200 and values are capped.")}, []string{"path", "offset", "limit"}), Function: w.bindTool(w.readFile)},
 		{Name: "list_files", Description: "Recursively list relative paths inside the workspace without following symlink directories or entering .git.", Parameters: objectSchema(map[string]any{"path": nullableString("Directory inside the workspace; use null for workspace root.")}, []string{"path"}), Function: w.bindTool(w.listFiles)},
-		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text to find."), "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results"}), Function: w.bindTool(w.searchFiles)},
+		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text or RE2 regular expression to find."), "regex": map[string]any{"type": []string{"boolean", "null"}, "description": "Use RE2 regular expressions; null or false preserves literal matching."}, "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results", "regex"}), Function: w.bindTool(w.searchFiles)},
 		{Name: "edit_file", Description: "Replace exact text once, or create a missing file with empty old_str. Prints a unified diff and requires [y/N] confirmation unless auto-approved. Paths must stay in the workspace and outside .git.", Parameters: objectSchema(map[string]any{"path": str("Target path inside workspace."), "old_str": str("Exact text occurring once; empty only to create."), "new_str": str("Replacement or new file contents.")}, []string{"path", "old_str", "new_str"}), Function: w.bindTool(w.editFile)},
 		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.bindTool(w.applyPatch)},
 		{Name: "undo_last_change", Description: "Undo the last successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
@@ -577,13 +577,22 @@ func (w *Workspace) listFiles(raw json.RawMessage) (string, error) {
 func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 	var in struct {
 		Query, Path, Glob string
-		MaxResults        int `json:"max_results"`
+		Regex             bool `json:"regex"`
+		MaxResults        int  `json:"max_results"`
 	}
 	if err := decodeToolInput(raw, &in, "query"); err != nil {
 		return "", err
 	}
 	if in.Query == "" {
 		return "", fmt.Errorf("query must not be empty")
+	}
+	var pattern *regexp.Regexp
+	if in.Regex {
+		var err error
+		pattern, err = regexp.Compile(in.Query)
+		if err != nil {
+			return "", fmt.Errorf("invalid search regular expression: %w", err)
+		}
 	}
 	p, err := w.resolve(in.Path, false)
 	if err != nil {
@@ -680,8 +689,18 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 				binary = true
 				break
 			}
-			if bytes.Contains(line, query) {
-				fmt.Fprintf(&out, "%s:%d:%s\n", rel, lineNumber, line)
+			matches := false
+			if pattern != nil {
+				matches = pattern.Match(line)
+			} else {
+				matches = bytes.Contains(line, query)
+			}
+			if matches {
+				if pattern != nil && len(line) > 16<<10 {
+					fmt.Fprintf(&out, "%s:%d:%s\n", rel, lineNumber, truncateUTF8Text(string(line[:16<<10]), 16<<10, true))
+				} else {
+					fmt.Fprintf(&out, "%s:%d:%s\n", rel, lineNumber, line)
+				}
 				hits++
 				if hits >= max || out.Len() >= maxToolOutput {
 					bounded = true

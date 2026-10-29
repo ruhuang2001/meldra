@@ -12,6 +12,20 @@ across files and matches lines without allocating a string for every line.
 Literal matching, line numbers, glob filtering, cancellation, and existing
 resource limits are unchanged. This optimization is not included in v0.4.2.
 
+## Search and session titles
+
+**Unreleased.** `search_files` accepts `regex: true` for Go's RE2 regular
+expressions. Omitting it, passing null, or setting false retains literal matching.
+Invalid patterns return a tool error. Existing result, file, scan and cancellation
+limits still apply; regex results retain at most 16 KiB per matching line, marked
+when truncated. Patterns match the complete scanned line before output is bounded.
+
+**Unreleased.** New sessions get a deterministic title from their first nonempty
+user message: whitespace is collapsed and the first 60 Unicode characters are
+retained. Session lists and the resume picker show this title, which remains
+stable across later turns. Legacy snapshots without a title remain readable and
+receive a title from their earliest retained user message on their next turn.
+
 ## Project instructions
 
 Meldra reads `AGENTS.md` from the canonical workspace root before requesting a

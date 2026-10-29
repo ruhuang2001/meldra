@@ -160,7 +160,7 @@ def main():
         run(['go', 'build', *build_flags, '-o', str(binary), '.'], directory, 'go-build', build_env)
         scripts = ('capability-e2e',) if args.fast else (
             'mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e',
-            'mcp-oauth-regression-e2e', 'capability-e2e')
+            'mcp-oauth-regression-e2e', 'capability-e2e', 'quality-of-life-e2e', 'provider-compat-e2e')
 
         def suite(script):
             suite_started = time.monotonic()

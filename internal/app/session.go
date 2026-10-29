@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"meldra/internal/tool"
 )
@@ -43,6 +44,7 @@ type SessionMessage struct {
 }
 
 type Session struct {
+	Title                             string            `json:"title,omitempty"`
 	PolicyGeneration                  uint64            `json:"policy_generation,omitzero"`
 	ApprovedPlanDigest                string            `json:"approved_plan_digest,omitempty"`
 	Mode                              ExecutionMode     `json:"mode,omitempty"`
@@ -398,6 +400,9 @@ func readSessionFile(path string) ([]byte, error) {
 }
 
 func validateSession(session *Session, expectedID string) error {
+	if !utf8.ValidString(session.Title) || utf8.RuneCountInString(session.Title) > 60 {
+		return fmt.Errorf("invalid session title")
+	}
 	if _, err := newRuntimePolicy(session.Mode, session.Permissions); err != nil {
 		return err
 	}
@@ -471,6 +476,8 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 			err = decoder.Decode(&session.Permissions)
 		case "id":
 			err = decoder.Decode(&session.ID)
+		case "title":
+			err = decoder.Decode(&session.Title)
 		case "workspace":
 			err = decoder.Decode(&session.Workspace)
 		case "created_at":
@@ -562,7 +569,23 @@ func (s *Session) appendMessage(role, content string) {
 		return
 	}
 	content = truncateSessionMessage(content)
+
 	s.Messages = append(s.Messages, SessionMessage{Role: role, Content: content})
+}
+
+// ensureTitle derives metadata from the earliest retained user request.
+func (s *Session) ensureTitle() {
+	if s.Title != "" {
+		return
+	}
+	for _, message := range s.Messages {
+		if message.Role != "user" || strings.TrimSpace(message.Content) == "" {
+			continue
+		}
+		title := []rune(strings.Join(strings.Fields(message.Content), " "))
+		s.Title = string(title[:min(len(title), 60)])
+		return
+	}
 }
 
 func truncateSessionMessage(content string) string {

@@ -199,6 +199,7 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 		}
 		if a.session != nil {
 			a.session.appendMessage("user", r.Text)
+			a.session.ensureTitle()
 			a.session.Messages[len(a.session.Messages)-1].References = refs
 			a.session.Messages[len(a.session.Messages)-1].ControlID = r.ID
 			a.session.PreviousResponseID = ""

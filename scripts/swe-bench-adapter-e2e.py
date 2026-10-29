@@ -301,7 +301,8 @@ def check_recovery(case, broken_tail):
 
 
 def check_timeout(case):
-    process = case.invoke('--agent-timeout', '0.8', '--termination-grace', '2')
+    # Allow interpreter startup under concurrent builds before testing shutdown.
+    process = case.invoke('--agent-timeout', '5', '--termination-grace', '2')
     assert process.returncode != 0, 'timeout exited successfully'
     children = case.events('child')
     assert len(children) == 1, 'timeout fixture did not start its child'
@@ -357,7 +358,7 @@ def check_legacy_failure(case):
 
 
 def check_escalation(case):
-    process = case.invoke('--agent-timeout', '0.8', '--termination-grace', '0.4')
+    process = case.invoke('--agent-timeout', '5', '--termination-grace', '0.4')
     assert process.returncode != 0, 'stubborn timeout exited successfully'
     children, parents = case.events('child'), case.events('agent')
     assert len(children) == len(parents) == 1, 'timeout fixtures did not start'

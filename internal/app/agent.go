@@ -348,6 +348,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	if a.session != nil {
 		a.session.appendMessage("user", userInput)
+		a.session.ensureTitle()
 		a.session.Messages[len(a.session.Messages)-1].References = references
 		if selected != nil {
 			a.session.Messages[len(a.session.Messages)-1].ControlID = selected.ID

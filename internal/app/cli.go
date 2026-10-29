@@ -482,7 +482,10 @@ func sessionWorkspaceLabel(session Session) string {
 }
 
 func sessionListPreview(session Session) string {
-	preview := session.Summary
+	preview := session.Title
+	if preview == "" {
+		preview = session.Summary
+	}
 	if preview == "" {
 		for index := len(session.Messages) - 1; index >= 0; index-- {
 			if session.Messages[index].Role == "user" {
