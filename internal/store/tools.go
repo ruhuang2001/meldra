@@ -34,7 +34,7 @@ func (s *Store) PlanTool(ctx context.Context, l *Lease, c task.ToolCall) (task.T
 	if len(c.Name) > 256 || len(c.ProviderCallID) > 1024 || len(c.ReplayScope) > 128 {
 		return c, task.ErrLimit
 	}
-	if c.Effect != task.Read && c.Effect != task.Write && c.Effect != task.Command {
+	if c.Effect != task.Read && c.Effect != task.ExternalRead && c.Effect != task.Write && c.Effect != task.Command {
 		return c, errors.New("tool call requires a known effect")
 	}
 	if len(c.Arguments) == 0 {

@@ -680,6 +680,9 @@ func newChatRuntime(
 		return nil, err
 	}
 	workspace.SetContext(ctx)
+	if err := workspace.configureWeb(settings); err != nil {
+		return nil, err
+	}
 	if session != nil {
 		canonical, err := canonicalWorkspacePath(session.Workspace)
 		if err != nil {
@@ -909,6 +912,9 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 }
 
 func effectiveSettings(settings Settings) (Settings, error) {
+	if settings.WebFetchBackend == "" {
+		settings.WebFetchBackend = "builtin"
+	}
 	if settings.Model == "" {
 		settings.Model = defaultModel
 	}
@@ -932,6 +938,9 @@ func effectiveSettings(settings Settings) (Settings, error) {
 }
 
 func overlayEnvironment(settings Settings) (Settings, error) {
+	if value := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")); value != "" {
+		settings.DeepSeekAPIKey = value
+	}
 	if value := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); value != "" {
 		settings.APIKey = value
 	}

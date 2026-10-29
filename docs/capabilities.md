@@ -26,6 +26,14 @@ retained. Session lists and the resume picker show this title, which remains
 stable across later turns. Legacy snapshots without a title remain readable and
 receive a title from their earliest retained user message on their next turn.
 
+## Web tools
+
+**Unreleased:** [Web fetch and search](web-tools.md) add approved external reads
+in Build and Plan mode. Builtin fetch needs no service key; DeepSeek search is
+exposed only when configured. The workspace-edit permission profile does not
+bypass network disclosure approval. These tools do not grant file or command
+permissions, and fetched content remains untrusted data.
+
 ## Project instructions
 
 Meldra reads `AGENTS.md` from the canonical workspace root before requesting a

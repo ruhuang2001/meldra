@@ -75,6 +75,7 @@ func validateChangeCount(count int) error {
 
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
+	web                webRuntime
 	processes          *processManager
 	commandTimeout     int
 	commandOutput      func(CommandOutput)
@@ -256,7 +257,7 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 	nullableInteger := func(desc string) map[string]any {
 		return map[string]any{"type": []string{"integer", "null"}, "description": desc}
 	}
-	return w.guardedDefinitions([]ToolDefinition{
+	definitions := []ToolDefinition{
 		{Name: "read_file", Description: "Read a file inside the workspace (never .git), with numbered, bounded line chunks.", Parameters: objectSchema(map[string]any{"path": str("Workspace-relative path, or an absolute path inside the workspace."), "offset": nullableInteger("Optional 1-based starting line; use null for 1."), "limit": nullableInteger("Optional line count; use null for 200 and values are capped.")}, []string{"path", "offset", "limit"}), Function: w.bindTool(w.readFile)},
 		{Name: "list_files", Description: "Recursively list relative paths inside the workspace without following symlink directories or entering .git.", Parameters: objectSchema(map[string]any{"path": nullableString("Directory inside the workspace; use null for workspace root.")}, []string{"path"}), Function: w.bindTool(w.listFiles)},
 		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text or RE2 regular expression to find."), "regex": map[string]any{"type": []string{"boolean", "null"}, "description": "Use RE2 regular expressions; null or false preserves literal matching."}, "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results", "regex"}), Function: w.bindTool(w.searchFiles)},
@@ -266,7 +267,8 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout defaults to the configured command deadline (600 seconds) and is capped at 86400 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; null uses the configured default (600), maximum 86400.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
 		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.bindTool(w.verify)},
 		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
-	})
+	}
+	return w.guardedDefinitions(append(definitions, w.webToolDefinitions()...))
 }
 
 func (w *Workspace) resolve(name string, write bool) (string, error) {
