@@ -14,6 +14,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2
 	github.com/openai/openai-go/v3 v3.85.1
 	go.yaml.in/yaml/v3 v3.0.5
+	golang.org/x/net v0.60.0
 	golang.org/x/oauth2 v0.37.0
 	modernc.org/sqlite v1.61.0
 )

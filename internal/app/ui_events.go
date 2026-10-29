@@ -54,8 +54,9 @@ func (f UIEventSinkFunc) Emit(event UIEvent) {
 type ApprovalKind string
 
 const (
-	ApprovalChanges ApprovalKind = "changes"
-	ApprovalCommand ApprovalKind = "command"
+	ApprovalChanges      ApprovalKind = "changes"
+	ApprovalCommand      ApprovalKind = "command"
+	ApprovalExternalRead ApprovalKind = "external_read"
 )
 
 // ApprovalRequest contains the complete user-visible operation before it is

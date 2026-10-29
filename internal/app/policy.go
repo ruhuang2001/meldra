@@ -86,6 +86,8 @@ const (
 
 func classifyOperation(name string, input json.RawMessage) operationClass {
 	switch name {
+	case "web_fetch", "web_search":
+		return operationRead
 	case "read_project_context", "read_file", "read_skill", "list_files", "search_files", "session_status", "git_review", "process_status", "wait_process":
 		return operationRead
 	case "update_plan", "save_summary":

@@ -92,6 +92,36 @@ macOS/Linux, connection cleanup terminates the server's process group. Processes
 that deliberately detach from the group can survive; SIGKILL or power loss cannot
 guarantee cleanup. Restart chat after changing configuration.
 
+## Optional fetch and Tavily servers
+
+**Unreleased documentation.** Meldra's built-in [web tools](web-tools.md) work
+without an MCP server. To use an external fetch implementation or Tavily search,
+install the relevant runtime (`uv` for Fetch, Node.js/npm for Tavily) and add:
+
+```json
+{
+  "mcpServers": {
+    "fetch": {
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    },
+    "tavily": {
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env_vars": ["TAVILY_API_KEY"]
+    }
+  }
+}
+```
+
+Set `TAVILY_API_KEY` in the environment before starting Meldra. These commands
+download and execute third-party packages with OS-user privileges; pin reviewed
+package versions for reproducible installations. Fetch/Tavily calls use normal
+external MCP approvals and records, not the built-in web client's SSRF guards.
+Queries and URLs are disclosed to the configured service. Follow the upstream
+[Fetch server](https://github.com/modelcontextprotocol/servers/tree/main/src/fetch)
+and [Tavily MCP](https://github.com/tavily-ai/tavily-mcp) documentation.
+
 ## Authentication
 
 Meldra reads MCP configuration from `~/.meldra/mcp.json` or

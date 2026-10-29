@@ -1,5 +1,9 @@
 # Meldra
 
+**Unreleased:** public-page fetching and optional DeepSeek web search share
+Meldra's approvals and durable task records. See [Web tools](docs/web-tools.md)
+for configuration, third-party disclosure and network safety boundaries.
+
 <p align="center">
   <img src="docs/assets/icon.png" alt="Meldra" width="128">
 </p>

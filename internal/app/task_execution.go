@@ -220,6 +220,8 @@ func (e *taskExecution) event(ctx context.Context, kind, status string, data any
 }
 func toolEffect(name string) task.Effect {
 	switch name {
+	case "web_fetch", "web_search":
+		return task.ExternalRead
 	case "edit_file", "apply_patch", "undo_last_change", "update_plan", "save_summary":
 		return task.Write
 	case "run_command", "verify":

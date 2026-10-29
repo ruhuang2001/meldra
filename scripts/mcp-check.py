@@ -161,6 +161,8 @@ def main():
         scripts = ('capability-e2e', 'images-e2e') if args.fast else (
             'mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e',
             'mcp-oauth-regression-e2e', 'capability-e2e', 'quality-of-life-e2e', 'provider-compat-e2e', 'images-e2e')
+        if Path('scripts/web-e2e.py').exists():
+            scripts += ('web-e2e',)
 
         def suite(script):
             suite_started = time.monotonic()

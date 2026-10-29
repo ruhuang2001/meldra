@@ -39,10 +39,13 @@ const defaultConfigTemplate = `# Meldra configuration.
 # allow_insecure_base_url = false
 # max_provider_response_bytes = 33554432
 # max_custom_turn_input_bytes = 4194304
+# web.fetch_backend = "builtin"
+# web.search_backend = "deepseek"
 `
 
 const defaultCredentialsTemplate = `# Meldra credentials. Keep this file private.
 # OPENAI_API_KEY="replace_with_your_api_key"
+# DEEPSEEK_API_KEY="separate_key_for_optional_web_backend"
 `
 
 // ConfigPaths contains every file that belongs to one Meldra configuration.
@@ -56,6 +59,8 @@ type ConfigPaths struct {
 
 // Config contains non-secret settings stored in config.toml.
 type Config struct {
+	WebFetchBackend          string
+	WebSearchBackend         string
 	Model                    string
 	BaseURL                  string
 	AllowInsecureBaseURL     bool
@@ -65,13 +70,17 @@ type Config struct {
 
 // Credentials contains the secret settings stored in credentials.env.
 type Credentials struct {
-	OpenAIAPIKey string
+	OpenAIAPIKey   string
+	DeepSeekAPIKey string
 }
 
 // Settings is the combined file-based Meldra configuration. Environment and
 // command-line overrides intentionally belong to the caller, so their
 // precedence stays explicit at the CLI boundary.
 type Settings struct {
+	WebFetchBackend          string
+	WebSearchBackend         string
+	DeepSeekAPIKey           string
 	Model                    string
 	BaseURL                  string
 	AllowInsecureBaseURL     bool
@@ -82,6 +91,9 @@ type Settings struct {
 
 // ConfigShow is safe to display or serialize: APIKey is always redacted.
 type ConfigShow struct {
+	WebFetchBackend          string `json:"web_fetch_backend"`
+	WebSearchBackend         string `json:"web_search_backend"`
+	DeepSeekAPIKey           string `json:"deepseek_api_key"`
 	Home                     string `json:"home"`
 	ConfigFile               string `json:"config_file"`
 	CredentialsFile          string `json:"credentials_file"`
@@ -192,7 +204,7 @@ func LoadCredentials(paths ConfigPaths) (Credentials, error) {
 		// the API key itself. Do not propagate dependency error details.
 		return Credentials{}, fmt.Errorf("parse credentials file %s: invalid credentials syntax", paths.CredentialsFile)
 	}
-	return Credentials{OpenAIAPIKey: values["OPENAI_API_KEY"]}, nil
+	return Credentials{OpenAIAPIKey: values["OPENAI_API_KEY"], DeepSeekAPIKey: values["DEEPSEEK_API_KEY"]}, nil
 }
 
 // LoadSettings combines the file-based config and credentials. It does not
@@ -208,6 +220,9 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 		return Settings{}, err
 	}
 	return Settings{
+		WebFetchBackend:          config.WebFetchBackend,
+		WebSearchBackend:         config.WebSearchBackend,
+		DeepSeekAPIKey:           credentials.DeepSeekAPIKey,
 		Model:                    config.Model,
 		BaseURL:                  config.BaseURL,
 		AllowInsecureBaseURL:     config.AllowInsecureBaseURL,
@@ -221,6 +236,9 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 // permissions. API keys are deliberately not part of Config and cannot be
 // written through this method.
 func SaveConfig(paths ConfigPaths, config Config) error {
+	if err := validateWebBackends(config.WebFetchBackend, config.WebSearchBackend); err != nil {
+		return err
+	}
 	if err := validateConfigValue("model", config.Model); err != nil {
 		return err
 	}
@@ -255,13 +273,19 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	if config.MaxCustomTurnInputBytes != 0 {
 		contents += "max_custom_turn_input_bytes = " + strconv.FormatInt(config.MaxCustomTurnInputBytes, 10) + "\n"
 	}
+	if config.WebFetchBackend != "" {
+		contents += "web.fetch_backend = " + strconv.Quote(config.WebFetchBackend) + "\n"
+	}
+	if config.WebSearchBackend != "" {
+		contents += "web.search_backend = " + strconv.Quote(config.WebSearchBackend) + "\n"
+	}
 	if err := writePrivateFile(paths, paths.ConfigFile, []byte(contents)); err != nil {
 		return fmt.Errorf("write config file: %w", err)
 	}
 	return nil
 }
 
-// SaveAPIKey replaces credentials.env with a single OPENAI_API_KEY entry.
+// SaveAPIKey replaces OPENAI_API_KEY while preserving the independent web key.
 // Callers should avoid accepting API keys directly as a positional shell
 // argument because shells commonly retain those arguments in history.
 func SaveAPIKey(paths ConfigPaths, apiKey string) error {
@@ -274,6 +298,13 @@ func SaveAPIKey(paths ConfigPaths, apiKey string) error {
 
 	contents := "# Meldra credentials. Keep this file private.\n" +
 		"OPENAI_API_KEY=" + strconv.Quote(apiKey) + "\n"
+	existing, err := LoadCredentials(paths)
+	if err != nil {
+		return err
+	}
+	if existing.DeepSeekAPIKey != "" {
+		contents += "DEEPSEEK_API_KEY=" + strconv.Quote(existing.DeepSeekAPIKey) + "\n"
+	}
 	if err := writePrivateFile(paths, paths.CredentialsFile, []byte(contents)); err != nil {
 		return fmt.Errorf("write credentials file: %w", err)
 	}
@@ -295,6 +326,9 @@ func ShowConfig(paths ConfigPaths) (ConfigShow, error) {
 // always redacted, even when the given Settings came from another source.
 func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 	return ConfigShow{
+		WebFetchBackend:          settings.WebFetchBackend,
+		WebSearchBackend:         settings.WebSearchBackend,
+		DeepSeekAPIKey:           RedactSecret(settings.DeepSeekAPIKey),
 		Home:                     paths.Home,
 		ConfigFile:               paths.ConfigFile,
 		CredentialsFile:          paths.CredentialsFile,
@@ -310,7 +344,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\nopenai_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
@@ -320,6 +354,9 @@ func FormatConfigShow(show ConfigShow) string {
 		show.MaxProviderResponseBytes,
 		show.MaxCustomTurnInputBytes,
 		show.APIKey,
+		displayValue(show.WebFetchBackend),
+		displayValue(show.WebSearchBackend),
+		show.DeepSeekAPIKey,
 	)
 }
 
@@ -585,6 +622,7 @@ func validateCustomTurnInputLimit(value int64) error {
 func parseConfigTOML(contents string) (Config, error) {
 	var config Config
 	seen := make(map[string]bool)
+	section := ""
 
 	for lineNumber, rawLine := range strings.Split(contents, "\n") {
 		line := strings.TrimSpace(stripTOMLComment(rawLine))
@@ -592,7 +630,11 @@ func parseConfigTOML(contents string) (Config, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "[") {
-			return Config{}, fmt.Errorf("line %d: TOML sections are not supported", lineNumber+1)
+			if line != "[web]" || section != "" {
+				return Config{}, fmt.Errorf("line %d: only one [web] TOML section is supported", lineNumber+1)
+			}
+			section = "web."
+			continue
 		}
 
 		key, rawValue, ok := strings.Cut(line, "=")
@@ -600,9 +642,24 @@ func parseConfigTOML(contents string) (Config, error) {
 			return Config{}, fmt.Errorf("line %d: expected key = value", lineNumber+1)
 		}
 		key = strings.TrimSpace(key)
+		key = section + key
 		rawValue = strings.TrimSpace(rawValue)
 
 		switch key {
+		case "web.fetch_backend", "web.search_backend":
+			if seen[key] {
+				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
+			}
+			seen[key] = true
+			value, err := parseTOMLString(rawValue)
+			if err != nil {
+				return Config{}, fmt.Errorf("line %d: %s: %w", lineNumber+1, key, err)
+			}
+			if key == "web.fetch_backend" {
+				config.WebFetchBackend = value
+			} else {
+				config.WebSearchBackend = value
+			}
 		case "model", "base_url":
 			if seen[key] {
 				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
@@ -663,10 +720,16 @@ func parseConfigTOML(contents string) (Config, error) {
 			}
 			config.MaxCustomTurnInputBytes = value
 		default:
+			if strings.HasPrefix(key, "web.") {
+				return Config{}, fmt.Errorf("line %d: unknown web setting %q", lineNumber+1, key)
+			}
 			// Unknown top-level keys are deliberately ignored. That makes config
 			// files forward-compatible without permitting unknown keys to affect
 			// credentials, workspace boundaries, or other security policy.
 		}
+	}
+	if err := validateWebBackends(config.WebFetchBackend, config.WebSearchBackend); err != nil {
+		return Config{}, err
 	}
 	return config, nil
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -79,6 +80,23 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		return err
 	}
 	workspace.policy = policy
+	// Existing MCP users need no config files. Validate the private directory
+	// before reading any file, but preserve startup with an empty state root.
+	var settings Settings
+	_, configErr := os.Lstat(paths.ConfigFile)
+	_, credentialsErr := os.Lstat(paths.CredentialsFile)
+	if !os.IsNotExist(configErr) || !os.IsNotExist(credentialsErr) {
+		settings, err = LoadSettings(paths)
+		if err != nil {
+			return err
+		}
+	}
+	if value := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")); value != "" {
+		settings.DeepSeekAPIKey = value
+	}
+	if err := workspace.configureWeb(settings); err != nil {
+		return err
+	}
 	workspace.projectContext = NewProjectContext(workspace)
 	definitions := workspace.ToolDefinitions()
 	definitions = append(definitions, workspace.projectContext.ContextTool())
@@ -126,7 +144,11 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		invocationRegistry := registry
 		if declined {
 			invocationRegistry, err = tool.New([]ToolDefinition{{Name: name, Function: workspace.bindTool(func(json.RawMessage) (string, error) {
-				workspace.requestApproval(ApprovalRequest{Kind: ApprovalCommand, Title: "Call " + name, Detail: string(raw)})
+				request := ApprovalRequest{Kind: ApprovalCommand, Title: "Call " + name, Detail: string(raw)}
+				if toolEffect(name) == task.ExternalRead {
+					request = workspace.webApproval(name, raw)
+				}
+				workspace.requestApproval(request)
 				return "Declined; operation was not executed.", nil
 			})}})
 			if err != nil {
@@ -211,6 +233,9 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					}
 					state := rand.Text()
 					message := "Allow " + definition.Name + " with arguments " + string(req.Params.Arguments) + "?"
+					if toolEffect(definition.Name) == task.ExternalRead {
+						message = workspace.webApproval(definition.Name, req.Params.Arguments).Detail + "\nAllow external web read?"
+					}
 					if definition.Name == "undo_last_change" {
 						if len(workspace.last) == 0 {
 							approvalMu.Unlock()

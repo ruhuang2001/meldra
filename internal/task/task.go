@@ -44,9 +44,10 @@ const (
 	ToolCancelled ToolStatus = "cancelled"
 	ToolUnknown   ToolStatus = "unknown"
 
-	Read    Effect = "read"
-	Write   Effect = "write"
-	Command Effect = "command"
+	Read         Effect = "read"
+	ExternalRead Effect = "external_read"
+	Write        Effect = "write"
+	Command      Effect = "command"
 
 	Pending  Decision = "pending"
 	Approved Decision = "approved"
