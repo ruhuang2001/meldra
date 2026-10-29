@@ -80,6 +80,10 @@
     {
       "source": "/swe-bench-setup.md",
       "destination": "/swe-bench-setup"
+    },
+    {
+      "source": "/providers.md",
+      "destination": "/providers"
     }
   ],
   "navigation": {
@@ -104,6 +108,7 @@
           "mcp-support",
           "skills",
           "configuration",
+          "providers",
           "upgrading"
         ]
       },

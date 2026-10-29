@@ -57,7 +57,7 @@ permissions; use automatic approval only in an isolated environment.
 
 The [documentation](docs/index.md) has the [Quickstart](docs/quickstart.md),
 [capabilities and controls](docs/capabilities.md), [MCP](docs/mcp-support.md),
-[Skills](docs/skills.md), [task storage and recovery](docs/task-storage.md), and
+[Skills](docs/skills.md), [providers](docs/providers.md), [task storage and recovery](docs/task-storage.md), and
 [architecture](docs/architecture.md). These pages also power the Mintlify site. Release highlights are in the
 [site changelog](docs/changelog.mdx); generated technical history is in
 [CHANGELOG.md](CHANGELOG.md).

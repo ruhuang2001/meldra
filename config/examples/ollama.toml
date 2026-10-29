@@ -1,0 +1,6 @@
+# Verify Responses and function-tool support in the installed Ollama version.
+model = "your-tool-capable-model"
+base_url = "http://127.0.0.1:11434/v1"
+allow_insecure_base_url = true
+max_provider_response_bytes = 33554432
+max_custom_turn_input_bytes = 4194304
