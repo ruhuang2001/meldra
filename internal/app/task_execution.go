@@ -384,8 +384,11 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 	}
 	e.pendingApprovalID = ""
 	mode, permissions, generation := e.workspace.policy.snapshot()
-	preview := approvalDetail{Title: request.Title, Detail: truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]"), Source: request.Source, Mode: mode, Permissions: permissions, Generation: generation}
+	preview := approvalDetail{Title: request.Title, Detail: truncateUTF8(request.Detail, maxApprovalPreviewBytes/2, "\n[truncated]"), Source: request.Source, Mode: mode, Permissions: permissions, Generation: generation, MCPServer: request.MCPServer, MCPBinding: request.MCPBinding}
 	if e.noninteractive || e.resumeApproval != nil {
+		if request.MCPServer != "" && request.MCPBinding == "" {
+			return fmt.Errorf("MCP approval has no connection binding")
+		}
 		preview.FullDetailHash = digest([]byte(request.Detail))
 		if p := e.workspace.projectContext; p != nil {
 			snapshot, err := p.Refresh()
@@ -400,6 +403,13 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 			p.mu.Unlock()
 			slices.Sort(preview.ContextPaths)
 		}
+	}
+	if e.current.Name == "undo_last_change" && (e.noninteractive || e.resumeApproval != nil) {
+		ref, err := e.saveUndoApproval(ctx)
+		if err != nil {
+			return e.recordingError(ctx, err)
+		}
+		preview.UndoEvidence = &ref
 	}
 	if e.resumeApproval != nil {
 		if !e.matchesApproval(request, preview) {

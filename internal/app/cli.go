@@ -782,6 +782,9 @@ func newChatRuntime(
 		tools = append(tools, skills.definition())
 	}
 	external := &mcpConnections{}
+	if err := checkApprovalConnections(ctx, paths, options, workspace); err != nil {
+		return nil, err
+	}
 	if session.Mode != ModePlan {
 		external, err = connectMCP(ctx, paths, workspace, options.MCPServer, len(tools))
 		if err != nil {

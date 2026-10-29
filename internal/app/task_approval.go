@@ -22,6 +22,9 @@ type approvalDetail struct {
 	ApprovedDetailHash string            `json:"approved_detail_hash,omitempty"`
 	ContextDigest      string            `json:"context_digest,omitempty"`
 	ContextPaths       []string          `json:"context_paths,omitempty"`
+	UndoEvidence       *task.ArtifactRef `json:"undo_evidence,omitempty"`
+	MCPServer          string            `json:"mcp_server,omitempty"`
+	MCPBinding         string            `json:"mcp_binding,omitempty"`
 }
 
 func approvalHash(approval task.Approval) string {
@@ -65,6 +68,9 @@ func (e *taskExecution) loadApproval(ctx context.Context) error {
 		if detail.FullDetailHash == "" {
 			return fmt.Errorf("approval has no exact detail binding")
 		}
+		if detail.MCPServer != "" && (detail.MCPBinding == "" || e.workspace.mcpBindings[detail.MCPServer] != detail.MCPBinding) {
+			return fmt.Errorf("MCP connection configuration changed; request a new approval")
+		}
 		if e.workspace.projectContext != nil {
 			for _, path := range detail.ContextPaths {
 				if err := e.workspace.projectContext.ObservePath(path); err != nil {
@@ -79,6 +85,11 @@ func (e *taskExecution) loadApproval(ctx context.Context) error {
 				return fmt.Errorf("project instructions changed; request a new approval")
 			}
 			if _, err := e.workspace.projectContext.Instructions(); err != nil {
+				return err
+			}
+		}
+		if call.Name == "undo_last_change" {
+			if err := e.restoreUndoApproval(ctx, approval, detail); err != nil {
 				return err
 			}
 		}
@@ -103,5 +114,6 @@ func (e *taskExecution) matchesApproval(request ApprovalRequest, detail approval
 		e.resumeCall.Name == e.current.Name && bytes.Equal(old.WorkspaceState, request.WorkspaceState) &&
 		recorded.Title == detail.Title && recorded.FullDetailHash == detail.FullDetailHash &&
 		recorded.Mode == detail.Mode && recorded.Permissions == detail.Permissions &&
-		recorded.Generation == detail.Generation && recorded.ContextDigest == detail.ContextDigest
+		recorded.Generation == detail.Generation && recorded.ContextDigest == detail.ContextDigest &&
+		recorded.MCPServer == detail.MCPServer && recorded.MCPBinding == detail.MCPBinding
 }

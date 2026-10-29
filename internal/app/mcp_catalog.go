@@ -81,8 +81,8 @@ func (w *Workspace) callMCPCatalog(session *mcp.ClientSession, server, kind stri
 	default:
 		return "", fmt.Errorf("invalid MCP %s action", kind)
 	}
-	detail := fmt.Sprintf("Server: %s\nOperation: %s/%s\nArguments: %s\nExternal resources and prompts may contain private or untrusted content.", server, kind, args.Action, input)
-	if !w.requestApproval(ApprovalRequest{Kind: ApprovalCommand, Title: "Access MCP " + kind + " on " + server, Detail: detail, Prompt: detail + "\nAllow MCP request? [y/N] "}) {
+	detail := fmt.Sprintf("Server: %s\nOperation: %s/%s\nArguments: %s\nExternal resources and prompts may contain private or untrusted content.", server, kind, args.Action, mcpApprovalArguments(input))
+	if !w.requestApproval(ApprovalRequest{MCPServer: server, MCPBinding: w.mcpBindings[server], Kind: ApprovalCommand, Title: "Access MCP " + kind + " on " + server, Detail: detail, Prompt: detail + "\nAllow MCP request? [y/N] "}) {
 		return "Declined; MCP request was not sent.", nil
 	}
 	if err := w.ctx.Err(); err != nil {

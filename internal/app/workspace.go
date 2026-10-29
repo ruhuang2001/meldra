@@ -76,6 +76,8 @@ func validateChangeCount(count int) error {
 // Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
 	web                webRuntime
+	mcpBindings        map[string]string
+	mcpExpectedBinding map[string]string
 	processes          *processManager
 	commandTimeout     int
 	commandOutput      func(CommandOutput)

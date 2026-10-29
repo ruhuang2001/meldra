@@ -125,6 +125,9 @@ func runJSONChat(ctx context.Context, stdout io.Writer, options ChatOptions) (er
 	stream := &jsonStream{encoder: json.NewEncoder(bounded), cancel: cancel}
 	var runtime *chatRuntime
 	defer func() {
+		if ctx.Err() != nil && err == nil {
+			err = context.Cause(ctx)
+		}
 		status, reason := "succeeded", "completed"
 		if err != nil {
 			status, reason = "failed", "error"

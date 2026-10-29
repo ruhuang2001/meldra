@@ -80,6 +80,23 @@ authorize the old operation. Command approval binds the exact executable,
 arguments and execution configuration, not every file arbitrary code might read.
 Command execution still uses your OS user privileges.
 
+Undo approvals persist bounded before/after contents and created-directory
+evidence in a private, digest-checked artifact. Exact resume restores that
+prepared undo only after checking the artifact, paths, current file preimages
+and project instruction scopes. Missing or corrupt evidence fails closed.
+
+MCP approvals also bind the selected server's configuration, resolved executable
+path and content digest, effective environment, URL, authentication configuration
+and OAuth login generation. Only their combined digest is retained in approval
+metadata; literal environment values and credentials are not copied there.
+Changed evidence is rejected before connecting any transport and checked again
+before dispatch. Normal OAuth token refresh keeps the login generation; logout
+or another login invalidates the approval. The digest describes the connection
+configuration, not an assertion about a remote server's current account data.
+Executable inspection is cancellable and limited to regular files up to 1 GiB.
+MCP argument previews use the same compact JSON representation before and after
+persistence, so whitespace and JSON escaping do not invalidate unchanged calls.
+
 `--auto-approve` should be used **only in an isolated environment**, such as a
 disposable CI container or VM. It is the noninteractive equivalent of approving
 eligible operations; it is not an OS sandbox and never expands Plan mode. It
