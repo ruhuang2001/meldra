@@ -1,5 +1,11 @@
 # Foreground task storage contract
 
+**Unreleased:** [Stream JSON](stream-json.md) can leave a clean foreground Run
+in `waiting_approval` after releasing its leases. Its operation is recorded as
+cancelled before admission; `task resume --approve-detail-hash` revalidates the
+exact recorded operation under a new lease. Crash-incomplete approvals remain
+subject to ordinary explicit recovery and never grant hash-based approval.
+
 Status: database schema 2; the event envelope remains schema 1. Schema 1 databases
 are migrated transactionally to add process records, preserving existing history.
 Older binaries reject the newer database rather than rewriting it. The database

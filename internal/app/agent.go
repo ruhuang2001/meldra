@@ -76,6 +76,9 @@ type Agent struct {
 	store                  SessionSaver
 	backend                provider.Inference
 	events                 UIEventSink
+	completeMessages       bool
+	turnEvents             bool
+	turnIndex              int64
 	model                  string
 	customProvider         bool
 	// streamIdleTimeout is only overridden by tests. A zero value uses the
@@ -251,6 +254,23 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	if a.modeError != nil {
 		return a.modeError
 	}
+	turnStarted := false
+	defer func() {
+		if !turnStarted || !a.turnEvents {
+			return
+		}
+		status := "succeeded"
+		if err != nil {
+			status = "failed"
+		}
+		if cliExitCode(err) == 3 {
+			status = "waiting_approval"
+		}
+		if errors.Is(err, context.Canceled) {
+			status = "cancelled"
+		}
+		a.emit(UIEvent{Kind: UIEventTurnEnd, Status: status})
+	}()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -294,6 +314,11 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			return err
 		}
 		defer func() { err = errors.Join(err, a.execution.finish(ctx, err)) }()
+	}
+	a.turnIndex++
+	turnStarted = true
+	if a.turnEvents {
+		a.emit(UIEvent{Kind: UIEventTurnStart, TurnIndex: a.turnIndex})
 	}
 	if err = a.beginControl(ctx, cancelTurn); err != nil {
 		return err
@@ -363,6 +388,19 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 
 	if err := a.finishSelected(); err != nil {
 		return err
+	}
+	if a.execution != nil && a.execution.resumeCall != nil {
+		call := a.execution.resumeCall
+		results := a.executeToolCallsContext(ctx, []provider.OutputItem{{Type: "function_call", CallID: "approved_" + call.ID, Name: call.Name, Arguments: string(call.Arguments)}}, "approval_"+call.ID)
+		if a.toolFailure != nil {
+			return a.toolFailure
+		}
+		if a.execution.resumeApproval != nil {
+			return fmt.Errorf("approved operation could not be revalidated; request a new approval")
+		}
+		a.execution.resumeCall = nil
+		encoded, _ := json.Marshal(results)
+		modelInput += "\nExplicitly approved operation outcome (execution evidence):\n" + string(encoded)
 	}
 	input, customBaseURLInput, err := a.userInferenceInput(ctx, modelInput, references)
 	if err != nil {
@@ -517,7 +555,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if assistantText != "" {
 			// The final response remains the source of truth for session
 			// persistence. Its text has already been presented from SSE deltas.
-			if !result.StreamedTextShown {
+			if !result.StreamedTextShown || a.completeMessages {
 				a.emitAssistantMessage(assistantText)
 			}
 			if a.session != nil {
@@ -709,11 +747,13 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 		if a.events == nil {
 			fmt.Fprintf(a.writer(), "\u001b[92mtool\u001b[0m: %s\n", sanitizeTerminalText(call.Name))
 		} else {
-			a.emit(UIEvent{Kind: UIEventToolStarted, Name: call.Name})
+			a.emit(UIEvent{Kind: UIEventToolStarted, Name: call.Name, ToolCallID: call.CallID})
 		}
 
 		var result string
 		outcome := ""
+		var durationMS int64
+		var truncated bool
 		var err error
 		if policyErr != nil {
 			if a.execution != nil {
@@ -728,16 +768,22 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			structured, callErr := a.execution.invoke(callContext, a.registry, call.CallID, call.Name, json.RawMessage(call.Arguments))
 			result, err = structured.Output, callErr
 			outcome = structured.Status
+			durationMS, truncated = structured.DurationMS, structured.Truncated
+			if errors.Is(callErr, errApprovalRequired) {
+				a.toolFailure = callErr
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: outcome, DurationMS: durationMS, Truncated: truncated})
+				return results
+			}
 			if a.execution.err != nil || structured.Status == tool.Unknown {
 				a.toolFailure = err
-				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: outcome + ": " + summarizeToolResult(result)})
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: outcome, DurationMS: durationMS, Truncated: truncated, Error: errorText(err), Detail: outcome + ": " + summarizeToolResult(result)})
 				return results
 			}
 		} else {
 			result, err = a.executeTool(callContext, call.Name, json.RawMessage(call.Arguments))
 			if _, ok := errors.AsType[*persistenceError](err); ok {
 				a.toolFailure = err
-				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: err.Error()})
+				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: tool.Failed, Error: err.Error(), Detail: err.Error()})
 				return results
 			}
 		}
@@ -752,7 +798,13 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			if outcome != "" {
 				detail = outcome + ": " + detail
 			}
-			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, Detail: detail})
+			if outcome == "" {
+				outcome = tool.Succeeded
+				if err != nil {
+					outcome = tool.Failed
+				}
+			}
+			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: outcome, DurationMS: durationMS, Truncated: truncated, Error: errorText(err), Detail: detail})
 		}
 		results = append(results, provider.ToolOutput(call.CallID, result))
 	}
@@ -802,8 +854,21 @@ func (a *Agent) writer() io.Writer {
 
 func (a *Agent) emit(event UIEvent) {
 	if a.events != nil {
+		if a.session != nil {
+			event.TaskID = a.session.ID
+		}
+		if a.execution != nil {
+			event.RunID = a.execution.run.ID
+		}
 		a.events.Emit(event)
 	}
+}
+
+func errorText(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return ""
 }
 
 func (a *Agent) emitMetrics(metrics UIMetrics) {

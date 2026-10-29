@@ -93,6 +93,7 @@ type Workspace struct {
 	approve            ApprovalFunc
 	approvalRecord     func(context.Context, ApprovalRequest, bool) error
 	approvalPending    func(context.Context, ApprovalRequest) error
+	approvalGrant      func() bool
 	present            ApprovalPresenter
 	ctx                context.Context
 	last               []fileChange
@@ -1199,6 +1200,10 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 		return false
 	}
 	_, permissions, _ := w.policy.snapshot()
+	if w.approvalGrant != nil && w.approvalGrant() {
+		w.presentApproval(request)
+		return true
+	}
 	if w.autoApprove || permissions == PermissionWorkspaceEdit && request.Kind == ApprovalChanges {
 		w.presentApproval(request)
 		return true

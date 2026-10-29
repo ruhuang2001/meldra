@@ -10,6 +10,14 @@
   "favicon": "/assets/icon.png",
   "redirects": [
     {
+      "source": "/stream-json.md",
+      "destination": "/stream-json"
+    },
+    {
+      "source": "/verification/stream-json-failures.md",
+      "destination": "/verification/stream-json-failures"
+    },
+    {
       "source": "/index.md",
       "destination": "/"
     },
@@ -113,6 +121,7 @@
         "group": "Guides",
         "pages": [
           "capabilities",
+          "stream-json",
           "mcp-support",
           "web-tools",
           "skills",
@@ -127,7 +136,8 @@
           "architecture",
           "task-storage",
           "skills-failure-matrix",
-          "verification/web-failure-matrix"
+          "verification/web-failure-matrix",
+          "verification/stream-json-failures"
         ]
       },
       {

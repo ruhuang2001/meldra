@@ -130,6 +130,11 @@ func (s *Store) ToolCalls(ctx context.Context, id string) ([]task.ToolCall, erro
 func (s *Store) Approvals(ctx context.Context, id string) ([]task.Approval, error) {
 	return queryRecords[task.Approval](ctx, s.db, "SELECT record FROM approvals WHERE task_id=? ORDER BY rowid", id)
 }
+
+// PendingApprovals bounds approval-resume work independently of task history.
+func (s *Store) PendingApprovals(ctx context.Context, id string) ([]task.Approval, error) {
+	return queryRecords[task.Approval](ctx, s.db, "SELECT record FROM approvals WHERE task_id=? AND decision='pending' ORDER BY rowid LIMIT 1000", id)
+}
 func (s *Store) Events(ctx context.Context, id string, after int64, limit int) ([]task.Event, error) {
 	if after < 0 {
 		return nil, errors.New("event cursor must be nonnegative")

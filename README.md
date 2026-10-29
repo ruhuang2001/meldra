@@ -4,6 +4,9 @@
 Meldra's approvals and durable task records. See [Web tools](docs/web-tools.md)
 for configuration, third-party disclosure and network safety boundaries.
 
+**Unreleased:** [Stream JSON output](docs/stream-json.md) provides noninteractive
+JSONL events and exact, single-operation approval resume.
+
 <p align="center">
   <img src="docs/assets/icon.png" alt="Meldra" width="128">
 </p>
