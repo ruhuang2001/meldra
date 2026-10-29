@@ -63,6 +63,8 @@ type Agent struct {
 	projectContext         *ProjectContext
 	suppressNextReferences bool
 	workspace              *Workspace
+	commands               *commandCatalog
+	commandWarningsShown   bool
 	skills                 *skillCatalog
 	execution              *taskExecution
 	toolFailure            error
@@ -105,6 +107,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 
+	a.emitCommandWarnings()
 	if c := a.initControl(); len(c.recovered) > 0 {
 		a.emitNotice(fmt.Sprintf("Recovered %d pending requests. Use /continue-queue to apply them explicitly.", len(c.recovered)))
 	}
@@ -272,6 +275,13 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		a.emit(UIEvent{Kind: UIEventTurnEnd, Status: status})
 	}()
+	a.emitCommandWarnings()
+	if selected == nil && !a.suppressNextReferences {
+		userInput, err = a.commands.expand(userInput)
+		if err != nil {
+			return err
+		}
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}

@@ -338,6 +338,10 @@ func openSkillDirectory(path string) (*os.Root, error) {
 }
 
 func readSkillFile(directory, path string) ([]byte, error) {
+	return readWorkflowFile(directory, path, maxSkillFileBytes)
+}
+
+func readWorkflowFile(directory, path string, limit int64) ([]byte, error) {
 	if !filepath.IsLocal(path) || strings.Contains(path, "\\") {
 		return nil, fmt.Errorf("skill path must be relative and stay inside its directory")
 	}
@@ -359,8 +363,8 @@ func readSkillFile(directory, path string) ([]byte, error) {
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("skill files must be regular files, not symbolic links")
 	}
-	if info.Size() > maxSkillFileBytes {
-		return nil, fmt.Errorf("skill file exceeds %d byte limit", maxSkillFileBytes)
+	if info.Size() > limit {
+		return nil, fmt.Errorf("workflow file exceeds %d byte limit", limit)
 	}
 	if err := checkSkillLinkCount(info); err != nil {
 		return nil, err
@@ -380,12 +384,12 @@ func readSkillFile(directory, path string) ([]byte, error) {
 	if err := checkSkillLinkCount(opened); err != nil {
 		return nil, err
 	}
-	contents, err := io.ReadAll(io.LimitReader(file, maxSkillFileBytes+1))
+	contents, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(contents) > maxSkillFileBytes {
-		return nil, fmt.Errorf("skill file exceeds %d byte limit", maxSkillFileBytes)
+	if int64(len(contents)) > limit {
+		return nil, fmt.Errorf("workflow file exceeds %d byte limit", limit)
 	}
 	if !utf8.Valid(contents) || bytes.IndexByte(contents, 0) >= 0 {
 		return nil, fmt.Errorf("skill files must contain UTF-8 text, not binary data")
