@@ -80,7 +80,7 @@ class Origin:
                 elif self.path == '/credential-redirect':
                     self.reply(302, headers={'Location': 'http://user:password@public.example:' + str(origin.http.server_port) + '/must-not-reach'})
                 elif self.path == '/html':
-                    self.reply(200, '<html><head><title>Fixture title</title><style>HIDDEN_STYLE</style></head><body><h1>VISIBLE_MARKER &amp; text</h1><script>HIDDEN_SCRIPT</script><!-- HIDDEN_COMMENT --><p>Next paragraph</p></body></html>', 'text/html; charset=utf-8')
+                    self.reply(200, '<html><head><title>Fixture title</title><style>HIDDEN_STYLE</style></head><body><h1>VISIBLE_MARKER &amp; text</h1><script>HIDDEN_SCRIPT</script><!-- HIDDEN_COMMENT --><template><template>HIDDEN_INNER_TEMPLATE</template>HIDDEN_OUTER_TEMPLATE<template><template>HIDDEN_DEEP_TEMPLATE</template>HIDDEN_MIDDLE_TEMPLATE</template>HIDDEN_TEMPLATE_TAIL</template><p>VISIBLE_AFTER_TEMPLATE</p><p>Next paragraph</p></body></html>', 'text/html; charset=utf-8')
                 elif self.path == '/json':
                     self.reply(200, '{"marker":"JSON_MARKER"}', 'application/problem+json')
                 elif self.path == '/big':
@@ -150,6 +150,7 @@ def calls(case):
 
 def fixture_binary(output):
     replacement = write(output / 'web_network_fixture.go', OVERLAY)
+    subprocess.run(['gofmt', '-w', str(replacement)], check=True)
     overlay = output / 'overlay.json'
     dump(overlay, {'Replace': {str(ROOT / 'internal/app/web_network.go'): str(replacement)}})
     binary = output / 'meldra-web-fixture'
@@ -191,6 +192,10 @@ def builtin(binary, output, origin):
             assert artifact['sha256'] in call['result']['output']
             if name == 'html':
                 assert b'HIDDEN_SCRIPT' not in payload and b'HIDDEN_STYLE' not in payload and b'HIDDEN_COMMENT' not in payload
+                for hidden in ('HIDDEN_INNER_TEMPLATE', 'HIDDEN_OUTER_TEMPLATE', 'HIDDEN_DEEP_TEMPLATE', 'HIDDEN_MIDDLE_TEMPLATE', 'HIDDEN_TEMPLATE_TAIL'):
+                    assert hidden.encode() not in payload, 'hidden nested template text leaked into retained artifact: ' + hidden
+                    assert hidden not in json.dumps(case.requests), 'hidden nested template text reached model: ' + hidden
+                assert b'VISIBLE_AFTER_TEMPLATE' in payload and 'VISIBLE_AFTER_TEMPLATE' in json.dumps(case.requests), 'template suppression consumed following visible text'
             if name == 'large':
                 assert call['result']['truncated'] and len(payload) <= (1 << 20) + 1024
             if name == 'five-redirects':
@@ -299,6 +304,47 @@ def config(binary, output, origin):
         assert ledger[0]['result']['status'] == 'succeeded' and origin.calls[-1]['authorized_with_independent_key']
         case.complete()
 
+def approval_format(binary, output, origin):
+    details = []
+    original_encoder = capability.text
+    try:
+        for label, separators, query in [('spaced', (', ', ': '), 'query with space'), ('compact', (',', ':'), 'query with space'), ('changed', (',', ':'), 'query with  space')]:
+            capability.text = lambda value: json.dumps(value, ensure_ascii=False, separators=separators)
+            with Case(binary, output, 'approval-format-' + label, [{'calls': [('web_search', {'query': query, 'count': 10, 'need_content': False})]}, {}]) as case:
+                origin.attach(case, True)
+                case.chat(flags=['--auto-approve'])
+                ledger, records = calls(case)
+                assert ledger[0]['result']['status'] == 'succeeded'
+                details.append(records[0]['approvals'][0]['detail']['detail'])
+                case.complete()
+    finally:
+        capability.text = original_encoder
+    dump(output / 'approval-format-evidence.json', {'spaced_detail': details[0], 'compact_detail': details[1], 'changed_detail': details[2]})
+    assert details[0] == details[1], 'equivalent JSON whitespace changes approval detail across replay'
+    assert details[1] != details[2], 'normalization erased whitespace inside a query string'
+    for name, arguments in [('web_fetch', {'url': 'https://public.example/good?a=1&b=2'}), ('web_search', {'query': '<tag>& query', 'count': 10, 'need_content': False})]:
+        escaped_details = []
+        try:
+            for label, escaped in [('literal', False), ('escaped', True)]:
+                def encode(value):
+                    encoded = json.dumps(value, ensure_ascii=False, separators=(',', ':'))
+                    if escaped:
+                        for character, escape in [('&', 'u0026'), ('<', 'u003c'), ('>', 'u003e')]:
+                            encoded = encoded.replace(character, chr(92) + escape)
+                    return encoded
+                capability.text = encode
+                with Case(binary, output, 'approval-escape-' + name + '-' + label, [{'calls': [(name, arguments)]}, {}]) as case:
+                    origin.attach(case, True)
+                    case.chat(flags=['--auto-approve'])
+                    ledger, records = calls(case)
+                    assert ledger[0]['result']['status'] == 'succeeded'
+                    escaped_details.append(records[0]['approvals'][0]['detail']['detail'])
+                    case.complete()
+        finally:
+            capability.text = original_encoder
+        dump(output / ('approval-escape-' + name + '.json'), {'literal_detail': escaped_details[0], 'escaped_detail': escaped_details[1]})
+        assert escaped_details[0] == escaped_details[1], 'durable HTML escaping changes ' + name + ' approval detail'
+
 def mcp_approval(binary, output, origin):
     for latest in (False, True):
         for accept in (False, True):
@@ -386,7 +432,7 @@ def main():
     report = []
     try:
         fixture = fixture_binary(args.output)
-        for name, function, target in [('production-security', security, binary), ('configuration', config, fixture), ('builtin', builtin, fixture), ('approval-dns-cancellation', approval_and_dns, fixture), ('hosted', hosted, fixture), ('mcp-approval', mcp_approval, fixture)]:
+        for name, function, target in [('production-security', security, binary), ('configuration', config, fixture), ('builtin', builtin, fixture), ('approval-dns-cancellation', approval_and_dns, fixture), ('hosted', hosted, fixture), ('approval-format', approval_format, fixture), ('mcp-approval', mcp_approval, fixture)]:
             started = time.monotonic()
             try:
                 function(target, args.output, origin)

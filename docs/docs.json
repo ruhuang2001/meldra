@@ -84,6 +84,14 @@
     {
       "source": "/providers.md",
       "destination": "/providers"
+    },
+    {
+      "source": "/web-tools.md",
+      "destination": "/web-tools"
+    },
+    {
+      "source": "/verification/web-failure-matrix.md",
+      "destination": "/verification/web-failure-matrix"
     }
   ],
   "navigation": {
@@ -106,6 +114,7 @@
         "pages": [
           "capabilities",
           "mcp-support",
+          "web-tools",
           "skills",
           "configuration",
           "providers",
@@ -117,7 +126,8 @@
         "pages": [
           "architecture",
           "task-storage",
-          "skills-failure-matrix"
+          "skills-failure-matrix",
+          "verification/web-failure-matrix"
         ]
       },
       {

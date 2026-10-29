@@ -69,6 +69,11 @@ func (w *Workspace) webApproval(name string, input json.RawMessage) ApprovalRequ
 	if backend == "" {
 		backend = "builtin"
 	}
+	// Match durable RawMessage encoding: it compacts and HTML-escapes JSON.
+	// Approval detail hashes must remain stable when those arguments replay.
+	if canonical, err := json.Marshal(input); err == nil {
+		input = canonical
+	}
 	detail := fmt.Sprintf("Tool: %s\nBackend: %s\nExact arguments: %s\n", name, backend, input)
 	if backend == "deepseek" {
 		detail += "Third-party disclosure: the complete query or target URL will be sent to DeepSeek (api.deepseek.com). Do not include private document URLs, intranet names, credentials, or sensitive queries. DeepSeek performs target DNS resolution and fetching; Meldra cannot verify its redirects or target network. Requests may be billed."
@@ -305,6 +310,7 @@ func webHTMLText(content []byte) []byte {
 	tokenizer := html.NewTokenizer(bytes.NewReader(content))
 	var text strings.Builder
 	skip := ""
+	skipDepth := 0
 	for {
 		kind := tokenizer.Next()
 		if kind == html.ErrorToken {
@@ -315,14 +321,23 @@ func webHTMLText(content []byte) []byte {
 			tag, _ := tokenizer.TagName()
 			name := string(tag)
 			if skip != "" {
-				if kind == html.EndTagToken && name == skip {
-					skip = ""
+				if name == skip {
+					switch kind {
+					case html.StartTagToken:
+						skipDepth++
+					case html.EndTagToken:
+						skipDepth--
+						if skipDepth == 0 {
+							skip = ""
+						}
+					}
 				}
 				continue
 			}
 			if name == "script" || name == "style" || name == "template" || name == "noscript" {
 				if kind == html.StartTagToken {
 					skip = name
+					skipDepth = 1
 				}
 				continue
 			}

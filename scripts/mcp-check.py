@@ -16,6 +16,8 @@ Failure cases, specified before implementation:
 - invalid worker counts: reject before starting subprocesses.
 - fast mode must identify omitted gates and never publish a full coverage result
   or overwrite the last full coverage profile.
+- web's race-instrumented fixture must be excluded from fast mode; Go compiler
+  and module caches must be resolved before isolating suite HOME directories.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -161,8 +163,17 @@ def main():
         scripts = ('capability-e2e', 'images-e2e') if args.fast else (
             'mcp-e2e', 'mcp-auth-interaction-e2e', 'mcp-cli-e2e', 'mcp-input-e2e',
             'mcp-oauth-regression-e2e', 'capability-e2e', 'quality-of-life-e2e', 'provider-compat-e2e', 'images-e2e')
-        if Path('scripts/web-e2e.py').exists():
+        if not args.fast and Path('scripts/web-e2e.py').exists():
             scripts += ('web-e2e',)
+        elif args.fast and Path('scripts/web-e2e.py').exists():
+            summary['omitted_checks'].append('web E2E race fixture')
+        # Build caches are concurrency-safe and contain no runtime configuration.
+        # Resolve them before isolated HOME changes their implicit locations.
+        go_caches = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE'], text=True))
+        for key in ('GOCACHE', 'GOMODCACHE'):
+            if not go_caches.get(key) or not Path(go_caches[key]).is_absolute():
+                raise RuntimeError(key + ' must resolve to an absolute cache path')
+        summary['go_build_caches'] = go_caches
 
         def suite(script):
             suite_started = time.monotonic()
@@ -175,7 +186,7 @@ def main():
                 ('XDG_CONFIG_HOME', 'config'), ('XDG_STATE_HOME', 'state'), ('TMPDIR', 'tmp'))}
             for path in paths.values():
                 path.mkdir(mode=0o700, parents=True)
-            env = dict(os.environ, **{key: str(path) for key, path in paths.items()},
+            env = dict(os.environ, **go_caches, **{key: str(path) for key, path in paths.items()},
                        GOCOVERDIR=str(suite_covdir), PYTHONDONTWRITEBYTECODE='1',
                        MELDRA_DISABLE_UPDATE_CHECK='1')
             arguments = ['--controls', '--processes'] if script == 'capability-e2e' else []
