@@ -827,6 +827,10 @@ func newChatRuntime(
 	agent.customProvider = isCustomBaseURL(settings.BaseURL)
 	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
 	agent.maxCustomTurnInputBytes = int(settings.MaxCustomTurnInputBytes)
+	agent.compactKeepMessages = settings.CompactKeepMessages
+	agent.compactThresholdPercent = settings.CompactThresholdPercent
+	agent.maxTurnContextBytes = settings.MaxTurnContextBytes
+	agent.compactionSecrets = []string{settings.APIKey, settings.DeepSeekAPIKey}
 	agent.output = output
 	agent.session = session
 	agent.store = store
@@ -980,11 +984,20 @@ func effectiveSettings(settings Settings) (Settings, error) {
 	if settings.MaxCustomTurnInputBytes == 0 {
 		settings.MaxCustomTurnInputBytes = defaultMaxCustomTurnInputBytes
 	}
+	if settings.CompactKeepMessages == 0 {
+		settings.CompactKeepMessages = defaultCompactKeepMessages
+	}
+	if settings.MaxTurnContextBytes == 0 {
+		settings.MaxTurnContextBytes = defaultMaxTurnContextBytes
+	}
 	settings, err := overlayEnvironment(settings)
 	if err != nil {
 		return Settings{}, err
 	}
 	if err := validateProviderBaseURL(settings.BaseURL, settings.AllowInsecureBaseURL); err != nil {
+		return Settings{}, err
+	}
+	if err := validateCompactionConfig(settings.CompactKeepMessages, settings.CompactThresholdPercent, settings.MaxTurnContextBytes); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil
@@ -1028,6 +1041,27 @@ func overlayEnvironment(settings Settings) (Settings, error) {
 			return Settings{}, fmt.Errorf("%s: %w", CustomTurnInputLimitEnv, err)
 		}
 		settings.MaxCustomTurnInputBytes = limit
+	}
+	for _, setting := range []struct {
+		environment string
+		value       *int
+		minimum     int
+		maximum     int
+	}{
+		{CompactKeepMessagesEnv, &settings.CompactKeepMessages, 2, 64},
+		{CompactThresholdEnv, &settings.CompactThresholdPercent, 0, 100},
+		{TurnContextLimitEnv, &settings.MaxTurnContextBytes, 1, maximumTurnContextBytes},
+	} {
+		if value := strings.TrimSpace(os.Getenv(setting.environment)); value != "" {
+			number, err := strconv.Atoi(value)
+			if err != nil {
+				return Settings{}, fmt.Errorf("%s must be an integer: %w", setting.environment, err)
+			}
+			if number < setting.minimum || number > setting.maximum {
+				return Settings{}, fmt.Errorf("%s must be between %d and %d", setting.environment, setting.minimum, setting.maximum)
+			}
+			*setting.value = number
+		}
 	}
 	return settings, nil
 }

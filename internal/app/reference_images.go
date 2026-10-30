@@ -86,6 +86,13 @@ func (a *Agent) userInferenceInput(ctx context.Context, text string, current []R
 		for i := len(a.session.Messages) - 1; i >= 0; i-- {
 			refs = append(refs, a.session.Messages[i].References...)
 		}
+		artifact, err := a.loadCompaction(ctx)
+		if err != nil {
+			return provider.Input{}, nil, err
+		}
+		if artifact != nil {
+			refs = append(refs, artifact.References...)
+		}
 	}
 	total, omitted := 0, 0
 	seen := map[string]bool{}

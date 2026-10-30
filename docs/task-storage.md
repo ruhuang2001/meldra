@@ -150,6 +150,50 @@ interrupted. It runs no tools and expires pending approvals. Normal
 cancellation also keeps unrecorded started outcomes unknown rather than
 asserting that no effect occurred.
 
+## Context compaction
+
+**Unreleased.** Compaction preserves execution records and stores the summary as
+conversation metadata. It never changes an admitted operation, tool outcome,
+approval, or process result. Unknown tool outcomes, unknown process effects, and
+pending approvals prevent compaction until explicitly resolved.
+
+The application first saves an immutable `context-compaction.json` artifact,
+then atomically saves the session with the summary, recent message tail, and
+cleared provider response ID, and finally appends `context.compacted`. The
+snapshot retains the artifact reference and source-sequence watermark so resume
+can verify the evidence even if the final event append failed. Artifact and
+snapshot failures stop execution; a missing final event is an audit gap, not
+evidence that the session was unchanged. Recovery never repeats inference.
+After snapshot replacement begins, its event commit uses a separate bounded
+cancellation lifetime; a late cancellation cannot advertise a rollback.
+
+Artifact schema 1 includes trigger and focus, before/after byte measurements,
+source turn sequences, retained message indexes, verbatim original user requests,
+the summary, and every folded call ID. Call evidence includes the tool name,
+status, argument digest, and original outcome artifact references. Repeated
+compaction carries the earlier request and call evidence forward without
+duplicating requests. Raw provider reasoning and credentials are excluded.
+Requests exceeding the display limit are first saved as `user-request.txt`
+artifacts referenced by `turn.started`, so compaction reads full text rather
+than a truncated snapshot. Recent nonfolded calls retain bounded arguments,
+parameter digests, statuses, output excerpts, and outcome artifact references
+when rebuilding context.
+
+Each `context.compacted` event records `trigger` (`manual` or `threshold`),
+`focus`, `from_bytes`, `to_bytes`, `kept_messages`, `source_turns`, `artifact`,
+`compacted_calls`, and `compacted_call_count`. The event's call list may be
+bounded to fit the 64 KiB event limit; its artifact retains the complete list.
+No database migration or new event-envelope schema is required.
+
+`meldra task show TASK_ID` lists every compaction with its trigger, source
+sequence range, byte measurements, artifact ID, and each folded call ID resolved
+to its original tool name and current recorded status. `--json` adds a
+`compactions` array with the same metadata, full `compacted_calls`, and resolved
+`tool_calls`. Inspection pages all events and validates artifact length, digest,
+schema, call count, and referenced call identities. Missing or corrupt evidence
+is an error rather than a silently incomplete call list. These commands remain
+read-only and never call the model or recover a task.
+
 ## Limits, retention and corruption
 
 - Tool arguments and approval evidence: 1 MiB each.

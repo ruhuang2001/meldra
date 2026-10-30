@@ -167,6 +167,8 @@ def main():
             scripts += ('web-e2e',)
         elif args.fast and Path('scripts/web-e2e.py').exists():
             summary['omitted_checks'].append('web E2E race fixture')
+        if Path('scripts/compaction-e2e.py').exists():
+            scripts += ('compaction-e2e',)
         # Build caches are concurrency-safe and contain no runtime configuration.
         # Resolve them before isolated HOME changes their implicit locations.
         go_caches = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE'], text=True))

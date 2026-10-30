@@ -15,6 +15,79 @@ import (
 	"meldra/internal/task"
 )
 
+type taskCompactionInspection struct {
+	EventID      string `json:"event_id"`
+	Sequence     int64  `json:"sequence"`
+	FromBytes    int    `json:"from_bytes"`
+	ToBytes      int    `json:"to_bytes"`
+	KeptMessages int    `json:"kept_messages"`
+	SourceTurns  struct {
+		FirstSequence int64 `json:"first_sequence"`
+		LastSequence  int64 `json:"last_sequence"`
+	} `json:"source_turns"`
+	Artifact           task.ArtifactRef `json:"artifact"`
+	CompactedCalls     []string         `json:"compacted_calls"`
+	CompactedCallCount int              `json:"compacted_call_count"`
+	Trigger            string           `json:"trigger"`
+	Focus              string           `json:"focus,omitempty"`
+	Calls              []task.ToolCall  `json:"tool_calls"`
+}
+
+func taskCompactionsForInspection(ctx context.Context, db *taskstore.Store, id string, calls []task.ToolCall) ([]taskCompactionInspection, error) {
+	byID := make(map[string]task.ToolCall, len(calls))
+	for _, call := range calls {
+		byID[call.ID] = call
+	}
+	compactions := []taskCompactionInspection{}
+	var after int64
+	for {
+		events, err := db.Events(ctx, id, after, 1000)
+		if err != nil {
+			return nil, err
+		}
+		if len(events) == 0 {
+			return compactions, nil
+		}
+		for _, event := range events {
+			after = event.Sequence
+			if event.Kind != "context.compacted" {
+				continue
+			}
+			var compact taskCompactionInspection
+			if err := json.Unmarshal(event.Data, &compact); err != nil {
+				return nil, fmt.Errorf("read compaction event %d: %w", event.Sequence, err)
+			}
+			data, err := db.ReadArtifact(ctx, compact.Artifact)
+			if err != nil {
+				return nil, fmt.Errorf("read compaction event %d artifact: %w", event.Sequence, err)
+			}
+			var artifact struct {
+				SchemaVersion  int      `json:"schema_version"`
+				CompactedCalls []string `json:"compacted_calls"`
+			}
+			if err := json.Unmarshal(data, &artifact); err != nil {
+				return nil, fmt.Errorf("decode compaction event %d artifact: %w", event.Sequence, err)
+			}
+			if artifact.SchemaVersion != 1 || len(artifact.CompactedCalls) != compact.CompactedCallCount {
+				return nil, fmt.Errorf("compaction event %d artifact has an invalid schema or call count", event.Sequence)
+			}
+			compact.EventID, compact.Sequence = event.ID, event.Sequence
+			compact.CompactedCalls = artifact.CompactedCalls
+			compact.Calls = make([]task.ToolCall, 0, len(artifact.CompactedCalls))
+			seen := make(map[string]bool, len(artifact.CompactedCalls))
+			for _, callID := range artifact.CompactedCalls {
+				call, ok := byID[callID]
+				if !ok || seen[callID] {
+					return nil, fmt.Errorf("compaction event %d references a missing or duplicate tool call %q", event.Sequence, callID)
+				}
+				seen[callID] = true
+				compact.Calls = append(compact.Calls, call)
+			}
+			compactions = append(compactions, compact)
+		}
+	}
+}
+
 func taskStoreForRead(paths ConfigPaths) (*taskstore.Store, error) {
 	if _, err := os.Lstat(filepath.Join(taskDirectory(paths), "tasks.db")); err != nil {
 		return nil, err
@@ -134,15 +207,20 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		if err != nil {
 			return err
 		}
+		compactions, err := taskCompactionsForInspection(ctx, db, id, calls)
+		if err != nil {
+			return err
+		}
 		if len(args) == 3 {
 			return json.NewEncoder(out).Encode(struct {
-				Processes     []task.Process  `json:"processes"`
-				SchemaVersion int             `json:"schema_version"`
-				Task          task.Task       `json:"task"`
-				Runs          []task.Run      `json:"runs"`
-				Calls         []task.ToolCall `json:"tool_calls"`
-				Approvals     []task.Approval `json:"approvals"`
-			}{processes, task.SchemaVersion, record, runs, calls, approvals})
+				Compactions   []taskCompactionInspection `json:"compactions"`
+				Processes     []task.Process             `json:"processes"`
+				SchemaVersion int                        `json:"schema_version"`
+				Task          task.Task                  `json:"task"`
+				Runs          []task.Run                 `json:"runs"`
+				Calls         []task.ToolCall            `json:"tool_calls"`
+				Approvals     []task.Approval            `json:"approvals"`
+			}{compactions, processes, task.SchemaVersion, record, runs, calls, approvals})
 		}
 		fmt.Fprintf(out, "Task: %s\nStatus: %s\nWorkspace: %s\nGoal: %s\n", record.ID, record.Status, sanitizeTerminalText(record.Workspace), sanitizeTerminalText(record.Goal))
 		if record.Status == task.Running || record.Status == task.WaitingApproval {
@@ -162,6 +240,21 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 		}
 		for _, approval := range approvals {
 			fmt.Fprintf(out, "Approval %s for %s: %s\n", approval.ID, approval.ToolCallID, approval.Decision)
+		}
+		if len(compactions) > 0 {
+			fmt.Fprintln(out, "Context compactions:")
+		}
+		for _, compact := range compactions {
+			fmt.Fprintf(out, "  Event %d: %s, turns %d–%d, %d → %d bytes, kept %d messages\n",
+				compact.Sequence, sanitizeTerminalText(compact.Trigger), compact.SourceTurns.FirstSequence,
+				compact.SourceTurns.LastSequence, compact.FromBytes, compact.ToBytes, compact.KeptMessages)
+			fmt.Fprintf(out, "    Artifact: %s\n", compact.Artifact.ID)
+			if compact.Focus != "" {
+				fmt.Fprintf(out, "    Focus: %s\n", sanitizeTerminalText(compact.Focus))
+			}
+			for _, call := range compact.Calls {
+				fmt.Fprintf(out, "    Folded tool %s %s: %s\n", sanitizeTerminalText(call.ID), sanitizeTerminalText(call.Name), call.Status)
+			}
 		}
 		return nil
 	case "events":
