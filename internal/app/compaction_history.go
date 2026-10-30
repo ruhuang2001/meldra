@@ -33,6 +33,7 @@ type compactionCall struct {
 	Status          task.ToolStatus    `json:"status"`
 	ArgumentsDigest string             `json:"arguments_digest"`
 	Artifacts       []task.ArtifactRef `json:"artifacts"`
+	Error           string             `json:"error,omitempty"`
 }
 type compactionArtifact struct {
 	SchemaVersion    int             `json:"schema_version"`
@@ -218,6 +219,10 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 	runSequences := map[string]int64{}
 	queuedControls := map[string]bool{}
 	requestRefs := map[int64][]ReferenceSnapshot{}
+	record, err := db.GetTask(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	for _, event := range events {
 		if event.Kind == "turn.started" {
 			input, err := decodeRecordedRequest(ctx, db, event)
@@ -373,7 +378,7 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 				continue
 			}
 			if mapped[i] == 0 {
-				if len(requests) > 0 {
+				if len(requests) > 0 && !record.LegacyHistoryMissing {
 					return nil, fmt.Errorf("cannot identify retained request boundary")
 				}
 				continue
@@ -465,7 +470,7 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 				return nil, fmt.Errorf("read folded tool artifact: %w", err)
 			}
 		}
-		result.Calls = append(result.Calls, compactionCall{ID: call.ID, ProviderCallID: call.ProviderCallID, Name: call.Name, Status: call.Status, ArgumentsDigest: digest(call.Arguments), Artifacts: slices.Clone(call.Result.Artifacts)})
+		result.Calls = append(result.Calls, compactionCall{ID: call.ID, ProviderCallID: call.ProviderCallID, Name: call.Name, Status: call.Status, ArgumentsDigest: digest(call.Arguments), Artifacts: slices.Clone(call.Result.Artifacts), Error: truncateUTF8(call.Result.Error, 2048, " [truncated]")})
 		result.CompactedCalls = append(result.CompactedCalls, call.ID)
 		seenCalls[call.ID] = true
 	}

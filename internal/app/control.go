@@ -424,6 +424,18 @@ func (a *Agent) loadPendingControls() error {
 	for _, m := range a.session.Messages {
 		delete(outstanding, m.ControlID)
 	}
+	// A compaction artifact also proves application after its snapshot message
+	// was folded away. Validate it before suppressing any received control.
+	if a.session.ContextCompaction != nil {
+		reader := &Agent{session: a.session, execution: &taskExecution{db: db}}
+		artifact, err := reader.loadCompaction(context.Background())
+		if err != nil {
+			return err
+		}
+		for _, request := range artifact.Requests {
+			delete(outstanding, request.ControlID)
+		}
+	}
 	c := a.initControl()
 	c.mu.Lock()
 	defer c.mu.Unlock()

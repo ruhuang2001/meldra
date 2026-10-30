@@ -372,7 +372,8 @@ def steering(binary, output):
             _, saved = wait_snapshot(case, client, lambda value: value.get('summary') == 'STEER_SUMMARY_TWO')
             client.finish()
         (case.workspace / 'note.txt').unlink()
-        case.run(['resume', saved['id'], '--prompt', 'Resume steering history.'], label='resume')
+        resumed = case.run(['resume', saved['id'], '--prompt', 'Resume steering history.'], label='resume')
+        assert 'Recovered 1 pending requests' not in resumed.stdout
         text = json.dumps(case.requests[-1]).split('[Compacted execution evidence', 1)[-1]
         for original in ('Initial controlled request.', 'STEER_ORIGINAL_REQUEST', 'NEXT_ORIGINAL_REQUEST', 'FINAL_ORIGINAL_REQUEST'):
             assert text.count(original) == 1, (original, text)
@@ -582,6 +583,49 @@ def retained_call(binary, output):
         for ref in call['result']['artifacts']:
             data = (case.state / 'tasks/artifacts' / ref['id']).read_bytes()
             assert hashlib.sha256(data).hexdigest() == ref['sha256'] and len(data) == ref['size']
+        case.complete()
+
+
+def failure_evidence(binary, output):
+    with Case(binary, output, 'failure-evidence',
+              [{'calls': [('read_file', {'path': 'missing-original.txt'})]}, {'text': 'FIRST_READY'},
+               {'calls': [('read_file', {'path': 'missing-retained.txt'})]}, {'text': 'SECOND_READY'},
+               summary('ERROR_SUMMARY'), {'text': 'ERROR_AFTER'}]) as case:
+        with Interactive(case) as client:
+            seed(case, client)
+            calls = ledger(case)['tool_calls']
+            assert all(call['result'].get('error') for call in calls)
+            client.send('/compact')
+            client.wait('Compacted')
+            wait_snapshot(case, client, lambda value: value.get('summary') == 'ERROR_SUMMARY')
+            client.send('Continue with failure diagnostics.')
+            client.wait('ERROR_AFTER')
+            client.finish()
+        for call in calls:
+            diagnostic = call['result']['error']
+            target = case.requests[4] if 'missing-original' in json.dumps(call['arguments']) else case.requests[-1]
+            assert diagnostic in json.dumps(target, ensure_ascii=False), (diagnostic, target)
+        case.complete()
+
+
+def legacy_compaction(binary, output):
+    with Case(binary, output, 'legacy-compaction',
+              [{'text': 'LEGACY_READY'}, summary('LEGACY_SUMMARY'), {'text': 'LEGACY_AFTER'}]) as case:
+        case.configure(compact_keep_messages=4)
+        saved = {'id': 'legacy-compaction-fixture', 'workspace': str(case.workspace),
+                 'created_at': '2026-10-01T00:00:00Z', 'updated_at': '2026-10-01T00:00:00Z',
+                 'messages': [{'role': 'user', 'content': 'LEGACY_REQUEST_ONE'},
+                              {'role': 'assistant', 'content': 'LEGACY_REPLY_ONE'},
+                              {'role': 'user', 'content': 'LEGACY_REQUEST_TWO'},
+                              {'role': 'assistant', 'content': 'LEGACY_REPLY_TWO'}]}
+        path = case.state / 'sessions' / (saved['id'] + '.json')
+        write(path, json.dumps(saved)).chmod(0o600)
+        result = case.run(['resume', saved['id'], '--prompt', 'Resume imported history.'],
+                          stdin='/compact\nContinue after legacy compaction.\n', label='legacy-resume')
+        assert 'Compacted' in result.stdout
+        assert 'LEGACY_REQUEST_TWO' in json.dumps(case.requests[-1])
+        assert 'LEGACY_SUMMARY' in case.requests[-1]['instructions']
+        assert not case.requests[-1].get('previous_response_id')
         case.complete()
 
 
@@ -887,7 +931,7 @@ def main():
                  'folded-image-priority': folded_image_priority, 'odd-tail': odd_tail, 'steering': steering, 'compact-controls': compact_controls,
                  'validation': validation, 'persistence': persistence, 'corruption': corruption,
                  'credential-input': credential_input, 'retained-call': retained_call,
-                 'kill-boundary': kill_boundary, 'large-ledger': large_ledger,
+                 'failure-evidence': failure_evidence, 'legacy-compaction': legacy_compaction, 'kill-boundary': kill_boundary, 'large-ledger': large_ledger,
                  'busy-and-cancel': busy_and_cancel, 'unresolved': unresolved, 'threshold': threshold,
                  'config': config, 'native': native}
     if args.only:
