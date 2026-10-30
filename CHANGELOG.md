@@ -5,6 +5,37 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.5.0](https://github.com/ruhuang2001/meldra/compare/v0.4.2...v0.5.0) (2026-10-30)
+
+
+### Features
+
+* **agent:** add audited web fetch and search backends ([7a059c3](https://github.com/ruhuang2001/meldra/commit/7a059c3161a97bfa277a30e48b9510c6ddf51260))
+* **agent:** add model-generated context compaction ([fb9cc0c](https://github.com/ruhuang2001/meldra/commit/fb9cc0cb0a7ff5c11fd36af7a5dd2ac9b1b12bd2))
+* **agent:** add regex search and stable session titles ([c8a05e3](https://github.com/ruhuang2001/meldra/commit/c8a05e3dbbcb3f10e8202c31853d4b88abc7a167))
+* **agent:** add resumable benchmark tooling and image inputs ([8eb7bd6](https://github.com/ruhuang2001/meldra/commit/8eb7bd6cd6e137365abfe61880fc72dbbc323e68))
+* **agent:** attach immutable image file references ([fe189b7](https://github.com/ruhuang2001/meldra/commit/fe189b7d1b9f496160df5b4ee9456ce753851c41))
+* **cli:** add custom slash commands and completion ([115238b](https://github.com/ruhuang2001/meldra/commit/115238b7c2cda176c32debee710355c0cd05425e))
+* **stream:** add json event output and exact approval resume ([940f929](https://github.com/ruhuang2001/meldra/commit/940f9299c51196efd8bd9e6f476d3aa10bfb1080))
+
+
+### Bug Fixes
+
+* **agent:** declare retained image snapshots once ([f926938](https://github.com/ruhuang2001/meldra/commit/f926938531e18ef882d31c543c9231976b412b51))
+* **agent:** inject compacted summaries once ([9f80c9f](https://github.com/ruhuang2001/meldra/commit/9f80c9f8b4b5187395952ab1ed0df81a366f4951))
+* **agent:** preserve compaction recovery identities and errors ([06475fe](https://github.com/ruhuang2001/meldra/commit/06475fe4c45d67638e5448ea0648ec244de72334))
+* **agent:** preserve retained compaction evidence ([3a4569c](https://github.com/ruhuang2001/meldra/commit/3a4569c41c4c59c4436112ff820fad9db246b630))
+* **agent:** preserve web approval and hidden content boundaries ([d4b18c0](https://github.com/ruhuang2001/meldra/commit/d4b18c03534c17ee0d3bae12d3d1bbab2426c94a))
+* **ci:** normalize overlay fixture build paths ([a830164](https://github.com/ruhuang2001/meldra/commit/a830164f150f96839e0f12d86615f301295c271c))
+* **ci:** verify native integration fixture activation ([d1dd5ae](https://github.com/ruhuang2001/meldra/commit/d1dd5aeecb3eae65c6965dc8f89d08f05096eb1f))
+* **stream:** bind approval replay to durable undo and mcp identity ([3fc7a4c](https://github.com/ruhuang2001/meldra/commit/3fc7a4cd1da1be762bae00c4871fc2544335980a))
+* **stream:** resolve mcp approval executables in workspace ([445f811](https://github.com/ruhuang2001/meldra/commit/445f811233e7c5e6f1753496afb45b9dcae6d0f1))
+
+
+### Performance
+
+* **workspace:** reduce file search allocations ([9e82501](https://github.com/ruhuang2001/meldra/commit/9e82501e9a1c5d3dabea2ece362ea737405154a5))
+
 ## [0.4.2](https://github.com/ruhuang2001/meldra/compare/v0.4.1...v0.4.2) (2026-10-23)
 
 
