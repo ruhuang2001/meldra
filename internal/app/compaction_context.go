@@ -196,9 +196,10 @@ func compactionRecentCall(call task.ToolCall) string {
 		ArgumentsDigest string             `json:"arguments_digest"`
 		Artifacts       []task.ArtifactRef `json:"artifacts"`
 		Output          string             `json:"output"`
+		Error           string             `json:"error,omitempty"`
 	}{call.ID, call.ProviderCallID, call.Name, call.Status,
 		truncateUTF8(string(call.Arguments), 2048, " [truncated]"), call.ParameterHash,
-		call.Result.Artifacts, truncateUTF8(call.Result.Output, 2048, " [truncated]")})
+		call.Result.Artifacts, truncateUTF8(call.Result.Output, 2048, " [truncated]"), truncateUTF8(call.Result.Error, 2048, " [truncated]")})
 	return string(data) + "\n"
 }
 
