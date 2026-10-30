@@ -116,6 +116,11 @@ to the encoded multimodal input, so large text histories may require a smaller
 image or a fresh session. Native tool follow-ups retain images through the
 provider response chain; compatible providers replay them with tool history.
 
+**Unreleased:** Current and historical image declarations are assembled once,
+after history selection and digest deduplication, in image payload order.
+Steering and resumed requests rebuild the same declarations from accepted
+snapshots; literal digest text in a prompt does not suppress an attachment.
+
 Image bytes are saved in immutable digest-addressed artifacts. Session messages
 retain one reference record with path, MIME type, digest and artifact identity;
 base64 is created only for the transient model request. Resume and accepted

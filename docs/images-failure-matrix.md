@@ -7,6 +7,10 @@ suite with a new output directory. All provider traffic uses a loopback fixture.
 | --- | --- | --- |
 | Submission | Image becomes binary text instead of provider image content | Initial image data URL decodes to the exact file digest; ordinary text attachments unchanged |
 | Tool replay | Compatible provider loses initial images on tool follow-up | Both requests contain the same bytes; tool output remains present |
+| Declarations | Current images are declared twice or historical images lose their declarations | Exactly one generated declaration per retained image, in payload order, on submission, tool replay, follow-up and resume |
+| Declaration identity | User text containing a digest suppresses a real declaration | Literal digest text remains ordinary text; the accepted image still has its generated declaration |
+| Rebuilt declarations | Steering drops the initial image declaration or duplicates a queued image | Initial and steered snapshots are declared once in retained payload order after reconstruction |
+| Duplicate images | Repeated paths or equal bytes produce mismatched declarations and payloads | One declaration and payload per distinct retained digest, including aliases and repeated turns |
 | Persistence | Base64 or raw image bytes enter session JSON or ledger | Only MIME/path/digest/artifact metadata; artifact bytes match submitted file |
 | Resume | Changed/deleted source replaces the accepted image | Resumed provider request uses original artifact bytes |
 | Controls | Queued/steered images are reread after acknowledgment | Original accepted bytes survive source replacement, with durable control identity |

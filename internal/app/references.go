@@ -316,6 +316,18 @@ func referenceInput(refs []ReferenceSnapshot) string {
 	return b.String()
 }
 
+// Images are declared by userInferenceInput after history selection and digest
+// deduplication, so their declarations always match the actual payload order.
+func textReferenceInput(refs []ReferenceSnapshot) string {
+	var textRefs []ReferenceSnapshot
+	for _, ref := range refs {
+		if ref.MIMEType == "" {
+			textRefs = append(textRefs, ref)
+		}
+	}
+	return referenceInput(textRefs)
+}
+
 func (a *Agent) prepareReferences(ctx context.Context, text string) (string, []ReferenceSnapshot, error) {
 	if a.suppressNextReferences {
 		a.suppressNextReferences = false
@@ -347,7 +359,7 @@ func (a *Agent) prepareReferences(ctx context.Context, text string) (string, []R
 			return "", nil, err
 		}
 	}
-	return text + referenceInput(refs), refs, nil
+	return text + textReferenceInput(refs), refs, nil
 }
 
 // prepareControlReferences runs while the caller holds turnControl.mu. It only
@@ -385,7 +397,7 @@ func (a *Agent) prepareControlReferences(ctx context.Context, request ControlReq
 			}
 			refs[i].restoreBytes(data)
 		}
-		return request.Text + referenceInput(refs), refs, nil
+		return request.Text + textReferenceInput(refs), refs, nil
 	}
 	if a.projectContext == nil {
 		return request.Text, nil, nil
@@ -413,7 +425,7 @@ func (a *Agent) prepareControlReferences(ctx context.Context, request ControlReq
 			refs[i].ImageData = nil
 		}
 	}
-	return request.Text + referenceInput(refs), refs, nil
+	return request.Text + textReferenceInput(refs), refs, nil
 }
 
 func (a *Agent) referenceHistory(ctx context.Context) (string, error) {
