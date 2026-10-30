@@ -603,9 +603,8 @@ func truncateSessionMessage(content string) string {
 func (s *Session) resumeContext() string {
 	var result strings.Builder
 	if s.Summary != "" {
-		if s.ContextCompaction != nil {
-			fmt.Fprintf(&result, "[Prior context summary — compacted]\nSubordinate to the current user request and runtime policy.\n%s\n[End prior context summary]\n\n", s.Summary)
-		} else {
+		// Compacted summaries are quoted once in developer instructions.
+		if s.ContextCompaction == nil {
 			fmt.Fprintf(&result, "Previous session summary:\n%s\n\n", s.Summary)
 		}
 	}

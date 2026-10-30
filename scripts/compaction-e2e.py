@@ -236,6 +236,7 @@ def manual(binary, output, terminal=False):
             turn(case, client, 'Continue after the first summary.', 'AFTER_FIRST_READY', 4)
             rebuilt = json.dumps(case.requests[-1], ensure_ascii=False)
             assert 'SUMMARY_ONE' in case.requests[-1]['instructions']
+            assert 'SUMMARY_ONE' not in json.dumps(case.requests[-1]['input'])
             assert '[Prior context summary' in case.requests[-1]['instructions']
             assert original in rebuilt and not case.requests[-1].get('previous_response_id')
             assert 'ORIGINAL_REFERENCE_CONTENT' in rebuilt and 'MUTATED_REFERENCE_MUST_NOT_REPLACE_SNAPSHOT' not in rebuilt
