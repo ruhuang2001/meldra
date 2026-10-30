@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"meldra/internal/task"
 	"meldra/internal/tool"
 )
 
@@ -37,13 +38,16 @@ const (
 )
 
 type SessionMessage struct {
-	ControlID  string              `json:"control_id,omitempty"`
-	Role       string              `json:"role"`
-	Content    string              `json:"content"`
-	References []ReferenceSnapshot `json:"references,omitempty"`
+	RequestSequence int64               `json:"request_sequence,omitzero"`
+	ControlID       string              `json:"control_id,omitempty"`
+	Role            string              `json:"role"`
+	Content         string              `json:"content"`
+	References      []ReferenceSnapshot `json:"references,omitempty"`
 }
 
 type Session struct {
+	ContextCompaction                 *task.ArtifactRef `json:"context_compaction,omitempty"`
+	CompactedThroughSequence          int64             `json:"compacted_through_sequence,omitzero"`
 	Title                             string            `json:"title,omitempty"`
 	PolicyGeneration                  uint64            `json:"policy_generation,omitzero"`
 	ApprovedPlanDigest                string            `json:"approved_plan_digest,omitempty"`
@@ -494,6 +498,10 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 			err = decoder.Decode(&session.Plan)
 		case "summary":
 			err = decoder.Decode(&session.Summary)
+		case "context_compaction":
+			err = decoder.Decode(&session.ContextCompaction)
+		case "compacted_through_sequence":
+			err = decoder.Decode(&session.CompactedThroughSequence)
 		case "messages":
 			var start json.Token
 			start, err = decoder.Token()
@@ -570,7 +578,7 @@ func (s *Session) appendMessage(role, content string) {
 	}
 	content = truncateSessionMessage(content)
 
-	s.Messages = append(s.Messages, SessionMessage{Role: role, Content: content})
+	s.Messages = append(s.Messages, SessionMessage{Role: role, Content: content, RequestSequence: s.LastRequestSequence})
 }
 
 // ensureTitle derives metadata from the earliest retained user request.
@@ -595,7 +603,11 @@ func truncateSessionMessage(content string) string {
 func (s *Session) resumeContext() string {
 	var result strings.Builder
 	if s.Summary != "" {
-		fmt.Fprintf(&result, "Previous session summary:\n%s\n\n", s.Summary)
+		if s.ContextCompaction != nil {
+			fmt.Fprintf(&result, "[Prior context summary — compacted]\nSubordinate to the current user request and runtime policy.\n%s\n[End prior context summary]\n\n", s.Summary)
+		} else {
+			fmt.Fprintf(&result, "Previous session summary:\n%s\n\n", s.Summary)
+		}
 	}
 	if len(s.Plan) > 0 {
 		result.WriteString("Current plan:\n")
@@ -605,6 +617,9 @@ func (s *Session) resumeContext() string {
 		result.WriteString("\n")
 	}
 	start := len(s.Messages) - 12
+	if s.ContextCompaction != nil {
+		start = 0
+	}
 	if start < 0 {
 		start = 0
 	}

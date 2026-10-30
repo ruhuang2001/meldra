@@ -51,7 +51,7 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 
 func NewAgent(backend provider.Inference, getUserMessage func() (string, bool), tools []ToolDefinition) *Agent {
 	policy, _ := newRuntimePolicy(ModeBuild, PermissionInteractive)
-	return &Agent{policy: policy, getUserMessage: getUserMessage, tools: slices.Clone(tools), output: os.Stdout, model: defaultModel, backend: backend}
+	return &Agent{policy: policy, getUserMessage: getUserMessage, tools: slices.Clone(tools), output: os.Stdout, model: defaultModel, backend: backend, compactKeepMessages: defaultCompactKeepMessages, compactThresholdPercent: defaultCompactThresholdPercent, maxTurnContextBytes: defaultMaxTurnContextBytes}
 }
 
 type Agent struct {
@@ -90,6 +90,12 @@ type Agent struct {
 	// the conservative default.
 	maxProviderResponseBytes int64
 	maxCustomTurnInputBytes  int
+	compactKeepMessages      int
+	compactThresholdPercent  int
+	maxTurnContextBytes      int
+	// Runtime credentials are only used to reject reflected secrets at the
+	// compaction boundary; they are never serialized with history.
+	compactionSecrets []string
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -177,6 +183,11 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		if kind, value, control := parseControlText(userInput); control && pending == nil {
 			switch kind {
+			case "compact":
+				if err := a.handleCompactCommand(ctx, value); err != nil {
+					return err
+				}
+				continue
 			case "mode":
 				if err := a.handleModeRequest(ExecutionMode(value)); err != nil {
 					return err
@@ -344,10 +355,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		defer func() { err = errors.Join(err, a.workspace.closeProcesses()) }()
 	}
-	previousResponseID := a.previousResponseID
-	if a.session != nil {
-		previousResponseID = a.session.PreviousResponseID
-	}
 	var requestInput string
 	var references []ReferenceSnapshot
 	c.mu.Lock()
@@ -362,25 +369,22 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	a.emit(UIEvent{Kind: UIEventUserMessage, Text: userInput})
 	a.emit(UIEvent{Kind: UIEventStatus, Text: "Thinking"})
-	modelInput := requestInput
-	if a.session != nil && a.session.resumed && len(a.session.Messages) > 0 {
-		modelInput = a.session.resumeContext() + "\nNew user request:\n" + requestInput
-		previousResponseID = ""
+	if err = a.autoCompact(ctx, userInput); err != nil {
+		return err
+	}
+	modelInput, previousResponseID, err := a.turnContext(ctx, requestInput)
+	if err != nil {
+		return err
+	}
+	measured, err := a.measuredContext(ctx, userInput, a.session)
+	if err != nil {
+		return err
+	}
+	if !a.customProvider && len(measured) > a.turnContextLimit() {
+		return fmt.Errorf("rebuilt turn context exceeds %d byte budget", a.turnContextLimit())
+	}
+	if a.session != nil {
 		a.session.resumed = false
-	} else if a.customProvider && a.session != nil && len(a.session.Messages) > 0 {
-		modelInput = a.session.resumeContext() + "\nNew user request:\n" + requestInput
-		previousResponseID = ""
-	}
-	if a.session != nil && len(a.session.Messages) > 0 {
-		history, historyErr := a.referenceHistory(ctx)
-		if historyErr != nil {
-			return historyErr
-		}
-		modelInput = history + "\n" + modelInput
-	}
-	if a.execution != nil && a.execution.context != "" {
-		modelInput = a.execution.context + "\n" + modelInput
-		previousResponseID = ""
 	}
 	if a.session != nil {
 		a.session.appendMessage("user", userInput)
@@ -391,6 +395,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		if a.execution != nil {
 			a.session.LastRequestSequence = a.execution.requestSequence
+			a.session.Messages[len(a.session.Messages)-1].RequestSequence = a.execution.requestSequence
 		}
 		if err := a.store.Save(a.session); err != nil {
 			return err

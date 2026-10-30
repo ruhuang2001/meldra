@@ -64,6 +64,27 @@ bounded by `max_custom_turn_input_bytes`; older tool outputs may be replaced by
 explicit omission markers, and an irreducible over-budget turn pauses for an
 explicit continuation. This is not model-generated compaction.
 
+**Unreleased:** `/compact [focus]` and automatic threshold compaction add a
+separate model-generated summary of older conversation. They use the configured
+model with no tools and a 1024-output-token limit. A valid summary is saved with
+an immutable evidence artifact and recent messages; subsequent requests rebuild
+context without the old `previous_response_id`. Provider failure, cancellation,
+and invalid or truncated summaries leave the prior snapshot unchanged.
+
+The threshold measures locally rebuilt UTF-8 text bytes. For a custom endpoint,
+its denominator is the smaller of `max_custom_turn_input_bytes` and
+`max_turn_context_bytes`; native Responses uses `max_turn_context_bytes`. Native
+server history remains invisible locally, so the threshold is a floor on measured
+context, not a claim about the model's full context window. Omission-marker
+trimming still bounds custom-provider tool replay after compaction. See
+[configuration](configuration.md#context-compaction) for settings and
+[foreground controls](capabilities.md#context-compaction) for preserved evidence.
+
+Before the first compaction, local conversation reconstruction measures its
+bounded recent-message window, not all server-retained turns. The default
+threshold therefore does not guarantee automatic compaction when only the
+native server-side chain grows. Use the idle command to compact deliberately.
+
 Streaming is preferred. Recognized unsupported-stream errors can fall back to a
 nonstreaming request only before any output event; an interrupted partial stream
 must not be retried as though it never happened. JSON Responses returned to a
@@ -74,8 +95,8 @@ Cross-protocol reasoning preservation is not promised.
 
 The second-phase [Anthropic adapter issue](https://github.com/ruhuang2001/meldra/issues/66)
 defines explicit capability queries and provider-switch history rebuilding.
-The [context compaction issue](https://github.com/ruhuang2001/meldra/issues/65)
-tracks model-generated summaries separately.
+The [context compaction design](proposals/context-compaction.md) records the
+summary and evidence contract.
 
 ## Repeatable offline verification
 

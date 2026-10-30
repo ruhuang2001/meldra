@@ -233,6 +233,7 @@ The same commands are available in the TUI and line interface:
 | `/queue request` | Save a separate follow-up request for after the current turn. |
 | `/continue-queue` | Explicitly apply queued requests recovered after a restart. |
 | `/context [path]` | Inspect applicable `AGENTS.md` sources while idle without calling the model. |
+| `/compact [focus]` | **Unreleased:** summarize older context while idle using the configured model. |
 
 Ordinary text submitted while the TUI is busy acts as steering. In the line
 interface, use `/steer` explicitly; ordinary piped lines retain their FIFO order.
@@ -255,6 +256,50 @@ approval owns the input. MCP forms and approvals keep their own input ownership;
 is not interpreted as an ordinary task message.
 Press `Ctrl-G` in the TUI to compose a correction while an approval or MCP form
 is pending. `Escape` returns to that interaction without submitting a correction.
+
+## Context compaction
+
+**Unreleased.** `/compact [focus]` asks the configured model to summarize older
+messages while retaining the most recent messages verbatim (8 by default).
+For example, `/compact the flaky integration test` steers the summary toward
+that work. The command is available while idle in both the TUI and line
+interface, in Plan and Build modes; submitting it during a turn is rejected.
+It changes conversation metadata without dispatching tools or changing mode,
+permissions, or approvals.
+
+Automatic compaction uses the same path before inference when locally rebuilt
+text context reaches the configured byte threshold (80% by default). See
+[configuration](configuration.md#context-compaction) for the denominator and
+limits. Automatic compaction that cannot reduce context is skipped. The summary request
+has no tools and permits at most 1024 output tokens; cancelled, failed, empty,
+oversized, or truncated summaries are not committed.
+
+A successful compaction preserves the plan, recent messages and their attachment
+references. Its immutable artifact retains original user requests verbatim and
+folded tool-call identities, statuses, argument digests, and outcome artifact
+references. The next turn rebuilds context from that evidence and the summary
+without continuing the old provider response chain. The summary also appears
+as quoted historical data in the developer instructions. It is subordinate
+to the current request and runtime policy; it cannot authorize an operation.
+
+Compaction rejects source text or a generated summary that reflects a configured
+model or search credential, without printing the credential or committing the
+summary. Original request evidence is left unchanged; unknown secrets embedded
+by a user in ordinary task data are not automatically identifiable.
+
+Unknown tool outcomes, unknown process effects, and pending approvals block
+manual compaction and skip automatic compaction with an inspection notice.
+Resolve these records explicitly; summarization cannot turn uncertainty into
+success. A successful notice identifies the source turn sequence range and
+`meldra task show TASK_ID`. That inspection command, including its `--json`
+form, exposes every folded call ID and the original execution records.
+
+Compaction writes its artifact, then commits the session snapshot, then records
+`context.compacted`. Persistence failures stop the turn. A failure before the
+snapshot commit leaves the old summary and response chain unchanged; an event
+failure after commit leaves a consistent snapshot with an audit gap. Inspection
+and recovery never rerun the summarization request. See the
+[storage contract](task-storage.md#context-compaction) for retained evidence.
 
 ## Custom slash commands
 

@@ -72,6 +72,15 @@ func (c *turnControl) record(kind string, request ControlRequest) error {
 // SubmitControl accepts a human control request only while the turn owns its
 // durable journal. Success means received, not yet applied or stopped.
 func (a *Agent) SubmitControl(kind, text string) error {
+	if kind == "compact" {
+		c := a.initControl()
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.active {
+			return ErrNoActiveTurn
+		}
+		return fmt.Errorf("compact is available only while idle")
+	}
 	if kind != "steer" && kind != "queue" && kind != "stop" && kind != "mode" {
 		return fmt.Errorf("unknown control %q", kind)
 	}
@@ -209,6 +218,9 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 			a.session.ensureTitle()
 			a.session.Messages[len(a.session.Messages)-1].References = refs
 			a.session.Messages[len(a.session.Messages)-1].ControlID = r.ID
+			// Steering is identified by its control journal, not the enclosing
+			// turn.started request. Compaction maps this stable control identity.
+			a.session.Messages[len(a.session.Messages)-1].RequestSequence = 0
 			a.session.PreviousResponseID = ""
 			a.session.Mode, a.session.Permissions, a.session.PolicyGeneration = a.policy.snapshot()
 			if err := a.store.Save(a.session); err != nil {
@@ -230,6 +242,8 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 func parseControlText(text string) (kind, value string, ok bool) {
 	command, rest := splitSlashInput(text)
 	switch command {
+	case "/compact":
+		return "compact", strings.TrimSpace(rest), true
 	case "/stop":
 		return "stop", "", true
 	case "/queue":

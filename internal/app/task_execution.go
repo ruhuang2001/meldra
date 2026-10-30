@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	taskstore "meldra/internal/store"
 	"meldra/internal/task"
@@ -165,7 +166,18 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	e.resume = false
 	e.session.taskSnapshot = true
 	started = true
-	if err = e.event(ctx, "turn.started", "", map[string]any{"request": truncateSessionMessage(goal), "control_id": e.requestControlID, "references": e.requestControlRefs}); err != nil {
+	if !utf8.ValidString(goal) {
+		return e.recordingError(ctx, fmt.Errorf("user request must contain valid UTF-8"))
+	}
+	request := recordedUserRequest{Request: truncateSessionMessage(goal), ControlID: e.requestControlID, References: e.requestControlRefs}
+	if len(goal) > maxSessionMessageBytes {
+		ref, artifactErr := e.db.PutArtifact(ctx, e.lease, e.session.ID, "user-request.txt", []byte(goal))
+		if artifactErr != nil {
+			return e.recordingError(ctx, artifactErr)
+		}
+		request.RequestArtifact = &ref
+	}
+	if err = e.event(ctx, "turn.started", "", request); err != nil {
 		return err
 	}
 	event, err := e.db.LatestRequestEvent(ctx, record.ID)
@@ -570,18 +582,15 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			return nil
 		}
 		for _, event := range events {
-			var input struct {
-				Request    string              `json:"request"`
-				ControlID  string              `json:"control_id"`
-				References []ReferenceSnapshot `json:"references"`
-			}
-			if err := json.Unmarshal(event.Data, &input); err != nil {
-				return fmt.Errorf("decode recorded request: %w", err)
+			input, err := decodeRecordedRequest(ctx, e.db, event)
+			if err != nil {
+				return err
 			}
 			// Without a checkpoint, neither timestamps nor repeated message text
 			// prove which requests were saved. Replay once rather than drop intent.
 			e.session.RequestsReplayedWithoutCheckpoint = e.session.RequestsReplayedWithoutCheckpoint || upgrading
 			e.session.appendMessage("user", input.Request)
+			e.session.Messages[len(e.session.Messages)-1].RequestSequence = event.Sequence
 			e.session.Messages[len(e.session.Messages)-1].ControlID = input.ControlID
 			e.session.Messages[len(e.session.Messages)-1].References = input.References
 			if err := e.restoreRequestReferences(ctx, event.Sequence, &e.session.Messages[len(e.session.Messages)-1]); err != nil {

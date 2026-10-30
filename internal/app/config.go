@@ -27,6 +27,14 @@ const (
 	// for one process without exposing any credential.
 	ProviderResponseLimitEnv = "MELDRA_MAX_PROVIDER_RESPONSE_BYTES"
 	CustomTurnInputLimitEnv  = "MELDRA_MAX_CUSTOM_TURN_INPUT_BYTES"
+	CompactKeepMessagesEnv   = "MELDRA_COMPACT_KEEP_MESSAGES"
+	CompactThresholdEnv      = "MELDRA_COMPACT_THRESHOLD_PERCENT"
+	TurnContextLimitEnv      = "MELDRA_MAX_TURN_CONTEXT_BYTES"
+
+	defaultCompactKeepMessages     = 8
+	defaultCompactThresholdPercent = 80
+	defaultMaxTurnContextBytes     = 4 * 1024 * 1024
+	maximumTurnContextBytes        = 64 * 1024 * 1024
 
 	privateDirPerm  fs.FileMode = 0o700
 	privateFilePerm fs.FileMode = 0o600
@@ -39,6 +47,9 @@ const defaultConfigTemplate = `# Meldra configuration.
 # allow_insecure_base_url = false
 # max_provider_response_bytes = 33554432
 # max_custom_turn_input_bytes = 4194304
+# compact_keep_messages = 8
+# compact_threshold_percent = 80
+# max_turn_context_bytes = 4194304
 # web.fetch_backend = "builtin"
 # web.search_backend = "deepseek"
 `
@@ -59,6 +70,9 @@ type ConfigPaths struct {
 
 // Config contains non-secret settings stored in config.toml.
 type Config struct {
+	CompactKeepMessages      int
+	CompactThresholdPercent  int
+	MaxTurnContextBytes      int
 	WebFetchBackend          string
 	WebSearchBackend         string
 	Model                    string
@@ -78,6 +92,9 @@ type Credentials struct {
 // command-line overrides intentionally belong to the caller, so their
 // precedence stays explicit at the CLI boundary.
 type Settings struct {
+	CompactKeepMessages      int
+	CompactThresholdPercent  int
+	MaxTurnContextBytes      int
 	WebFetchBackend          string
 	WebSearchBackend         string
 	DeepSeekAPIKey           string
@@ -91,6 +108,9 @@ type Settings struct {
 
 // ConfigShow is safe to display or serialize: APIKey is always redacted.
 type ConfigShow struct {
+	CompactKeepMessages      int    `json:"compact_keep_messages"`
+	CompactThresholdPercent  int    `json:"compact_threshold_percent"`
+	MaxTurnContextBytes      int    `json:"max_turn_context_bytes"`
 	WebFetchBackend          string `json:"web_fetch_backend"`
 	WebSearchBackend         string `json:"web_search_backend"`
 	DeepSeekAPIKey           string `json:"deepseek_api_key"`
@@ -155,8 +175,7 @@ func InitializeConfig(paths ConfigPaths) error {
 }
 
 // LoadConfig loads non-secret runtime settings from the explicit config.toml
-// path. A missing configuration directory or file is treated as an empty
-// config.
+// path. A missing configuration directory or file uses the compaction defaults.
 func LoadConfig(paths ConfigPaths) (Config, error) {
 	if err := validateConfigPaths(paths); err != nil {
 		return Config{}, err
@@ -170,7 +189,7 @@ func LoadConfig(paths ConfigPaths) (Config, error) {
 		return Config{}, fmt.Errorf("read config file: %w", err)
 	}
 	if !found {
-		return Config{}, nil
+		return defaultCompactionConfig(), nil
 	}
 
 	config, err := parseConfigTOML(string(contents))
@@ -220,6 +239,9 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 		return Settings{}, err
 	}
 	return Settings{
+		CompactKeepMessages:      config.CompactKeepMessages,
+		CompactThresholdPercent:  config.CompactThresholdPercent,
+		MaxTurnContextBytes:      config.MaxTurnContextBytes,
 		WebFetchBackend:          config.WebFetchBackend,
 		WebSearchBackend:         config.WebSearchBackend,
 		DeepSeekAPIKey:           credentials.DeepSeekAPIKey,
@@ -236,6 +258,17 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 // permissions. API keys are deliberately not part of Config and cannot be
 // written through this method.
 func SaveConfig(paths ConfigPaths, config Config) error {
+	// Zero keeps older Config literals valid for positive-only settings. The
+	// threshold's zero is meaningful and must survive a save as disabled.
+	if config.CompactKeepMessages == 0 {
+		config.CompactKeepMessages = defaultCompactKeepMessages
+	}
+	if config.MaxTurnContextBytes == 0 {
+		config.MaxTurnContextBytes = defaultMaxTurnContextBytes
+	}
+	if err := validateCompactionConfig(config.CompactKeepMessages, config.CompactThresholdPercent, config.MaxTurnContextBytes); err != nil {
+		return err
+	}
 	if err := validateWebBackends(config.WebFetchBackend, config.WebSearchBackend); err != nil {
 		return err
 	}
@@ -258,6 +291,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	}
 
 	contents := "# Meldra configuration.\n"
+	contents += "compact_keep_messages = " + strconv.Itoa(config.CompactKeepMessages) + "\n"
+	contents += "compact_threshold_percent = " + strconv.Itoa(config.CompactThresholdPercent) + "\n"
+	contents += "max_turn_context_bytes = " + strconv.Itoa(config.MaxTurnContextBytes) + "\n"
 	if config.Model != "" {
 		contents += "model = " + strconv.Quote(config.Model) + "\n"
 	}
@@ -326,6 +362,9 @@ func ShowConfig(paths ConfigPaths) (ConfigShow, error) {
 // always redacted, even when the given Settings came from another source.
 func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 	return ConfigShow{
+		CompactKeepMessages:      settings.CompactKeepMessages,
+		CompactThresholdPercent:  settings.CompactThresholdPercent,
+		MaxTurnContextBytes:      settings.MaxTurnContextBytes,
 		WebFetchBackend:          settings.WebFetchBackend,
 		WebSearchBackend:         settings.WebSearchBackend,
 		DeepSeekAPIKey:           RedactSecret(settings.DeepSeekAPIKey),
@@ -344,7 +383,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\ncompact_keep_messages=%d\ncompact_threshold_percent=%d\nmax_turn_context_bytes=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
@@ -353,6 +392,9 @@ func FormatConfigShow(show ConfigShow) string {
 		show.AllowInsecureBaseURL,
 		show.MaxProviderResponseBytes,
 		show.MaxCustomTurnInputBytes,
+		show.CompactKeepMessages,
+		show.CompactThresholdPercent,
+		show.MaxTurnContextBytes,
 		show.APIKey,
 		displayValue(show.WebFetchBackend),
 		displayValue(show.WebSearchBackend),
@@ -619,8 +661,29 @@ func validateCustomTurnInputLimit(value int64) error {
 	return nil
 }
 
+func defaultCompactionConfig() Config {
+	return Config{
+		CompactKeepMessages:     defaultCompactKeepMessages,
+		CompactThresholdPercent: defaultCompactThresholdPercent,
+		MaxTurnContextBytes:     defaultMaxTurnContextBytes,
+	}
+}
+
+func validateCompactionConfig(keepMessages, thresholdPercent, maxContextBytes int) error {
+	if keepMessages < 2 || keepMessages > 64 {
+		return fmt.Errorf("compact_keep_messages must be between 2 and 64")
+	}
+	if thresholdPercent < 0 || thresholdPercent > 100 {
+		return fmt.Errorf("compact_threshold_percent must be between 0 and 100")
+	}
+	if maxContextBytes < 1 || maxContextBytes > maximumTurnContextBytes {
+		return fmt.Errorf("max_turn_context_bytes must be between 1 and %d", maximumTurnContextBytes)
+	}
+	return nil
+}
+
 func parseConfigTOML(contents string) (Config, error) {
-	var config Config
+	config := defaultCompactionConfig()
 	seen := make(map[string]bool)
 	section := ""
 
@@ -646,6 +709,26 @@ func parseConfigTOML(contents string) (Config, error) {
 		rawValue = strings.TrimSpace(rawValue)
 
 		switch key {
+		case "compact_keep_messages", "compact_threshold_percent", "max_turn_context_bytes":
+			if seen[key] {
+				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
+			}
+			seen[key] = true
+			value, err := strconv.Atoi(rawValue)
+			if err != nil {
+				return Config{}, fmt.Errorf("line %d: %s must be an integer: %w", lineNumber+1, key, err)
+			}
+			switch key {
+			case "compact_keep_messages":
+				config.CompactKeepMessages = value
+			case "compact_threshold_percent":
+				config.CompactThresholdPercent = value
+			case "max_turn_context_bytes":
+				config.MaxTurnContextBytes = value
+			}
+			if err := validateCompactionConfig(config.CompactKeepMessages, config.CompactThresholdPercent, config.MaxTurnContextBytes); err != nil {
+				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
+			}
 		case "web.fetch_backend", "web.search_backend":
 			if seen[key] {
 				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
