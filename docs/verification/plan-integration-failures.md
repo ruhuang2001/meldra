@@ -8,6 +8,10 @@ description: "Cross-feature protocol, approval and image verification."
 Specified before cross-feature integration changes. This verification tree
 combines independently reviewable feature branches; it is not a release.
 
+- Fixture builds normalize inherited symlink `PWD` to the canonical source root.
+  A binary without the expected overlay fails before model or web requests.
+  Native continuation passes for both canonical and alias source paths.
+
 - JSON prompts must use the same command expansion as line/TUI requests, once.
   A command expanding to another slash command or builtin stays ordinary text.
 - JSON command discovery warnings must remain JSON notices, with no plain text
