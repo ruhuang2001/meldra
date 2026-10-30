@@ -39,7 +39,11 @@ func (a *Agent) steeringContext(ctx context.Context, correction string) (string,
 			return "", err
 		}
 		b.WriteString(recent)
-		b.WriteString(a.session.resumeContext())
+		conversation, err := a.compactionConversation(ctx, a.session)
+		if err != nil {
+			return "", err
+		}
+		b.WriteString(conversation)
 		b.WriteByte('\n')
 		if artifact != nil {
 			references, err = a.compactedReferenceHistory(ctx, artifact)

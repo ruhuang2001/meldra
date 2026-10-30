@@ -91,7 +91,9 @@ func (a *Agent) userInferenceInput(ctx context.Context, text string, current []R
 			return provider.Input{}, nil, err
 		}
 		if artifact != nil {
-			refs = append(refs, artifact.References...)
+			for i := len(artifact.References) - 1; i >= 0; i-- {
+				refs = append(refs, artifact.References[i])
+			}
 		}
 	}
 	total, omitted := 0, 0
