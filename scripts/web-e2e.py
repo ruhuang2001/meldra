@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real-binary web tools verification, with repeatable offline evidence."""
 import argparse
+from contextlib import contextmanager
 import hashlib
 import http.server
 import importlib.util
@@ -21,10 +22,12 @@ capability = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(capability)
 Case, dump, write = capability.Case, capability.dump, capability.write
 KEY = 'deepseek-offline-key-never-persist'
+PROBE_ENV = 'MELDRA_E2E_FIXTURE_PROBE'
 
 OVERLAY = r'''package app
 import ("context"; "crypto/tls"; "crypto/x509"; "fmt"; "net"; "net/netip"; "os"; "strings"; "sync/atomic"; "time")
 var fixtureLookups atomic.Int32
+func init() { if os.Getenv("MELDRA_E2E_FIXTURE_PROBE") == "web" { fmt.Println("meldra-e2e-overlay:web"); os.Exit(0) } }
 func fixtureLog(line string) { f, err := os.OpenFile(os.Getenv("WEB_FIXTURE_LOG"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600); if err == nil { defer f.Close(); fmt.Fprintln(f, line) } }
 func webLookup(ctx context.Context, host string) ([]netip.Addr,error) {
  fixtureLog("lookup "+host)
@@ -148,17 +151,82 @@ def calls(case):
     records = case.audit()
     return [call for record in records for call in record['tool_calls']], records
 
+def assert_fixture(binary, output, kind):
+    # --version is harmless if the overlay is absent. Probe before any request.
+    home = output / ('probe-' + kind + '-home')
+    home.mkdir(mode=0o700, exist_ok=True)
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(home),
+           'MELDRA_HOME': str(home), 'MELDRA_DISABLE_UPDATE_CHECK': '1',
+           'GORACE': 'atexit_sleep_ms=0', PROBE_ENV: kind}
+    result = subprocess.run([str(binary), '--version'], cwd=home, env=env,
+                            capture_output=True, text=True, timeout=15)
+    evidence = {'binary': str(binary), 'kind': kind, 'exit_code': result.returncode,
+                'stdout': result.stdout, 'stderr': result.stderr}
+    evidence['passed'] = result.returncode == 0 and result.stdout.strip() == 'meldra-e2e-overlay:' + kind and not result.stderr
+    dump(output / ('fixture-probe-' + kind + '.json'), evidence)
+    assert evidence['passed'], 'expected ' + kind + ' overlay is not active: ' + json.dumps(evidence)
+
+
+def build_fixture(output, overlay, binary, kind):
+    # Go honors a same-directory PWD alias; overlay keys use canonical paths.
+    env = dict(os.environ, PWD=str(ROOT))
+    dump(output / ('fixture-build-path-' + kind + '.json'),
+         {'inherited_pwd': os.environ.get('PWD'), 'build_pwd': env['PWD'], 'cwd': str(ROOT)})
+    result = subprocess.run(['go', 'build', '-race', '-overlay', str(overlay), '-o', str(binary), '.'],
+                            cwd=ROOT, env=env, capture_output=True, text=True)
+    write(output / (kind + '-fixture-build.txt'), result.stdout + result.stderr)
+    assert result.returncode == 0, result.stderr
+    assert_fixture(binary, output, kind)
+
+
+@contextmanager
+def inherited_pwd(path):
+    previous = os.environ.get('PWD')
+    os.environ['PWD'] = str(path)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop('PWD', None)
+        else:
+            os.environ['PWD'] = previous
+
+
 def fixture_binary(output):
+    output = output.resolve()
     replacement = write(output / 'web_network_fixture.go', OVERLAY)
     subprocess.run(['gofmt', '-w', str(replacement)], check=True)
     overlay = output / 'overlay.json'
     dump(overlay, {'Replace': {str(ROOT / 'internal/app/web_network.go'): str(replacement)}})
     binary = output / 'meldra-web-fixture'
-    result = subprocess.run(['go', 'build', '-race', '-overlay', str(overlay), '-o', str(binary), '.'], cwd=ROOT, capture_output=True, text=True)
-    write(output / 'fixture-build.txt', result.stdout + result.stderr)
-    assert result.returncode == 0, result.stderr
+    build_fixture(output, overlay, binary, 'web')
     dump(output / 'fixture-provenance.json', {'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'overlay': str(overlay), 'boundary': 'Only DNS/raw dial/TLS trust replaced; all public-address validation and policy execute unchanged.'})
     return binary
+
+
+def fixture_paths(binary, output, origin):
+    directory = output / 'fixture-paths'
+    directory.mkdir()
+    try:
+        assert_fixture(binary, directory, 'web')
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('production binary was accepted as an overlaid fixture')
+    alias = directory / 'source-alias'
+    alias.symlink_to(ROOT, target_is_directory=True)
+    report = []
+    try:
+        for name, pwd in [('canonical', ROOT), ('alias', alias)]:
+            case_output = directory / name
+            case_output.mkdir()
+            with inherited_pwd(pwd):
+                fixture = fixture_binary(case_output)
+            config(fixture, case_output, origin)
+            report.append({'name': name, 'passed': True, 'inherited_pwd': str(pwd)})
+            dump(directory / 'report.json', report)
+    finally:
+        alias.unlink()
 
 def security(binary, output, origin):
     bad = ['file:///etc/passwd', 'http://user:secret@public.example/', 'https://public.example/#fragment', 'http://localhost/', 'http://service.internal/', 'http://127.0.0.1/', 'http://10.2.3.4/', 'http://172.20.0.1/', 'http://192.168.1.1/', 'http://169.254.169.254/', 'http://100.64.0.1/', 'http://0.0.0.0/', 'http://224.0.0.1/', 'http://198.18.0.1/', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/', 'http://[fc00::1]/', 'http://[fe80::1]/', 'http://[2002:7f00:1::]/', 'http://public.example:0/']
@@ -432,7 +500,7 @@ def main():
     report = []
     try:
         fixture = fixture_binary(args.output)
-        for name, function, target in [('production-security', security, binary), ('configuration', config, fixture), ('builtin', builtin, fixture), ('approval-dns-cancellation', approval_and_dns, fixture), ('hosted', hosted, fixture), ('approval-format', approval_format, fixture), ('mcp-approval', mcp_approval, fixture)]:
+        for name, function, target in [('fixture-paths', fixture_paths, binary), ('production-security', security, binary), ('configuration', config, fixture), ('builtin', builtin, fixture), ('approval-dns-cancellation', approval_and_dns, fixture), ('hosted', hosted, fixture), ('approval-format', approval_format, fixture), ('mcp-approval', mcp_approval, fixture)]:
             started = time.monotonic()
             try:
                 function(target, args.output, origin)
