@@ -41,3 +41,5 @@ task records and digest-checked artifacts are retained alongside `checksums.json
 SQLite triggers and deliberate isolated-state mutations inject persistence and
 unresolved-record failures without changing application source. Native fixtures
 record overlay provenance and prove the overlay is active before use.
+
+PR review regressions: retained long requests restore full text from request artifacts; all 40 retained tool calls remain in rebuilt evidence; subsequent native continuations avoid replaying compacted history; snapshot-proven steering survives a missing applied event; folded image selection preserves newest-first priority. Attachment payload bytes retain their independently documented budgets.

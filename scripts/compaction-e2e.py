@@ -294,6 +294,35 @@ def folded_image(binary, output):
         case.complete()
 
 
+def folded_image_priority(binary, output):
+    with Case(binary, output, 'folded-image-priority',
+              [{'text': 'FIRST_READY'}, {'text': 'IMAGE0_READY'}, {'text': 'IMAGE1_READY'},
+               {'text': 'IMAGE2_READY'}, {'text': 'TAIL_READY'}, summary('PRIORITY_SUMMARY'),
+               {'text': 'PRIORITY_RESUMED'}]) as case:
+        blobs = []
+        for index, color in enumerate([(1, 2, 3), (4, 5, 6), (7, 8, 9)]):
+            data = images.png(color)
+            data += b'x' * ((1 << 20) - len(data))
+            blobs.append(data)
+            write(case.workspace / ('shot' + str(index) + '.png'), data)
+        with Interactive(case, flags=['--mode', 'plan']) as client:
+            client.wait('FIRST_READY')
+            wait_snapshot(case, client, lambda value: len(value.get('messages', [])) == 2)
+            for index in range(3):
+                turn(case, client, '@shot' + str(index) + '.png', 'IMAGE' + str(index) + '_READY', 4 + index * 2)
+            turn(case, client, 'Keep only this text tail.', 'TAIL_READY', 10)
+            client.send('/compact')
+            client.wait('Compacted')
+            _, saved = wait_snapshot(case, client, lambda value: value.get('summary') == 'PRIORITY_SUMMARY')
+            client.finish()
+        case.run(['resume', saved['id'], '--prompt', 'Use newest image snapshots.'], label='resume')
+        assert len(images.images(case.requests[-1])) == 2
+        images.assert_image(case.requests[-1], blobs[2])
+        images.assert_image(case.requests[-1], blobs[1])
+        images.assert_declarations(case.requests[-1], [blobs[2], blobs[1]])
+        case.complete()
+
+
 def odd_tail(binary, output):
     with Case(binary, output, 'odd-tail', tool_steps() + [{'text': 'SECOND_READY'}, {'text': 'THIRD_READY'},
               summary('ODD_SUMMARY_ONE'), {'text': 'ODD_CONTINUED'}, summary('ODD_SUMMARY_TWO'), {'text': 'ODD_RESUMED'}]) as case:
@@ -330,6 +359,7 @@ def steering(binary, output):
             assert case.cancelled.wait(10), 'steering did not cancel initial inference'
             client.wait('STEER_READY')
             wait_snapshot(case, client, lambda value: len(value.get('messages', [])) == 3)
+            sql(case, "DELETE FROM events WHERE json_extract(CAST(record AS TEXT),'$.kind')='control.applied'")
             turn(case, client, 'NEXT_ORIGINAL_REQUEST', 'NEXT_READY', 5)
             client.send('/compact preserve steering')
             client.wait('Compacted')
@@ -505,14 +535,17 @@ def credential_input(binary, output):
 
 def retained_call(binary, output):
     with Case(binary, output, 'retained-call', [{'text': 'FIRST_READY'},
-              {'calls': [cap.edit('retained-operation.txt', 'RETAINED_OUTCOME_CONTENT')]}, {'text': 'TAIL_READY'},
+              {'calls': [cap.edit('retained-operation.txt', 'RETAINED_OUTCOME_CONTENT')] + [('read_file', {'path': 'retained-operation.txt'}) for _ in range(39)]}, {'text': 'TAIL_READY'},
               summary('RETAINED_SUMMARY'), {'text': 'RETAINED_AFTER'}]) as case:
         with Interactive(case, flags=['--auto-approve']) as client:
             client.wait('FIRST_READY')
             wait_snapshot(case, client, lambda value: len(value.get('messages', [])) == 2)
-            turn(case, client, 'Create the retained operation file.', 'TAIL_READY', 4)
+            turn(case, client, 'Create the retained operation file. RETAINED_LONG_BEGIN ' + '界abc ' * 4200 + ' RETAINED_LONG_END', 'TAIL_READY', 4)
             before = ledger(case)
             call = before['tool_calls'][0]
+            assert len(before['tool_calls']) == 40
+            retained_original = snapshot(case)[1]['messages'][-2]['content']
+            assert retained_original.endswith('[truncated]')
             assert call['result']['artifacts']
             client.send('/compact')
             client.wait('Compacted')
@@ -520,6 +553,9 @@ def retained_call(binary, output):
             client.send('Inspect retained execution evidence.')
             client.wait('RETAINED_AFTER')
             client.finish()
+        wire = json.dumps(case.requests[-1], ensure_ascii=False)
+        assert 'RETAINED_LONG_END' in wire and wire.count('RETAINED_LONG_BEGIN') == 1
+        assert all(record['id'] in wire for record in before['tool_calls'])
         value = case.requests[-1]['input']
         blocks = [value] if isinstance(value, str) else [content['text'] for item in value
                   for content in item.get('content', []) if content.get('type') == 'input_text']
@@ -797,7 +833,7 @@ def native(binary, output):
         case.env['MELDRA_E2E_FIXTURE_PROBE'] = 'compaction-native'
         probe = case.run(['--version'])
         assert probe.stdout.strip() != 'meldra-e2e-overlay:compaction-native'
-    with Case(fixture, output, 'native-continuation', tool_steps() + [{'text': 'SECOND_READY'}, summary('NATIVE_SUMMARY'), {'text': 'NATIVE_AFTER'}]) as case:
+    with Case(fixture, output, 'native-continuation', tool_steps() + [{'text': 'SECOND_READY'}, summary('NATIVE_SUMMARY'), {'text': 'NATIVE_AFTER'}, {'text': 'NATIVE_SECOND_AFTER'}]) as case:
         write(case.workspace / 'note.txt', 'native fixture\n')
         with Interactive(case) as client:
             seed(case, client)
@@ -809,8 +845,15 @@ def native(binary, output):
             assert not saved.get('previous_response_id')
             client.send('Continue natively.')
             client.wait('NATIVE_AFTER')
+            wait_snapshot(case, client, lambda value: value.get('previous_response_id') == 'resp_5')
+            assert not case.requests[-1].get('previous_response_id')
+            client.send('Continue the active native chain.')
+            client.wait('NATIVE_SECOND_AFTER')
             client.finish()
-        assert not case.requests[-1].get('previous_response_id') and 'NATIVE_SUMMARY' in case.requests[-1]['instructions']
+        assert case.requests[-1].get('previous_response_id') == 'resp_5'
+        assert 'Compacted execution evidence' not in json.dumps(case.requests[-1]['input'])
+        assert 'SECOND_ORIGINAL_REQUEST' not in json.dumps(case.requests[-1]['input'])
+        assert 'NATIVE_SUMMARY' in case.requests[-1]['instructions']
         case.complete()
     with Case(fixture, output, 'native-threshold', [{'text': 'A' * 6500 + ' FIRST_READY'},
               {'text': 'B' * 6500 + ' SECOND_READY'}, summary('NATIVE_THRESHOLD_SUMMARY'), {'text': 'NATIVE_THRESHOLD_AFTER'}]) as case:
@@ -840,7 +883,7 @@ def main():
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     scenarios = {'manual-line': manual, 'manual-pty': lambda b, o: manual(b, o, True), 'folded-image': folded_image,
-                 'odd-tail': odd_tail, 'steering': steering, 'compact-controls': compact_controls,
+                 'folded-image-priority': folded_image_priority, 'odd-tail': odd_tail, 'steering': steering, 'compact-controls': compact_controls,
                  'validation': validation, 'persistence': persistence, 'corruption': corruption,
                  'credential-input': credential_input, 'retained-call': retained_call,
                  'kill-boundary': kill_boundary, 'large-ledger': large_ledger,

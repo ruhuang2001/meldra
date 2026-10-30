@@ -249,8 +249,24 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 			requests[i].References = refs
 		}
 	}
+	savedControls := map[string]SessionMessage{}
+	appliedControls := map[string]bool{}
+	for _, message := range a.session.Messages {
+		if message.ControlID != "" {
+			savedControls[message.ControlID] = message
+		}
+	}
 	for _, event := range events {
-		if event.Kind != "control.applied" {
+		if event.Kind == "control.applied" {
+			var control ControlRequest
+			if err := json.Unmarshal(event.Data, &control); err != nil {
+				return nil, err
+			}
+			appliedControls[control.ID] = true
+		}
+	}
+	for _, event := range events {
+		if event.Kind != "control.applied" && event.Kind != "control.received" {
 			continue
 		}
 		var control ControlRequest
@@ -259,6 +275,15 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 		}
 		if control.Kind != "steer" || queuedControls[control.ID] {
 			continue
+		}
+		if event.Kind == "control.received" {
+			message, saved := savedControls[control.ID]
+			if appliedControls[control.ID] || !saved {
+				continue
+			}
+			if message.Role != "user" || message.Content != control.Text {
+				return nil, fmt.Errorf("saved steering request does not match received control")
+			}
 		}
 		if control.ID == "" || control.Text == "" || len(control.Text) > maxSessionMessageBytes || !utf8.ValidString(control.Text) {
 			return nil, fmt.Errorf("invalid recorded steering request")
