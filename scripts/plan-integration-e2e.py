@@ -121,20 +121,45 @@ def web_approval(binary, output, origin):
 
 
 def native_binary(output):
+    output = output.resolve()
     source = (ROOT / 'internal/app/agent.go').read_text()
     pattern = r'func isCustomBaseURL\(baseURL string\) bool \{.*?\n\}'
     replacement, count = re.subn(pattern, 'func isCustomBaseURL(baseURL string) bool { return false }', source, count=1, flags=re.S)
     assert count == 1
+    replacement += '\nfunc init() { if os.Getenv("MELDRA_E2E_FIXTURE_PROBE") == "native" { fmt.Println("meldra-e2e-overlay:native"); os.Exit(0) } }\n'
     path = write(output / 'native_agent_fixture.go', replacement)
     subprocess.run(['gofmt', '-w', str(path)], check=True)
     overlay = output / 'native-overlay.json'
     dump(overlay, {'Replace': {str(ROOT / 'internal/app/agent.go'): str(path)}})
     binary = output / 'meldra-native-fixture'
-    result = subprocess.run(['go', 'build', '-race', '-overlay', str(overlay), '-o', str(binary), '.'], cwd=ROOT, capture_output=True, text=True)
-    write(output / 'native-fixture-build.txt', result.stdout + result.stderr)
-    assert result.returncode == 0, result.stderr
+    web.build_fixture(output, overlay, binary, 'native')
     dump(output / 'native-fixture-provenance.json', {'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'source_sha256': hashlib.sha256(source.encode()).hexdigest(), 'overlay': str(overlay), 'boundary': 'Only app isCustomBaseURL classification forced false. Provider transport and Responses implementation unchanged; configured endpoint is loopback.'})
     return binary
+
+
+def native_fixture_paths(binary, output):
+    directory = output / 'native-fixture-paths'
+    directory.mkdir()
+    try:
+        web.assert_fixture(binary, directory, 'native')
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError('production binary was accepted as a native fixture')
+    alias = directory / 'source-alias'
+    alias.symlink_to(ROOT, target_is_directory=True)
+    report = []
+    try:
+        for name, pwd in [('canonical', ROOT), ('alias', alias)]:
+            case_output = directory / name
+            case_output.mkdir()
+            with web.inherited_pwd(pwd):
+                fixture = native_binary(case_output)
+            native_image(fixture, case_output)
+            report.append({'name': name, 'passed': True, 'inherited_pwd': str(pwd)})
+            dump(directory / 'report.json', report)
+    finally:
+        alias.unlink()
 
 
 def native_image(binary, output):
@@ -178,7 +203,9 @@ def main():
         fixture = web.fixture_binary(output)
         native = native_binary(output)
         origin = web.Origin(output)
-        scenarios = {'command-stream': lambda: command_stream(binary, output),
+        scenarios = {'fixture-paths': lambda: web.fixture_paths(binary, output, origin),
+                     'native-fixture-paths': lambda: native_fixture_paths(binary, output),
+                     'command-stream': lambda: command_stream(binary, output),
                      'command-image-policy': lambda: command_image_policy(binary, output),
                      'web-approval': lambda: web_approval(fixture, output, origin),
                      'native-image': lambda: native_image(native, output)}
@@ -200,7 +227,7 @@ def main():
             origin.close()
         files = [*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve()]
         report['source_sha256'] = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(files)}
-        report['passed'] = len(report['scenarios']) == 4 and all(result['passed'] for result in report['scenarios'])
+        report['passed'] = len(report['scenarios']) == 6 and all(result['passed'] for result in report['scenarios'])
         dump(output / 'report.json', report)
         dump(output / 'checksums.json', {str(path.relative_to(output)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(output.rglob('*')) if path.is_file()})
     raise SystemExit(0 if report['passed'] else 1)
