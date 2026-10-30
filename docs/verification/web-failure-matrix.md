@@ -11,6 +11,7 @@ No unit tests are added. Production binaries have no SSRF bypass configuration.
 | Approval | Default deny without network; exact target/query/backend and disclosure shown; workspace-edit cannot bypass; auto-approval records decision; Plan allows approved external reads but no writes |
 | Approval serialization | Spaced, compact and HTML-escaped JSON produce identical durable approval detail; ampersands in URLs and HTML characters in queries survive replay; whitespace within query strings remains significant |
 | Verification runner | Fast mode skips race-instrumented web fixtures; full mode keeps web and existing suites; resolve parent Go caches before HOME isolation to avoid cold fixture-build downloads |
+| Fixture overlay identity | Canonical and symlink inherited `PWD` activate the same overlay; reject a production binary before any provider or web request; preserve build and probe evidence |
 | URL | Reject non-HTTP(S), userinfo, fragments, missing host, malformed ports, local names, private/loopback/link-local/multicast/unspecified/reserved IPs and mapped IPv6 |
 | DNS and dial | Resolve after approval; reject any forbidden answer including mixed answers; dial the checked numeric IP; revalidate connections and redirects; rebinding cannot alter connected address |
 | Redirect | At most five; validate relative/absolute targets; reject private/credential redirects; report final URL/status; no cookies or Authorization forwarding |

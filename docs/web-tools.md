@@ -107,4 +107,7 @@ HTTP/TLS fixtures. It produces `report.json`, protocol/provider transcripts,
 task records, content artifacts and binary/overlay provenance. Positive-network
 tests replace only DNS/raw dialing/TLS trust with a build overlay; all address
 validation and production policy remain active. Release binaries have no bypass.
+Fixture builds normalize the source path and `PWD`, then verify an overlay-only
+startup marker before any request. The suite repeats configuration checks with
+canonical and symlink source paths and records the build paths and probe output.
 `make check` runs this suite. See the [failure matrix](verification/web-failure-matrix.md).
