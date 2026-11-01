@@ -18,6 +18,9 @@ import threading
 import time
 import traceback
 
+# Scenarios that deliberately wait past real deadlines; opt in with --slow.
+SLOW_SCENARIOS = ('serve-approval-budget',)
+
 
 def save(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
@@ -635,6 +638,8 @@ def main():
     parser.add_argument('--binary', default='dist/meldra')
     parser.add_argument('--output', default='dist/mcp-e2e')
     parser.add_argument('--case', help='Run one named scenario')
+    parser.add_argument('--slow', action='store_true',
+                        help='run scenarios that deliberately wait past real deadlines')
     parser.add_argument('--stdio-fixture', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.stdio_fixture:
@@ -657,6 +662,8 @@ def main():
     reports = []
     for name, options in scenarios:
         if args.case and name != args.case:
+            continue
+        if name in SLOW_SCENARIOS and not (args.slow or args.case == name):
             continue
         try:
             report = run_serve_case(binary, output, name) if name.startswith('serve-') else run_case(binary, output, name, **options)

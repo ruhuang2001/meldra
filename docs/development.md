@@ -88,3 +88,7 @@ On a 12-core development machine, try `make check E2E_WORKERS=6`; the default
 remains three for smaller machines. Shared capability fixtures preserve the
 harness's `GORACE` and update-check controls, avoiding the race runtime's
 per-process exit sleep while retaining race instrumentation and coverage.
+
+**Unreleased:** `make check` skips deliberately slow E2E scenarios (currently
+`serve-approval-budget`, which waits 121s past the old fixed call deadline).
+`make check E2E_SLOW=1` and `make release-check` include them.
