@@ -28,7 +28,16 @@ Additional manual E2E suites:
 
 ```bash
 python3 scripts/skills-e2e.py --output dist/skills-e2e-new-run
+python3 scripts/update-e2e.py --output .artifacts/checks/update-e2e-run
+CGO_ENABLED=0 go build -o /tmp/meldra-integrated .
+python3 scripts/plan-integration-e2e.py --binary /tmp/meldra-integrated --output /tmp/meldra-integration-evidence
 ```
+
+`skills-e2e` and `update-e2e` cover their own features. The plan integration
+suite is an all-features acceptance run over a combined checkout, so it is
+deliberately outside `make check`; run it before a minor release and against the
+exact revision you intend to tag. Its expectations are in the
+[plan integration failure matrix](verification/plan-integration-failures.md).
 
 Choose a new output directory for each run.
 
@@ -72,3 +81,10 @@ Full checks run up to three independent E2E suites concurrently with separate
 HOME, XDG, temporary, and coverage directories. Use `make check E2E_WORKERS=1`
 on constrained machines. Reports, timings, logs, and checksums are retained in
 `.artifacts/checks`.
+
+**Unreleased:** Expensive suites, starting with compaction and capability, are
+submitted first; `report.json` records `suite_order` alongside suite timings.
+On a 12-core development machine, try `make check E2E_WORKERS=6`; the default
+remains three for smaller machines. Shared capability fixtures preserve the
+harness's `GORACE` and update-check controls, avoiding the race runtime's
+per-process exit sleep while retaining race instrumentation and coverage.
