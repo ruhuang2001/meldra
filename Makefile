@@ -5,6 +5,7 @@ COVERAGE_FILE := coverage.out
 COVERAGE_MIN := 75.0
 CHECK_SCRIPT ?= scripts/mcp-check.py
 E2E_WORKERS ?= 3
+E2E_SLOW ?=
 # Local builds should identify the source they were built from just like
 # release artifacts do. VERSION may be overridden for reproducible builds.
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -27,7 +28,7 @@ test-race:
 	go test -race ./...
 
 test-coverage:
-	python3 "$(CHECK_SCRIPT)" --source-root "$(CURDIR)" --coverage "$(COVERAGE_FILE)" --output-dir "$(CHECK_DIR)" --e2e-workers "$(E2E_WORKERS)"
+	python3 "$(CHECK_SCRIPT)" --source-root "$(CURDIR)" --coverage "$(COVERAGE_FILE)" --output-dir "$(CHECK_DIR)" --e2e-workers "$(E2E_WORKERS)" $(if $(E2E_SLOW),--slow)
 	@coverage="$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ { print $$3 }' | tr -d '%')"; \
 		awk -v coverage="$$coverage" -v minimum="$(COVERAGE_MIN)" 'BEGIN { if (coverage < minimum) { printf "coverage %.1f%% is below %.1f%%\n", coverage, minimum; exit 1 }; printf "coverage %.1f%% meets %.1f%% minimum\n", coverage, minimum }'
 
@@ -44,6 +45,7 @@ check:
 
 check-ci:
 	$(MAKE) test-race
+	go test -count=1 ./internal/store
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
 
 check-fast:
@@ -58,7 +60,8 @@ check-staged:
 check-local-ci:
 	python3 scripts/check-local-ci.py --staged
 
-release-check: check
+release-check:
+	$(MAKE) -f "$(firstword $(MAKEFILE_LIST))" check E2E_SLOW=1
 	go run github.com/goreleaser/goreleaser/v2@v2.14.0 check
 
 release-snapshot:

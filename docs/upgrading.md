@@ -21,6 +21,39 @@ credentials, legacy snapshots, `tasks/`, and any SQLite WAL/SHM files. Copying o
 binary alongside the backup. Execution locks in `~/.meldra-locks` and the user cache must not be
 removed while held.
 
+**Upgrade from v0.4.2 to v0.5.0:** Run `meldra update`, then restart Meldra to
+use context compaction, web tools, stream JSON output, custom slash commands,
+image references, regex `search_files`, and session titles. This minor release
+introduces no task-store schema migration: the ledger remains schema 2.
+
+Two behavior changes need attention before you upgrade:
+
+- **Automatic compaction is on by default.** When locally rebuilt text context
+  reaches 80% of the configured budget, Meldra asks the configured model to
+  summarize older messages. Set `compact_threshold_percent = 0` to disable the
+  automatic trigger; `/compact [focus]` stays available for explicit requests.
+  The summary request carries no tools and cannot authorize an operation. See
+  [configuration](configuration.md#context-compaction) for the byte limits and
+  [foreground controls](capabilities.md#context-compaction) for preserved
+  evidence.
+- **External reads need approval.** `web_fetch` and optional `web_search` reach
+  the network, so they are recorded as `external_read` and ask before dispatch,
+  including in Plan mode. `--auto-approve` also approves network disclosure and
+  billing. Hosted DeepSeek search sends the complete query to that third party.
+
+Downgrading from v0.5.0 keeps the task ledger readable but loses saved sessions:
+
+- The task ledger, `task show`, `task show --json`, and `task events` remain
+  readable by v0.4.2, including records whose tool effect is `external_read`.
+  This was verified by inspecting a v0.5.0 ledger containing `external_read`
+  calls with the v0.4.2 binary; no schema migration is involved.
+- Session snapshots written by v0.5.0 add a session `title` and a per-message
+  `request_sequence`. v0.4.2 rejects unknown session fields, so it reports
+  `skipped 1 unreadable or invalid saved session file` and `No saved sessions.`
+  for those snapshots. Restore the pre-upgrade backup or use a separate
+  `MELDRA_HOME` if you need to resume those conversations on an older binary.
+  Task records and their evidence are unaffected.
+
 **Upgrade from v0.4.0 or v0.4.1 to v0.4.2:** Run `meldra update`, then restart
 Meldra to use the self-update stage notices and version details. The old updater
 performs this upgrade, so the new progress output appears only in subsequent

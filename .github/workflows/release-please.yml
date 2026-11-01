@@ -102,7 +102,8 @@ jobs:
           if test -f scripts/capability-e2e.py; then
             make -f "$RUNNER_TEMP/release-verification/Makefile" check \
               CHECK_SCRIPT="$RUNNER_TEMP/release-verification/mcp-check.py" \
-              DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"
+              DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks" \
+              E2E_SLOW=1
           else
             # Historical tags retain their compatible verification entrypoint.
             make check DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks"

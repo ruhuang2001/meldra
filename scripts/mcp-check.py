@@ -14,8 +14,12 @@ Failure cases, specified before implementation:
   merge coverage only after every suite has finished and validated its report.
 - a parallel suite fails: retain all suites' evidence and fail the overall check.
 - invalid worker counts: reject before starting subprocesses.
+- scheduling must retain every selected suite exactly once, including suites
+  absent from the priority list and optional suites from older source revisions.
 - fast mode must identify omitted gates and never publish a full coverage result
   or overwrite the last full coverage profile.
+- slow E2E scenarios (deliberate waits past real deadlines) are opt-in via --slow
+  and recorded as omitted when skipped.
 - web's race-instrumented fixture must be excluded from fast mode; Go compiler
   and module caches must be resolved before isolating suite HOME directories.
 """
@@ -113,6 +117,8 @@ def main():
     parser.add_argument('--self-check', action='store_true')
     parser.add_argument('--fast', action='store_true',
                         help='local feedback: ordinary Go tests and capability E2E only; no race or coverage gate')
+    parser.add_argument('--slow', action='store_true',
+                        help='include E2E scenarios that deliberately wait past real deadlines')
     parser.add_argument('--e2e-workers', type=int, default=3,
                         help='maximum independent E2E suites in parallel (default: 3; use 1 for serial)')
     parser.add_argument('--source-root', type=Path, default=Path(__file__).resolve().parent.parent,
@@ -169,6 +175,19 @@ def main():
             summary['omitted_checks'].append('web E2E race fixture')
         if Path('scripts/compaction-e2e.py').exists():
             scripts += ('compaction-e2e',)
+        # Start historically expensive suites first to avoid a long final tail.
+        # Sort only the selected suites so fast mode and older tags keep their gates.
+        priority = ('compaction-e2e', 'capability-e2e', 'stream-review-e2e',
+                    'images-e2e', 'commands-e2e', 'web-e2e',
+                    'mcp-oauth-regression-e2e', 'mcp-e2e')
+        scripts = sorted(scripts, key=lambda script: priority.index(script)
+                         if script in priority else len(priority))
+        summary['suite_order'] = scripts
+        # Slow scenarios are opt-in; older immutable tags lack the --slow flag
+        # and run them unconditionally, so probe the script before passing it.
+        e2e_supports_slow = Path('scripts/mcp-e2e.py').exists() and '--slow' in Path('scripts/mcp-e2e.py').read_text()
+        if e2e_supports_slow and not (args.fast or args.slow):
+            summary['omitted_checks'].append('slow E2E scenarios (serve-approval-budget)')
         # Build caches are concurrency-safe and contain no runtime configuration.
         # Resolve them before isolated HOME changes their implicit locations.
         go_caches = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE'], text=True))
@@ -190,8 +209,12 @@ def main():
                 path.mkdir(mode=0o700, parents=True)
             env = dict(os.environ, **go_caches, **{key: str(path) for key, path in paths.items()},
                        GOCOVERDIR=str(suite_covdir), PYTHONDONTWRITEBYTECODE='1',
-                       MELDRA_DISABLE_UPDATE_CHECK='1')
+                       MELDRA_DISABLE_UPDATE_CHECK='1',
+                       # Each instrumented binary would otherwise sleep 1s at exit.
+                       GORACE=(os.environ.get('GORACE', '') + ' atexit_sleep_ms=0').strip())
             arguments = ['--controls', '--processes', '--stream-json'] if script == 'capability-e2e' else []
+            if script == 'mcp-e2e' and args.slow and e2e_supports_slow:
+                arguments.append('--slow')
             run([sys.executable, 'scripts/' + script + '.py', '--binary', str(binary), '--output', str(output), *arguments], directory, script, env)
             report = json.loads((output / 'report.json').read_text())
             checks = report['scenarios'] if isinstance(report, dict) else report
