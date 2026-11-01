@@ -40,7 +40,7 @@ Modify the existing owner of a behavior rather than adding parallel paths. Keep 
 Build with the `go.mod` toolchain (`CGO_ENABLED=0` on Darwin/Linux, amd64/arm64) and Python 3 for integration tests. Prefer the standard library over new dependencies.
 
 - **Iterate**: Run focused tests (`go test ./internal/app -run '^TestName' -count=1`, plus `-race` for concurrency/lifecycle changes).
-- **Verify code**: Run `make check` (fmt, vet, mod tidy, race tests, E2E, >=75% coverage, build; outputs to `.artifacts/checks` or `CHECK_DIR`/`COVERAGE_FILE`). `make check-ci` is not a substitute. Do not edit Go sources while collecting coverage.
+- **Verify code**: Run `make check` (fmt, vet, mod tidy, race tests, E2E, >=75% coverage, build; outputs to `.artifacts/checks` or `CHECK_DIR`/`COVERAGE_FILE`). Deliberately slow E2E scenarios (`serve-approval-budget`) are omitted unless you run `make check E2E_SLOW=1`; `make release-check` includes them. `make check-ci` is not a substitute. Do not edit Go sources while collecting coverage.
 - **Verify docs/staged**: Docs-only changes need link/command review and `git diff --check`. `make check-staged` checks staged formatting; `make check-local-ci` tests only the staged index.
 - **Test isolation**: Keep home/config isolated, use fake providers/loopback fixtures, and keep auto-update checks disabled unless testing them with local fixtures.
 - **Terminal & docs**: Exercise affected line/PTY modes and inspect rendered output for TUI changes. Update help text and `docs/` when behavior changes.
