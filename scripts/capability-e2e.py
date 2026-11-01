@@ -4,6 +4,11 @@
 No configured provider, credentials, or external MCP server is used. Each case
 gets a private HOME, state directory, workspace, and loopback Responses server.
 The optional --long-command case really runs longer than 120 seconds.
+
+Fixture environment failure cases:
+- dropping GORACE reintroduces the race runtime's exit sleep per child process;
+- dropping the update-check opt-out permits network work in offline fixtures;
+- inheriting the whole parent environment leaks user configuration into cases.
 """
 import argparse
 import errno
@@ -63,8 +68,10 @@ class Case:
                     'MELDRA_HOME': str(self.state), 'TMPDIR': str(self.tmp),
                     'XDG_CACHE_HOME': str(self.home / '.cache'), 'NO_COLOR': '1',
                     'TERM': 'dumb', 'LANG': 'C.UTF-8', 'OPENAI_API_KEY': 'offline-fixture-not-a-credential'}
-        if os.environ.get('GOCOVERDIR'):
-            self.env['GOCOVERDIR'] = os.environ['GOCOVERDIR']
+        # Preserve explicit harness controls without importing user configuration.
+        for key in ('GOCOVERDIR', 'GORACE', 'MELDRA_DISABLE_UPDATE_CHECK'):
+            if key in os.environ:
+                self.env[key] = os.environ[key]
         self.steps, self.requests, self.errors = list(steps), [], []
         self.condition, self.release, self.cancelled = threading.Condition(), threading.Event(), threading.Event()
         self.processes = []
