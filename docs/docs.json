@@ -106,6 +106,18 @@
       "destination": "/commands-failure-matrix"
     },
     {
+      "source": "/plan-failure-matrix.md",
+      "destination": "/plan-failure-matrix"
+    },
+    {
+      "source": "/images-failure-matrix.md",
+      "destination": "/images-failure-matrix"
+    },
+    {
+      "source": "/context-compaction-failure-matrix.md",
+      "destination": "/context-compaction-failure-matrix"
+    },
+    {
       "source": "/verification/plan-integration-failures.md",
       "destination": "/verification/plan-integration-failures"
     }
@@ -147,6 +159,9 @@
           "verification/web-failure-matrix",
           "verification/stream-json-failures",
           "commands-failure-matrix",
+          "plan-failure-matrix",
+          "images-failure-matrix",
+          "context-compaction-failure-matrix",
           "verification/plan-integration-failures"
         ]
       },
