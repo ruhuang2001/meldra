@@ -14,6 +14,8 @@ Failure cases, specified before implementation:
   merge coverage only after every suite has finished and validated its report.
 - a parallel suite fails: retain all suites' evidence and fail the overall check.
 - invalid worker counts: reject before starting subprocesses.
+- scheduling must retain every selected suite exactly once, including suites
+  absent from the priority list and optional suites from older source revisions.
 - fast mode must identify omitted gates and never publish a full coverage result
   or overwrite the last full coverage profile.
 - web's race-instrumented fixture must be excluded from fast mode; Go compiler
@@ -169,6 +171,14 @@ def main():
             summary['omitted_checks'].append('web E2E race fixture')
         if Path('scripts/compaction-e2e.py').exists():
             scripts += ('compaction-e2e',)
+        # Start historically expensive suites first to avoid a long final tail.
+        # Sort only the selected suites so fast mode and older tags keep their gates.
+        priority = ('compaction-e2e', 'capability-e2e', 'stream-review-e2e',
+                    'images-e2e', 'commands-e2e', 'web-e2e',
+                    'mcp-oauth-regression-e2e', 'mcp-e2e')
+        scripts = sorted(scripts, key=lambda script: priority.index(script)
+                         if script in priority else len(priority))
+        summary['suite_order'] = scripts
         # Build caches are concurrency-safe and contain no runtime configuration.
         # Resolve them before isolated HOME changes their implicit locations.
         go_caches = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE'], text=True))
