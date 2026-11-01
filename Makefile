@@ -44,6 +44,7 @@ check:
 
 check-ci:
 	$(MAKE) test-race
+	go test -count=1 ./internal/store
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
 
 check-fast:

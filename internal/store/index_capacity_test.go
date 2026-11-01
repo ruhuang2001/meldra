@@ -1,3 +1,8 @@
+//go:build !race
+
+// The ~256MB single-goroutine fixture is ~15x slower under race instrumentation;
+// the non-race coverage run still executes it.
+
 package store
 
 import (
