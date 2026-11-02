@@ -110,7 +110,7 @@ observations supply structured status, exit code, elapsed time, truncation and
 retry information. The model still receives compatible human-readable output.
 The task adapter adds bounded artifact references to the persisted result.
 
-**Unreleased:** built-in `web_fetch` and optional DeepSeek `web_search` use the
+**Available since v0.5.0:** built-in `web_fetch` and optional DeepSeek `web_search` use the
 distinct `external_read` effect. They are policy reads with explicit network
 approval, and their lost-response outcomes remain unknown. The shared Workspace
 handlers serve CLI, TUI and MCP. See [Web tools](web-tools.md) for DNS-at-dial

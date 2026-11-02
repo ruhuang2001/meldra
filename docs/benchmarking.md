@@ -35,7 +35,7 @@ solves real problems. That is what the agent benchmarks below measure.
 
 ## Agent Benchmarking: SWE-bench
 
-> **Unreleased.** The repository adapter and workflows below are development
+> **Repository tooling (v0.5.0).** The repository adapter and workflows below are development
 > tooling. Run them from this checkout with an explicitly selected Meldra binary;
 > they are not included in the latest published binary.
 

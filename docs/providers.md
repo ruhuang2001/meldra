@@ -1,6 +1,6 @@
 # Responses-compatible providers
 
-**Unreleased guide.** Meldra already supports a configurable Responses endpoint.
+**Updated for v0.5.0.** Meldra already supports a configurable Responses endpoint.
 The examples below describe the current source; they do not certify a particular
 model or server release. The endpoint must implement `POST /v1/responses`,
 including function calls and function-call outputs. A server advertising only
@@ -64,7 +64,7 @@ bounded by `max_custom_turn_input_bytes`; older tool outputs may be replaced by
 explicit omission markers, and an irreducible over-budget turn pauses for an
 explicit continuation. This is not model-generated compaction.
 
-**Unreleased:** `/compact [focus]` and automatic threshold compaction add a
+**Available since v0.5.0:** `/compact [focus]` and automatic threshold compaction add a
 separate model-generated summary of older conversation. They use the configured
 model with no tools and a 1024-output-token limit. A valid summary is saved with
 an immutable evidence artifact and recent messages; subsequent requests rebuild

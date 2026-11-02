@@ -1,6 +1,6 @@
 # Project context, execution modes, and foreground control
 
-**Unreleased:** [Stream JSON output](stream-json.md) provides a one-prompt JSONL
+**Available since v0.5.0:** [Stream JSON output](stream-json.md) provides a one-prompt JSONL
 protocol, noninteractive approval suspension and exact-operation resume.
 
 **Available since v0.4.0:** Project context, execution modes, managed processes,
@@ -10,20 +10,20 @@ Meldra's foreground runtime supports scoped project instructions, explicit file
 references, Plan/Build execution modes, managed processes, and interactive turn
 controls.
 
-**Unreleased performance improvement:** `search_files` reuses its scan buffer
+**Available since v0.5.0:** `search_files` reuses its scan buffer
 across files and matches lines without allocating a string for every line.
 Literal matching, line numbers, glob filtering, cancellation, and existing
 resource limits are unchanged. This optimization is not included in v0.4.2.
 
 ## Search and session titles
 
-**Unreleased.** `search_files` accepts `regex: true` for Go's RE2 regular
+**Available since v0.5.0.** `search_files` accepts `regex: true` for Go's RE2 regular
 expressions. Omitting it, passing null, or setting false retains literal matching.
 Invalid patterns return a tool error. Existing result, file, scan and cancellation
 limits still apply; regex results retain at most 16 KiB per matching line, marked
 when truncated. Patterns match the complete scanned line before output is bounded.
 
-**Unreleased.** New sessions get a deterministic title from their first nonempty
+**Available since v0.5.0.** New sessions get a deterministic title from their first nonempty
 user message: whitespace is collapsed and the first 60 Unicode characters are
 retained. Session lists and the resume picker show this title, which remains
 stable across later turns. Legacy snapshots without a title remain readable and
@@ -31,7 +31,7 @@ receive a title from their earliest retained user message on their next turn.
 
 ## Web tools
 
-**Unreleased:** [Web fetch and search](web-tools.md) add approved external reads
+**Available since v0.5.0:** [Web fetch and search](web-tools.md) add approved external reads
 in Build and Plan mode. Builtin fetch needs no service key; DeepSeek search is
 exposed only when configured. The workspace-edit permission profile does not
 bypass network disclosure approval. These tools do not grant file or command
@@ -106,7 +106,7 @@ history and are subject to task storage limits.
 
 ### Image references
 
-**Unreleased.** Attach a PNG or JPEG using the same file syntax, for example
+**Available since v0.5.0.** Attach a PNG or JPEG using the same file syntax, for example
 `Describe @screenshot.png` or `Compare @before.jpg and @after.png`. The TUI file
 picker can insert these paths. Supported image signatures are recognized even
 without a filename extension; other raster/vector formats and corrupt images
@@ -127,7 +127,7 @@ to the encoded multimodal input, so large text histories may require a smaller
 image or a fresh session. Native tool follow-ups retain images through the
 provider response chain; compatible providers replay them with tool history.
 
-**Unreleased:** Current and historical image declarations are assembled once,
+**Available since v0.5.0:** Current and historical image declarations are assembled once,
 after history selection and digest deduplication, in image payload order.
 Steering and resumed requests rebuild the same declarations from accepted
 snapshots; literal digest text in a prompt does not suppress an attachment.
@@ -233,7 +233,7 @@ The same commands are available in the TUI and line interface:
 | `/queue request` | Save a separate follow-up request for after the current turn. |
 | `/continue-queue` | Explicitly apply queued requests recovered after a restart. |
 | `/context [path]` | Inspect applicable `AGENTS.md` sources while idle without calling the model. |
-| `/compact [focus]` | **Unreleased:** summarize older context while idle using the configured model. |
+| `/compact [focus]` | **Available since v0.5.0:** summarize older context while idle using the configured model. |
 
 Ordinary text submitted while the TUI is busy acts as steering. In the line
 interface, use `/steer` explicitly; ordinary piped lines retain their FIFO order.
@@ -259,7 +259,7 @@ is pending. `Escape` returns to that interaction without submitting a correction
 
 ## Context compaction
 
-**Unreleased.** `/compact [focus]` asks the configured model to summarize older
+**Available since v0.5.0.** `/compact [focus]` asks the configured model to summarize older
 messages while retaining the most recent messages verbatim (8 by default).
 For example, `/compact the flaky integration test` steers the summary toward
 that work. The command is available while idle in both the TUI and line
@@ -303,7 +303,7 @@ and recovery never rerun the summarization request. See the
 
 ## Custom slash commands
 
-**Unreleased.** Custom commands expand local Markdown templates into ordinary
+**Available since v0.5.0.** Custom commands expand local Markdown templates into ordinary
 user messages. Create direct `*.md` files under workspace `.meldra/commands` or
 `$MELDRA_HOME/commands` (default `~/.meldra/commands`). Only those two directories
 are searched. The project source wins duplicate names; built-in commands always

@@ -82,13 +82,13 @@ HOME, XDG, temporary, and coverage directories. Use `make check E2E_WORKERS=1`
 on constrained machines. Reports, timings, logs, and checksums are retained in
 `.artifacts/checks`.
 
-**Unreleased:** Expensive suites, starting with compaction and capability, are
+**Available since v0.5.0:** Expensive suites, starting with compaction and capability, are
 submitted first; `report.json` records `suite_order` alongside suite timings.
 On a 12-core development machine, try `make check E2E_WORKERS=6`; the default
 remains three for smaller machines. Shared capability fixtures preserve the
 harness's `GORACE` and update-check controls, avoiding the race runtime's
 per-process exit sleep while retaining race instrumentation and coverage.
 
-**Unreleased:** `make check` skips deliberately slow E2E scenarios (currently
+**Available since v0.5.0:** `make check` skips deliberately slow E2E scenarios (currently
 `serve-approval-budget`, which waits 121s past the old fixed call deadline).
 `make check E2E_SLOW=1` and `make release-check` include them.

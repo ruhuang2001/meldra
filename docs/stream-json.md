@@ -1,6 +1,6 @@
 # Stream JSON protocol
 
-**Unreleased.** The foreground CLI accepts `--output-format text|stream-json`.
+**Available since v0.5.0.** The foreground CLI accepts `--output-format text|stream-json`.
 The default is `text`. Stream JSON runs exactly one `--prompt`, never reads stdin,
 and never enters the TUI, input picker or interactive approval flow.
 

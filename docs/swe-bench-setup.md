@@ -5,7 +5,7 @@ description: "Register for SWE-bench hosted evaluation and configure multimodal 
 
 ## SWE-bench Hosted Evaluation (sb-cli)
 
-> **Unreleased.** The Meldra adapter described here is repository development
+> **Repository tooling (v0.5.0).** The Meldra adapter described here is repository development
 > tooling. Run it from this checkout with an explicitly selected binary.
 
 Install the CLI and its missing runtime dependency:
@@ -83,8 +83,9 @@ quotas are controlled by the service.
 
 ## SWE-bench-m (Multimodal Support)
 
-> **Unreleased.** The provider-level image input below is not wired into the
-> CLI, TUI, or the Meldra agent loop yet, and no released version includes it.
+> **Available since v0.5.0.** CLI and TUI turns accept local PNG/JPEG
+> references and preserve image snapshots. See [foreground capabilities](capabilities.md).
+> The dedicated SWE-bench-m dataset adapter remains unimplemented.
 
 ### What is SWE-bench-m?
 
@@ -140,12 +141,12 @@ base64 data; there is no separate base64 field.
 
 #### SWE-bench-m Integration
 
-Still to do before this reaches users:
+Integration status:
 
-- [ ] Accept image input from the CLI and TUI
-- [ ] Wire image content through the agent turn builder in `internal/app`
+- [x] Accept local image references from the CLI and TUI
+- [x] Wire image content through the agent turn builder in `internal/app`
 - [ ] Write `scripts/swe-bench-m.py` to pull images from the dataset
-- [ ] End-to-end tests against a mocking provider
+- [x] End-to-end image-reference tests against a mock provider (`scripts/images-e2e.py`)
 
 ## Troubleshooting
 

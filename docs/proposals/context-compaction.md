@@ -1,6 +1,6 @@
 # Model-generated context compaction
 
-Status: **implemented in the working tree, unreleased.** Design of record for
+Status: **available since v0.5.0.** Design of record for
 [issue #65](https://github.com/ruhuang2001/meldra/issues/65). This document
 replaces the earlier draft's open questions with decided values; implementation
 follows the stable JSON stream protocol.

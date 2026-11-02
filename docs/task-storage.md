@@ -1,6 +1,6 @@
 # Foreground task storage contract
 
-**Unreleased:** [Stream JSON](stream-json.md) can leave a clean foreground Run
+**Available since v0.5.0:** [Stream JSON](stream-json.md) can leave a clean foreground Run
 in `waiting_approval` after releasing its leases. Its operation is recorded as
 cancelled before admission; `task resume --approve-detail-hash` revalidates the
 exact recorded operation under a new lease. Crash-incomplete approvals remain
@@ -42,7 +42,7 @@ contain secrets, so users must protect ledger backups as project data.
 
 ## Records and transitions
 
-**Unreleased:** web tools use the distinct `external_read` effect and approval
+**Available since v0.5.0:** web tools use the distinct `external_read` effect and approval
 operation. They retain source metadata and bounded artifacts, and require
 approval before network access. An interrupted external read after dispatch is
 unknown, unlike a local read; recovery never silently retries or resolves it as
@@ -152,7 +152,7 @@ asserting that no effect occurred.
 
 ## Context compaction
 
-**Unreleased.** Compaction preserves execution records and stores the summary as
+**Available since v0.5.0.** Compaction preserves execution records and stores the summary as
 conversation metadata. It never changes an admitted operation, tool outcome,
 approval, or process result. Unknown tool outcomes, unknown process effects, and
 pending approvals prevent compaction until explicitly resolved.

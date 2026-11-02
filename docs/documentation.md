@@ -139,6 +139,20 @@ publication, verify the release assets, add its curated timeline entry, and
 replace the relevant unreleased notices. Documentation deployment alone does
 not generate these updates.
 
+## Verified minor release v0.5.0
+
+v0.5.0 was published on November 2, 2026 at immutable tag revision
+`9d626a9ebb3f726c0806dc7e7bd2223b1f331c47`. All four platform archives and
+`meldra_checksums.txt` were downloaded and SHA-256 verified. Each binary passed
+the stable Go toolchain, target, and disabled-CGO metadata gate. The downloaded
+macOS arm64 binary reports version `0.5.0`.
+
+The [release workflow](https://github.com/ruhuang2001/meldra/actions/runs/41417634518)
+passed full source validation, including slow E2E scenarios. The
+[four-platform native checks](https://github.com/ruhuang2001/meldra/actions/runs/41417741447)
+also passed at the exact release tag. See the [release highlights](changelog.mdx)
+and [upgrade guide](upgrading.md).
+
 ## Local preview
 
 Documentation tooling is separate from the Go build and test workflow. Install

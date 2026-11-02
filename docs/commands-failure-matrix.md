@@ -3,7 +3,7 @@ title: "Custom command verification"
 description: "Failure cases and repeatable E2E evidence for custom slash commands."
 ---
 
-**Unreleased.** Written before implementation. Verify through the real binary
+**Available since v0.5.0.** Written before implementation. Verify through the real binary
 with `python3 scripts/commands-e2e.py --binary dist/meldra --output dist/commands-e2e`.
 The output directory must be new. Keep fixtures, provider requests, terminal
 transcripts, task records, and the checksummed report for repeatable review.

@@ -3,7 +3,7 @@ title: "Web fetch and search"
 description: "Configure approved public-page fetching and optional DeepSeek search."
 ---
 
-**Unreleased.** Meldra exposes `web_fetch` in CLI, TUI and `mcp serve`. The
+**Available since v0.5.0.** Meldra exposes `web_fetch` in CLI, TUI and `mcp serve`. The
 default `builtin` backend needs no service key. `web_search` is registered only
 when the DeepSeek search backend and its separate credential are configured.
 These are external reads, classified as `external_read` in task records. They

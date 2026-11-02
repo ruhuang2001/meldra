@@ -8,6 +8,30 @@ see the [generated changelog](https://github.com/ruhuang2001/meldra/blob/main/CH
 and [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
 Features on the development branch are not necessarily available in a release.
 
+<Update label='v0.5.0' description='November 2, 2026'>
+  ## Longer conversations and richer coding workflows
+
+  - **Context compaction:** Summarize older context automatically or with
+    `/compact [focus]`, while preserving task evidence and recent messages.
+  - **Web tools:** Fetch public pages and optionally search through DeepSeek,
+    with task records and approval controls.
+  - **Scriptable sessions:** Consume JSONL events and resume the exact approved
+    operation with stream JSON output.
+  - **Custom commands and images:** Expand local slash-command templates and
+    attach immutable PNG/JPEG snapshots to CLI and TUI conversations.
+  - **Search and navigation:** Use regex file searches and recognizable session
+    titles, with reduced file-search allocations.
+
+  **Upgrade:** Run `meldra update`, then restart Meldra. No task-store migration
+  is required. Normal upgrades do not require restoring a backup. If downgrading
+  to v0.4.2, newer session snapshots are unreadable by that version but are not
+  deleted; see the [upgrade guide](upgrading.md). Automatic compaction settings
+  are described in [configuration](configuration.md#context-compaction).
+
+  [Release and downloads](https://github.com/ruhuang2001/meldra/releases/tag/v0.5.0)
+  · [Full changes](https://github.com/ruhuang2001/meldra/compare/v0.4.2...v0.5.0)
+</Update>
+
 <Update label="v0.4.2" description="October 23, 2026">
   ## See each stage of a self-update
 

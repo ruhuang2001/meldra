@@ -8,7 +8,7 @@ Meldra connects to external MCP servers and exposes bounded
 workspace tools through `meldra mcp serve`. It uses the official Go SDK v1.8.0 and
 Meldra's existing approvals, task records, and recovery runtime.
 
-**Unreleased:** [Stream JSON approval resume](stream-json.md) binds each external
+**Available since v0.5.0:** [Stream JSON approval resume](stream-json.md) binds each external
 operation to its MCP connection configuration and OAuth login generation.
 Changing the selected server, executable, environment or authentication settings
 requires a new approval before the replacement transport is started.
@@ -99,7 +99,7 @@ guarantee cleanup. Restart chat after changing configuration.
 
 ## Optional fetch and Tavily servers
 
-**Unreleased documentation.** Meldra's built-in [web tools](web-tools.md) work
+**Updated for v0.5.0.** Meldra's built-in [web tools](web-tools.md) work
 without an MCP server. To use an external fetch implementation or Tavily search,
 install the relevant runtime (`uv` for Fetch, Node.js/npm for Tavily) and add:
 

@@ -1,4 +1,4 @@
-# Stream JSON failure matrix (Unreleased)
+# Stream JSON failure matrix (v0.5.0)
 
 The real-binary scripts/capability-e2e.py --stream-json suite retains transcripts,
 ledger snapshots, request logs, a report and checksums. Before implementation:

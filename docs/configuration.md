@@ -34,7 +34,7 @@ a positive limit up to 64 MiB.
 
 ### Context compaction
 
-**Unreleased.** Model-generated compaction summarizes older conversation messages
+**Available since v0.5.0.** Model-generated compaction summarizes older conversation messages
 and retains a recent tail. These `config.toml` settings appear in `config show`:
 
 | Key | Default | Accepted values |
