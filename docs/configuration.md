@@ -43,6 +43,17 @@ and retains a recent tail. These `config.toml` settings appear in `config show`:
 | `compact_threshold_percent` | `80` | `0..100`; `0` disables automatic compaction |
 | `max_turn_context_bytes` | `4194304` (4 MiB) | `1..67108864` bytes |
 
+Automatic compaction is enabled by default. When the locally rebuilt text
+context reaches the 80% threshold, compaction makes an additional request to
+the configured model, which can add latency and provider charges. To disable
+the automatic trigger, set this in `config.toml`:
+
+```toml
+compact_threshold_percent = 0
+```
+
+Manual `/compact [focus]` remains available.
+
 The corresponding process overrides are `MELDRA_COMPACT_KEEP_MESSAGES`,
 `MELDRA_COMPACT_THRESHOLD_PERCENT`, and `MELDRA_MAX_TURN_CONTEXT_BYTES`.
 

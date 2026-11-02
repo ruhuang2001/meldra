@@ -41,7 +41,8 @@ Two behavior changes need attention before you upgrade:
   including in Plan mode. `--auto-approve` also approves network disclosure and
   billing. Hosted DeepSeek search sends the complete query to that third party.
 
-Downgrading from v0.5.0 keeps the task ledger readable but loses saved sessions:
+Downgrading from v0.5.0 keeps the task ledger readable, but v0.4.2 cannot
+read the newer session snapshots. This does not delete the snapshot files:
 
 - The task ledger, `task show`, `task show --json`, and `task events` remain
   readable by v0.4.2, including records whose tool effect is `external_read`.
@@ -50,9 +51,13 @@ Downgrading from v0.5.0 keeps the task ledger readable but loses saved sessions:
 - Session snapshots written by v0.5.0 add a session `title` and a per-message
   `request_sequence`. v0.4.2 rejects unknown session fields, so it reports
   `skipped 1 unreadable or invalid saved session file` and `No saved sessions.`
-  for those snapshots. Restore the pre-upgrade backup or use a separate
-  `MELDRA_HOME` if you need to resume those conversations on an older binary.
-  Task records and their evidence are unaffected.
+  for those snapshots. Continue using v0.5.0 to resume them; no backup restore
+  is needed for a normal upgrade. If you explicitly downgrade and need to
+  resume an older conversation, restore its pre-upgrade backup. A separate
+  `MELDRA_HOME` lets you use the older binary independently, but does not
+  convert newer snapshots or make them readable. Task records and their
+  evidence remain readable; the snapshot format is separate from the ledger
+  schema.
 
 **Upgrade from v0.4.0 or v0.4.1 to v0.4.2:** Run `meldra update`, then restart
 Meldra to use the self-update stage notices and version details. The old updater
