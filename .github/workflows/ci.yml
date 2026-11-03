@@ -42,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [app, other]
+        shard: [app-io, app-other, other]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,14 +60,14 @@ jobs:
       # setup-go only restores exact keys. Reuse compatible compiler and
       # module entries after dependency updates; Go validates their content hashes.
       - name: Locate Go caches
-        if: matrix.shard == 'app' || steps.go.outputs.cache-hit != 'true'
+        if: startsWith(matrix.shard, 'app-') || steps.go.outputs.cache-hit != 'true'
         id: cache-paths
         run: |
           echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
           echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
           echo "prefix=setup-go-${RUNNER_OS}-x64-${ImageOS}-go-${{ steps.go.outputs.go-version }}-" >> "$GITHUB_OUTPUT"
       - name: Restore previous Go cache
-        if: matrix.shard == 'app' || steps.go.outputs.cache-hit != 'true'
+        if: startsWith(matrix.shard, 'app-') || steps.go.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v5
         with:
           path: |
@@ -79,12 +79,17 @@ jobs:
       - name: Race tests
         run: |
           mkdir -p .artifacts/ci
-          if [ '${{ matrix.shard }}' = app ]; then
-            go test -race ./internal/app 2>&1 | tee .artifacts/ci/race.log
-          else
-            packages=$(go list ./... | grep -vx 'meldra/internal/app')
-            go test -race $packages 2>&1 | tee .artifacts/ci/race.log
-          fi
+          # Complementary filters cover all current/future tests, examples, and
+          # fuzz seeds once; slow process/output checks balance the other tests.
+          io_tests='^Test(Command|Managed|Output|Synchronized|Verification)'
+          case '${{ matrix.shard }}' in
+            app-io) go test -race -run "$io_tests" ./internal/app 2>&1 | tee .artifacts/ci/race.log ;;
+            app-other) go test -race -skip "$io_tests" ./internal/app 2>&1 | tee .artifacts/ci/race.log ;;
+            other)
+              packages=$(go list ./... | grep -vx 'meldra/internal/app')
+              go test -race $packages 2>&1 | tee .artifacts/ci/race.log
+              ;;
+          esac
       - name: Fresh storage tests
         if: matrix.shard == 'other'
         run: go test -count=1 ./internal/store 2>&1 | tee .artifacts/ci/store.log
