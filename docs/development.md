@@ -41,12 +41,55 @@ exact revision you intend to tag. Its expectations are in the
 
 Choose a new output directory for each run.
 
-Remote CI uses one Linux job for race tests, the build, and a vulnerability
-scan (`make check-ci` plus `govulncheck`). Formatting, dependency tidiness,
-standalone vet, and coverage remain in full local checks; `go test` also runs its
-default vet checks remotely. Core CI runs for Go, module, and check configuration
-changes, skips draft PRs and documentation-only changes, and runs when a draft
-is marked ready for review.
+**Unreleased (CI configuration):** Remote CI splits race tests across three Ubuntu
+jobs. Two partition `internal/app` with complementary `-run` / `-skip` filters:
+command/process/output/verification tests and everything else (including new
+tests, examples, and fuzz seeds). The third covers every other package discovered
+by `go list ./...` and runs fresh non-race storage tests, a CGO-disabled build,
+and the pinned vulnerability scan. No existing remote check is omitted. Logs
+are retained for seven days. Formatting, dependency tidiness, standalone vet,
+E2E, and coverage remain in full local/release checks; `go test` also runs its
+default vet checks remotely.
+
+Only the latest run for each PR continues; every eligible `main` push has its
+own concurrency group, including pending runs. Draft PRs wait until ready for
+review. Documentation-only changes are excluded with `paths-ignore`; scripts
+and other non-documentation changes now trigger CI too.
+
+There are currently no enforced required status checks. **Do not require this
+path-filtered workflow's jobs directly:** GitHub leaves skipped required checks
+pending. Before enabling required checks, add an unfiltered dispatcher with a
+stable final gate that accepts documentation-only skips and rejects failures
+or cancellations from required jobs. Do not add an independently passing docs
+workflow with the same check name; mixed changes could bypass validation.
+
+Go uses setup-go's built-in module/compiler cache. On an exact dependency-key
+miss, CI restores a previous cache for the same OS image, architecture, and Go
+version; Go validates individual entries and setup-go saves the new exact key.
+The build/scan shard is the sole writer; the app shards restore without saving,
+so a faster app job cannot freeze a cache missing production build outputs.
+Keys include both module files and the workflow, allowing build-flag changes to
+refresh the immutable cache. No source-per-commit cache, fixture homes, or
+evidence is cached. Race instrumentation remains enabled; `GORACE` removes only
+the runtime's default one-second exit sleep, also used by the E2E harness.
+PR packaging
+uses the prebuilt pinned GoReleaser action and retains its full `make check`
+before hook. Upstream publishes no govulncheck release binaries, so its pinned
+`go run` build continues to reuse the compiler cache.
+
+To reproduce Actions timing analysis (requires authenticated `gh`):
+
+```bash
+python3 scripts/actions-timings.py --limit 50 --output .artifacts/actions-timings
+# Regenerate the report without GitHub requests:
+python3 scripts/actions-timings.py --runs .artifacts/actions-timings/runs.json \
+  --jobs .artifacts/actions-timings/jobs.json --output .artifacts/actions-timings-repeat
+```
+
+Reports retain raw API responses, per-step classification, CSV, and workflow/job
+medians. Queue estimates include dependency waiting; execution includes builds
+and scans. Cleanup and artifact overhead are separate. Compare like-for-like
+cache states and source revisions, not only historical averages.
 
 The four native platform checks run manually through **Actions → Platform
 smoke → Run workflow** before a release or when investigating platform behavior.

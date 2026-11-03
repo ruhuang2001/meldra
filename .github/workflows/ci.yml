@@ -3,44 +3,111 @@ name: CI
 on:
   push:
     branches: [main]
-    paths:
-      - '**.go'
-      - go.mod
-      - go.sum
-      - Makefile
-      - .github/workflows/ci.yml
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - docs/**
+      - LICENSE
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - '**.go'
-      - go.mod
-      - go.sum
-      - Makefile
-      - .github/workflows/ci.yml
+    paths-ignore:
+      - '**/*.md'
+      - '**/*.mdx'
+      - docs/**
+      - LICENSE
   workflow_dispatch:
 
+# Unique non-PR groups also prevent a third main push from evicting a pending run.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
-    name: Check
+    name: Check (${{ matrix.shard }})
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Helper processes otherwise sleep one second each after race checking.
+      GORACE: atexit_sleep_ms=0
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [app-io, app-other, other]
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - uses: actions/setup-go@v7
+        id: go
         with:
-          go-version: "1.26.10"
-      - name: Check
-        run: make check-ci
+          go-version-file: go.mod
+          # One writer prevents the faster test shard saving an incomplete cache.
+          cache: ${{ matrix.shard == 'other' }}
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            .github/workflows/ci.yml
+      # setup-go only restores exact keys. Reuse compatible compiler and
+      # module entries after dependency updates; Go validates their content hashes.
+      - name: Locate Go caches
+        if: startsWith(matrix.shard, 'app-') || steps.go.outputs.cache-hit != 'true'
+        id: cache-paths
+        run: |
+          echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
+          echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
+          echo "prefix=setup-go-${RUNNER_OS}-x64-${ImageOS}-go-${{ steps.go.outputs.go-version }}-" >> "$GITHUB_OUTPUT"
+      - name: Restore previous Go cache
+        if: startsWith(matrix.shard, 'app-') || steps.go.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v5
+        with:
+          path: |
+            ${{ steps.cache-paths.outputs.modules }}
+            ${{ steps.cache-paths.outputs.build }}
+          key: ${{ steps.cache-paths.outputs.prefix }}${{ hashFiles('go.mod', 'go.sum', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ steps.cache-paths.outputs.prefix }}
+      - name: Race tests
+        run: |
+          mkdir -p .artifacts/ci
+          # Complementary filters cover all current/future tests, examples, and
+          # fuzz seeds once; slow process/output checks balance the other tests.
+          io_tests='^Test(Command|Managed|Output|Synchronized|Verification)'
+          case '${{ matrix.shard }}' in
+            app-io) go test -race -run "$io_tests" ./internal/app 2>&1 | tee .artifacts/ci/race.log ;;
+            app-other) go test -race -skip "$io_tests" ./internal/app 2>&1 | tee .artifacts/ci/race.log ;;
+            other)
+              packages=$(go list ./... | grep -vx 'meldra/internal/app')
+              go test -race $packages 2>&1 | tee .artifacts/ci/race.log
+              ;;
+          esac
+      - name: Fresh storage tests
+        if: matrix.shard == 'other'
+        run: go test -count=1 ./internal/store 2>&1 | tee .artifacts/ci/store.log
+      - name: Build without CGO
+        if: matrix.shard == 'other'
+        env:
+          CGO_ENABLED: '0'
+        run: make build
       - name: Scan reachable dependencies
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+        if: matrix.shard == 'other'
+        # Upstream publishes no govulncheck binaries. The pinned go run build is
+        # reused through setup-go's compiler cache, without another tool cache.
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./... 2>&1 | tee .artifacts/ci/vulnerabilities.log
+      - name: Retain check evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-${{ matrix.shard }}
+          path: .artifacts/ci
+          include-hidden-files: true
+          retention-days: 7
