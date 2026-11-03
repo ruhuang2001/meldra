@@ -64,7 +64,12 @@ workflow with the same check name; mixed changes could bypass validation.
 Go uses setup-go's built-in module/compiler cache. On an exact dependency-key
 miss, CI restores a previous cache for the same OS image, architecture, and Go
 version; Go validates individual entries and setup-go saves the new exact key.
-No source-per-commit cache, fixture homes, or evidence is cached. PR packaging
+The build/scan shard is the sole writer; the app shard restores without saving,
+so a faster app job cannot freeze a cache missing production build outputs.
+Keys include both module files and the workflow, allowing build-flag changes to
+refresh the immutable cache. No source-per-commit cache, fixture homes, or
+evidence is cached. Race instrumentation remains enabled; `GORACE` removes only
+the runtime's default one-second exit sleep, also used by the E2E harness. PR packaging
 uses the prebuilt pinned GoReleaser action and retains its full `make check`
 before hook. Upstream publishes no govulncheck release binaries, so its pinned
 `go run` build continues to reuse the compiler cache.

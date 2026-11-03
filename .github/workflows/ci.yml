@@ -36,6 +36,9 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      # Helper processes otherwise sleep one second each after race checking.
+      GORACE: atexit_sleep_ms=0
     strategy:
       fail-fast: false
       matrix:
@@ -48,23 +51,29 @@ jobs:
         id: go
         with:
           go-version-file: go.mod
-      # setup-go only restores exact go.sum keys. Reuse compatible compiler and
+          # One writer prevents the faster test shard saving an incomplete cache.
+          cache: ${{ matrix.shard == 'other' }}
+          cache-dependency-path: |
+            go.mod
+            go.sum
+            .github/workflows/ci.yml
+      # setup-go only restores exact keys. Reuse compatible compiler and
       # module entries after dependency updates; Go validates their content hashes.
       - name: Locate Go caches
-        if: steps.go.outputs.cache-hit != 'true'
+        if: matrix.shard == 'app' || steps.go.outputs.cache-hit != 'true'
         id: cache-paths
         run: |
           echo "modules=$(go env GOMODCACHE)" >> "$GITHUB_OUTPUT"
           echo "build=$(go env GOCACHE)" >> "$GITHUB_OUTPUT"
           echo "prefix=setup-go-${RUNNER_OS}-x64-${ImageOS}-go-${{ steps.go.outputs.go-version }}-" >> "$GITHUB_OUTPUT"
       - name: Restore previous Go cache
-        if: steps.go.outputs.cache-hit != 'true'
+        if: matrix.shard == 'app' || steps.go.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v5
         with:
           path: |
             ${{ steps.cache-paths.outputs.modules }}
             ${{ steps.cache-paths.outputs.build }}
-          key: ${{ steps.cache-paths.outputs.prefix }}fallback
+          key: ${{ steps.cache-paths.outputs.prefix }}${{ hashFiles('go.mod', 'go.sum', '.github/workflows/ci.yml') }}
           restore-keys: |
             ${{ steps.cache-paths.outputs.prefix }}
       - name: Race tests
