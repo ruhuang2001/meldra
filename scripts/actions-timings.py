@@ -50,6 +50,8 @@ successful runs with complete job timing evidence. Phase medians per workflow
 are per-run sums of job phases (runner-seconds; queue sums are waiting-seconds),
 not critical-path wall time. Job medians group exact job names within workflows
 and include only successful jobs with complete timing evidence.
+Workflow grouping uses workflowDatabaseId; legacy offline input without IDs falls
+back to display names and cannot distinguish identical names.
 Raw jobs are the latest attempt returned by GitHub, with run_attempt preserved.
 """
 
@@ -103,6 +105,11 @@ def total(values):
 PHASES = ("queue", "setup", "execution", "cleanup", "overhead")
 
 
+def workflow_key(run):
+    identity = run.get("workflowDatabaseId")
+    return str(identity) if identity is not None else "legacy-name:" + run["workflowName"]
+
+
 def analyze_job(run, job):
     steps = [{"number": s.get("number"), "name": s["name"],
               "phase": phase(s["name"]), "conclusion": s.get("conclusion"),
@@ -126,6 +133,7 @@ def analyze_job(run, job):
     if residual is None:
         notes.append("Unattributed time cannot be reliably measured.")
     row = {"run_id": run["databaseId"], "workflow": run["workflowName"],
+           "workflow_id": run.get("workflowDatabaseId"), "workflow_key": workflow_key(run),
            "run_conclusion": run.get("conclusion"), "job_id": job["id"],
            "job": job["name"], "attempt": job.get("run_attempt"),
            "conclusion": job.get("conclusion"), "status": job.get("status"),
@@ -154,7 +162,7 @@ def report(runs, jobs):
         current = [analyze_job(run, job) for job in collection["jobs"]]
         rows.extend(current)
         successful = run.get("status") == "completed" and run.get("conclusion") == "success"
-        group = workflows.setdefault(run["workflowName"], {"runs": 0, "successful_runs": 0, "samples": []})
+        group = workflows.setdefault(workflow_key(run), {"name": run["workflowName"], "workflow_id": run.get("workflowDatabaseId"), "runs": 0, "successful_runs": 0, "samples": []})
         group["runs"] += 1
         if not successful:
             continue
@@ -176,8 +184,8 @@ def report(runs, jobs):
     for row in rows:
         if (row["run_id"] in success_ids and row["conclusion"] == "success"
                 and all(row[key + "_seconds"] is not None for key in ("wall", *PHASES))):
-            job_groups.setdefault((row["workflow"], row["job"]), []).append(row)
-    summaries = [{"workflow": workflow, "job": name, "samples": len(items),
+            job_groups.setdefault((row["workflow_key"], row["job"]), []).append(row)
+    summaries = [{"workflow": items[0]["workflow"], "workflow_id": items[0]["workflow_id"], "job": name, "samples": len(items),
                   "medians_seconds": {key: median([r[key + "_seconds"] for r in items]) for key in ("wall", *PHASES)}}
                  for (workflow, name), items in sorted(job_groups.items())]
     return {"methodology": METHOD, "workflows": workflows, "job_medians": summaries, "jobs": rows}
@@ -196,13 +204,13 @@ def markdown(data):
              "| Workflow | All runs | Successful | Complete samples | Wall | Queue sum | Setup sum | Execution sum | Cleanup sum | Overhead sum |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for name, group in sorted(data["workflows"].items()):
-        values = [name, group["runs"], group["successful_runs"], group["complete_timing_samples"]]
+        values = [group["name"] + " [" + name + "]", group["runs"], group["successful_runs"], group["complete_timing_samples"]]
         values += [group["medians_seconds"][key] for key in ("wall", *PHASES)]
         lines.append("| " + " | ".join(map(cell, values)) + " |")
     lines += ["", "## Successful job medians", "", "| Workflow | Job | Samples | Wall | Queue | Setup | Execution | Cleanup | Overhead |",
               "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for group in data["job_medians"]:
-        values = [group["workflow"], group["job"], group["samples"]]
+        values = [group["workflow"] + " [" + str(group["workflow_id"]) + "]", group["job"], group["samples"]]
         values += [group["medians_seconds"][key] for key in ("wall", *PHASES)]
         lines.append("| " + " | ".join(map(cell, values)) + " |")
     lines += ["", "## Per-job evidence", ""]
@@ -234,7 +242,7 @@ def main():
         runs, jobs = read_json(args.runs), read_json(args.jobs)
     else:
         repo = args.repo or gh("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
-        fields = "databaseId,workflowName,createdAt,startedAt,updatedAt,status,conclusion,event,headBranch,headSha,url"
+        fields = "databaseId,workflowDatabaseId,workflowName,createdAt,startedAt,updatedAt,status,conclusion,event,headBranch,headSha,url"
         runs = gh("run", "list", "--repo", repo, "--limit", str(args.limit), "--json", fields)
         write_json(args.output / "runs.json", runs)
         jobs = {}
@@ -247,7 +255,7 @@ def main():
     data = report(runs, jobs)
     write_json(args.output / "report.json", data)
     (args.output / "report.md").write_text(markdown(data))
-    fields = ["run_id", "workflow", "run_conclusion", "job_id", "job", "attempt", "status", "conclusion", "wall_seconds",
+    fields = ["run_id", "workflow", "workflow_id", "run_conclusion", "job_id", "job", "attempt", "status", "conclusion", "wall_seconds",
               *[kind + "_seconds" for kind in PHASES], "artifact_seconds", "unattributed_seconds", "url"]
     with (args.output / "jobs.csv").open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
