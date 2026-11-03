@@ -52,6 +52,8 @@ not critical-path wall time. Job medians group exact job names within workflows
 and include only successful jobs with complete timing evidence.
 Workflow grouping uses workflowDatabaseId; legacy offline input without IDs falls
 back to display names and cannot distinguish identical names.
+Explicitly skipped jobs remain in evidence but are excluded from workflow timing
+aggregation and completeness checks.
 Raw jobs are the latest attempt returned by GitHub, with run_attempt preserved.
 """
 
@@ -167,12 +169,14 @@ def report(runs, jobs):
         if not successful:
             continue
         group["successful_runs"] += 1
-        ends = [timestamp(job.get("completed_at")) for job in collection["jobs"]]
+        executed = [job for job in collection["jobs"] if job.get("conclusion") != "skipped"]
+        timed = [row for row in current if row["conclusion"] != "skipped"]
+        ends = [timestamp(job.get("completed_at")) for job in executed]
         wall = (duration(run.get("createdAt"), max(ends).isoformat())
                 if ends and all(ends) else None)
         sample = {"run_id": run["databaseId"], "wall_seconds": wall}
         for kind in PHASES:
-            sample[kind + "_seconds"] = total([r[kind + "_seconds"] for r in current]) if current else None
+            sample[kind + "_seconds"] = total([r[kind + "_seconds"] for r in timed]) if timed else None
         if all(value is not None for value in sample.values()):
             group["samples"].append(sample)
     for group in workflows.values():
@@ -210,7 +214,7 @@ def markdown(data):
     lines += ["", "## Successful job medians", "", "| Workflow | Job | Samples | Wall | Queue | Setup | Execution | Cleanup | Overhead |",
               "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
     for group in data["job_medians"]:
-        values = [group["workflow"] + " [" + str(group["workflow_id"]) + "]", group["job"], group["samples"]]
+        values = [group["workflow"] + (" [" + str(group["workflow_id"]) + "]" if group["workflow_id"] is not None else ""), group["job"], group["samples"]]
         values += [group["medians_seconds"][key] for key in ("wall", *PHASES)]
         lines.append("| " + " | ".join(map(cell, values)) + " |")
     lines += ["", "## Per-job evidence", ""]
