@@ -5,7 +5,7 @@ Failure cases considered before implementation:
 - gh missing, unauthenticated, or API failing: exit nonzero with the command error.
 - Missing/malformed offline input or missing jobs: fail rather than invent evidence.
 - Paginated jobs: fetch every page and reject incomplete offline job collections.
-- Pending/skipped steps or absent/invalid timestamps: retain unknown as null, not zero.
+- Missing executed-step timestamps stay unknown; explicitly skipped steps take zero time.
 - Negative/overlapping intervals: flag anomalies; never silently call them test time.
 - Dependency waiting and reruns: queue is only a run-created-to-job-start estimate,
   includes needs waiting (and time before a rerun), not pure runner provisioning.
@@ -42,8 +42,9 @@ builds, checks, releases and scans; it is not exclusively test execution. Rules
 are name-based heuristics; per-step evidence below makes them reviewable.
 Unattributed time = job wall time minus all measured step durations, reported as
 overhead only when all step durations are known and nonoverlapping. Missing or
-invalid timestamps remain unknown. Skipped steps without timestamps remain
-unknown. Workflow wall time uses the latest job completion minus run creation,
+invalid timestamps remain unknown. Explicitly skipped steps take zero execution
+time, even without timestamps. Workflow wall time uses the latest job completion
+minus run creation,
 not updated_at (which can change later). Workflow medians include only completed
 successful runs with complete job timing evidence. Phase medians per workflow
 are per-run sums of job phases (runner-seconds; queue sums are waiting-seconds),
@@ -87,7 +88,7 @@ def phase(name):
     name = name.lower()
     if name.startswith("post ") or name in ("complete job", "cleanup", "clean up job"):
         return "cleanup"
-    if re.search(r"upload.artifact|download.artifact|retain .*evidence", name):
+    if re.search(r"(?:upload|download).*?(?:artifact|archive)|retain .*evidence", name):
         return "overhead"
     if (name in ("set up job", "create job directory")
             or re.search(r"actions/(checkout|setup-|cache)|^(checkout|check out|set up|setup|install|restore .*cache|save .*cache|download dependencies)\b", name)):
@@ -106,7 +107,8 @@ def analyze_job(run, job):
     steps = [{"number": s.get("number"), "name": s["name"],
               "phase": phase(s["name"]), "conclusion": s.get("conclusion"),
               "started_at": s.get("started_at"), "completed_at": s.get("completed_at"),
-              "seconds": duration(s.get("started_at"), s.get("completed_at"))}
+              "seconds": 0.0 if s.get("conclusion") == "skipped" else
+              duration(s.get("started_at"), s.get("completed_at"))}
              for s in job.get("steps", [])]
     wall = duration(job.get("started_at"), job.get("completed_at"))
     measured = total([s["seconds"] for s in steps]) if steps else None
