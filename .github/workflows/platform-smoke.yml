@@ -17,9 +17,13 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
 concurrency:
-  group: platform-smoke-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: platform-smoke-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   native:
