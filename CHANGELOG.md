@@ -5,6 +5,18 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.6.0](https://github.com/ruhuang2001/meldra/compare/v0.5.0...v0.6.0) (2026-11-05)
+
+
+### Features
+
+* **tui:** add composer mode badge and shift-tab switching ([beb7c44](https://github.com/ruhuang2001/meldra/commit/beb7c44485600648a3d8a4d42d9ea1111c4043ca))
+
+
+### Performance
+
+* **ci:** accelerate actions without dropping checks ([#77](https://github.com/ruhuang2001/meldra/issues/77)) ([470c24a](https://github.com/ruhuang2001/meldra/commit/470c24a917edb8a7caf1ec9135016ee64e68a7e4))
+
 ## [0.5.0](https://github.com/ruhuang2001/meldra/compare/v0.4.2...v0.5.0) (2026-11-02)
 
 
