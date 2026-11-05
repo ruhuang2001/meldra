@@ -169,6 +169,11 @@ Plan is local-only while active: starting a Plan session does not connect
 configured external MCP servers, and switching to Build connects them on demand.
 A mode change requires a user action.
 
+In Plan mode the agent reads the workspace only when the plan needs project
+information. For a simple create or modify request that needs no project
+context, it replies that Plan cannot perform the change, names Build as the
+required mode, and ends the turn instead of exploring further.
+
 Mode and permission are separate. `interactive`, the default permission policy,
 requires confirmation for file modifications and programs that execute project
 code. `--permissions workspace-edit` grants the checked built-in file operations;
@@ -226,6 +231,7 @@ The same commands are available in the TUI and line interface:
 
 | Input | Action |
 | --- | --- |
+| `Shift-Tab` | **Unreleased:** Toggle Plan and Build from the TUI composer. |
 | `/plan` | Enter Plan after incompatible active work has settled. |
 | `/build` | Enter Build within the current permission profile. |
 | `/stop` | Stop the current turn while keeping the application open. |
@@ -393,8 +399,16 @@ runs longer than 120 seconds and is manual. Deterministic runtime tests establis
 permission and lifecycle contracts; this suite makes no claim about real-model
 task completion quality.
 
-**Available since v0.4.1:** The TUI header shows `Read-only` in Plan mode and `Editing` in
-Build mode. Editing adds `Confirm changes` for the interactive permission
-profile or `File edits allowed` for workspace-edit. These labels describe the
-current policy, not an operation in progress. Session IDs are omitted from the
-header; the exit notice retains the complete ID and resume command.
+**Unreleased:** The TUI shows the current mode as a badge in the composer's
+top-right border: `PLAN` in Plan mode and `BUILD` in Build mode. The badge shows
+only the mode, not the permission profile.
+The badge replaces border cells, so the composer keeps its height and
+the cursor position stays accurate. `Shift-Tab` toggles between Plan and Build
+without editing the draft; during an active turn it goes through turn control
+and is journaled like `/plan` and `/build`. The badge changes only after the
+agent reports the new mode, so a rejected change leaves it unchanged.
+
+Earlier versions showed `Read-only` and `Editing` in the TUI header. That text is
+now only in the badge. These labels describe the current policy, not an
+operation in progress. Session IDs are omitted from the header; the exit notice
+retains the complete ID and resume command.

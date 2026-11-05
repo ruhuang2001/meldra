@@ -24,7 +24,7 @@ func (a *Agent) runInference(ctx context.Context, input provider.Input, previous
 	}
 	instructions := agentInstructions + fmt.Sprintf("\nRuntime mode: %s. Permission profile: %s. Only the user can change these settings.\n", mode, permissions)
 	if mode == ModePlan {
-		instructions += "Plan mode: investigate and propose a plan. Do not modify the project or execute project programs or remote actions. You may save plan/summary metadata. Request a user switch to Build before implementation. The verify tool is restricted to preset diff.\n"
+		instructions += "Plan mode: investigate and propose a plan. Do not modify the project or execute project programs or remote actions. You may save plan/summary metadata. Request a user switch to Build before implementation. The verify tool is restricted to preset diff. Only use read-only tools when the plan actually needs project information. If a simple create or modify request can be answered without project context, reply directly that Plan mode cannot perform it and that Build is required, then end the turn. Once you have asked the user to switch to Build, stop exploring and wait.\n"
 	} else {
 		instructions += "Build mode: follow the user request within the active permission profile; changing mode does not preapprove commands.\n"
 	}

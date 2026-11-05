@@ -37,6 +37,10 @@ var (
 	tuiErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 	tuiWarnStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	tuiInputStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
+	// Mode badges sit in the composer's top border, so they use the terminal's
+	// own background and never paint over the user's theme.
+	tuiPlanModeStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	tuiBuildModeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("44"))
 )
 
 // tuiInputStyles keeps the composer background transparent so text always
@@ -148,11 +152,13 @@ type tuiAgentStoppedMsg struct {
 }
 
 type tuiInitialState struct {
-	workspace string
-	sessionID string
-	model     string
-	messages  []SessionMessage
-	notices   []string
+	workspace   string
+	sessionID   string
+	model       string
+	mode        string
+	permissions string
+	messages    []SessionMessage
+	notices     []string
 }
 
 // tuiUserMessageSource supplies --prompt before waiting for interactive TUI
@@ -518,16 +524,18 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	}
 
 	return &tuiModel{
-		controller:      controller,
-		workspace:       initial.workspace,
-		sessionID:       initial.sessionID,
-		modelName:       initial.model,
-		viewport:        activity,
-		input:           input,
-		entries:         entries,
-		activeAssistant: -1,
-		activeTool:      -1,
-		status:          "Starting",
+		controller:        controller,
+		workspace:         initial.workspace,
+		sessionID:         initial.sessionID,
+		modelName:         initial.model,
+		executionMode:     initial.mode,
+		permissionProfile: initial.permissions,
+		viewport:          activity,
+		input:             input,
+		entries:           entries,
+		activeAssistant:   -1,
+		activeTool:        -1,
+		status:            "Starting",
 	}
 }
 
@@ -675,6 +683,28 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, command
 }
 
+// toggleMode switches between Plan and Build without leaving the composer.
+// While a turn is active the request goes through turn control so it is
+// journaled and acknowledged; while idle it is submitted as the same slash
+// control the user could type, so both paths share one mode-change owner.
+// The badge only moves when the agent reports the new mode.
+func (m *tuiModel) toggleMode() tea.Cmd {
+	target := string(ModePlan)
+	if m.executionMode == string(ModePlan) {
+		target = string(ModeBuild)
+	}
+	if m.busy && m.controller.submitControl != nil {
+		return func() tea.Msg {
+			return m.controller.submitUserControl("mode", target, "/"+target)
+		}
+	}
+	select {
+	case m.controller.messages <- "/" + target:
+	case <-m.controller.done:
+	}
+	return nil
+}
+
 func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	if m.referencePicker != nil && key.String() != "ctrl+c" && key.String() != "ctrl+x" {
 		return m.referencePickerKey(key)
@@ -752,6 +782,9 @@ func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
 	}
 	if m.stopped {
 		return nil
+	}
+	if key.String() == "shift+tab" {
+		return m.toggleMode()
 	}
 
 	if m.handleCommandCompletion(key) {
@@ -1074,6 +1107,34 @@ func (m *tuiModel) renderPending() string {
 	return output.String()
 }
 
+// modeBadge is the read-out shown in the composer's top border. It is derived
+// from the execution mode reported by the agent, never from a local guess.
+func (m *tuiModel) modeBadge() (string, lipgloss.Style) {
+	switch m.executionMode {
+	case string(ModePlan):
+		return "PLAN", tuiPlanModeStyle
+	case string(ModeBuild):
+		return "BUILD", tuiBuildModeStyle
+	}
+	return "", tuiDimStyle
+}
+
+// composerBox renders the framed input. When there is room, the mode badge
+// replaces border cells in the top-right corner so the layout height is fixed
+// and the cursor offset used for IME positioning stays correct.
+func (m *tuiModel) composerBox() string {
+	box := tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
+	label, style := m.modeBadge()
+	badge := " " + sanitizeTerminalText(label) + " "
+	top, rest, ok := strings.Cut(box, "\n")
+	width := ansi.StringWidth(top)
+	badgeWidth := ansi.StringWidth(badge)
+	if !ok || label == "" || badgeWidth+2 > width {
+		return box
+	}
+	return ansi.Truncate(top, width-badgeWidth-1, "") + style.Render(badge) + ansi.TruncateLeft(top, width-1, "") + "\n" + rest
+}
+
 func (m *tuiModel) View() tea.View {
 	if m.referencePicker != nil {
 		return m.referencePickerView()
@@ -1087,33 +1148,19 @@ func (m *tuiModel) View() tea.View {
 
 	workspace := sanitizeTerminalText(filepath.Base(m.workspace))
 	header := tuiBrandStyle.Render("MELDRA") + tuiDimStyle.Render("  "+sanitizeTerminalText(version)+"  "+workspace+"  "+sanitizeTerminalText(m.modelName))
-	switch m.executionMode {
-	case string(ModePlan):
-		header += " | Read-only"
-	case string(ModeBuild):
-		header += " | Editing"
-		switch m.permissionProfile {
-		case string(PermissionInteractive):
-			header += " · Confirm changes"
-		case string(PermissionWorkspaceEdit):
-			header += " · File edits allowed"
-		}
-	}
 	header = ansi.Truncate(strings.ReplaceAll(header, "\n", " "), max(1, m.width), "…")
 	composer := ""
 	switch {
 	case m.correcting:
-		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
+		composer = m.composerBox()
 	case m.mcpPending != nil:
-		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
+		composer = m.composerBox()
 	case m.pending != nil:
 		composer = tuiWarnStyle.Render("Approval is waiting above")
 	case m.stopped:
 		composer = tuiDimStyle.Render("The agent stopped. Press Ctrl-C to exit.")
-	case m.busy:
-		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	default:
-		composer = tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
+		composer = m.composerBox()
 	}
 
 	if completion := m.commandCompletionView(); completion != "" {
@@ -1123,7 +1170,7 @@ func (m *tuiModel) View() tea.View {
 	if m.pending != nil {
 		footerText += "  Approval: y approve · n/Enter reject"
 	} else if m.mcpPending == nil && !m.stopped {
-		footerText += "  Ctrl-F attach file"
+		footerText += "  Shift-Tab mode · Ctrl-F attach file"
 	}
 	footer := tuiDimStyle.Render(footerText)
 	content := strings.Join([]string{header, m.viewport.View(), composer, footer}, "\n")
@@ -1196,11 +1243,13 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	agentDone := make(chan error, 1)
 	started := false
 	uiErr := controller.run(chatCtx, stdin, stdout, tuiInitialState{
-		workspace: runtime.workspace.root,
-		sessionID: runtime.session.ID,
-		model:     settings.Model,
-		messages:  append([]SessionMessage(nil), runtime.session.Messages...),
-		notices:   runtime.mcp.warnings,
+		workspace:   runtime.workspace.root,
+		sessionID:   runtime.session.ID,
+		model:       settings.Model,
+		mode:        string(runtime.session.Mode),
+		permissions: string(runtime.session.Permissions),
+		messages:    append([]SessionMessage(nil), runtime.session.Messages...),
+		notices:     runtime.mcp.warnings,
 	}, func() {
 		started = true
 		if options.Prompt == "" {
