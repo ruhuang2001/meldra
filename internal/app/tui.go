@@ -131,6 +131,10 @@ type tuiControlResultMsg struct {
 	err           error
 }
 
+type tuiModeRequestResultMsg struct {
+	err error
+}
+
 // The UI can still be showing the last turn while the agent has already closed
 // its control journal. Route late input through the ordinary input owner instead
 // of requiring the user to retype it; this is not a durable control acknowledgment.
@@ -463,10 +467,12 @@ type tuiModel struct {
 	hiddenEntries int
 	metrics       UIMetrics
 
-	activeAssistant int
-	activeTool      int
-	status          string
-	busy            bool
+	activeAssistant   int
+	activeTool        int
+	status            string
+	busy              bool
+	modeChangePending bool
+	modeChangeTarget  string
 	// submissionPending prevents a Ready event from an earlier agent turn
 	// from reopening the composer after Enter has already submitted input.
 	submissionPending bool
@@ -565,6 +571,9 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.normalMessage {
 			return m, nil
 		}
+		if msg.kind == "mode" && msg.err != nil {
+			m.clearModeChangePending()
+		}
 		if msg.err != nil {
 			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: "Control failed: " + msg.err.Error()})
 			if msg.text != "" {
@@ -579,6 +588,13 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: map[string]string{"steer": "Steering received", "queue": "Queued", "stop": "Stop requested", "mode": "Mode change requested"}[msg.kind]})
 		}
 		m.refreshViewport()
+		return m, nil
+	case tuiModeRequestResultMsg:
+		if msg.err != nil {
+			m.clearModeChangePending()
+			m.addEntry(tuiEntry{kind: tuiEntryNotice, text: "Mode change request failed: " + sanitizeTerminalText(msg.err.Error())})
+			m.refreshViewport()
+		}
 		return m, nil
 	case tuiReferencesLoadedMsg:
 		if m.referencePicker == msg.picker {
@@ -637,6 +653,7 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.resolveMCPInput("cancel")
 		m.stopped = true
 		m.busy = true
+		m.clearModeChangePending()
 		m.submissionPending = false
 		m.input.Blur()
 		if m.activeAssistant >= 0 {
@@ -689,20 +706,34 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 // control the user could type, so both paths share one mode-change owner.
 // The badge only moves when the agent reports the new mode.
 func (m *tuiModel) toggleMode() tea.Cmd {
+	if m.modeChangePending {
+		return nil
+	}
 	target := string(ModePlan)
 	if m.executionMode == string(ModePlan) {
 		target = string(ModeBuild)
 	}
+	m.modeChangePending = true
+	m.modeChangeTarget = target
 	if m.busy && m.controller.submitControl != nil {
 		return func() tea.Msg {
-			return m.controller.submitUserControl("mode", target, "/"+target)
+			result := m.controller.submitUserControl("mode", target, "/"+target)
+			return tuiModeRequestResultMsg{err: result.err}
 		}
 	}
-	select {
-	case m.controller.messages <- "/" + target:
-	case <-m.controller.done:
+	return func() tea.Msg {
+		select {
+		case m.controller.messages <- "/" + target:
+			return tuiModeRequestResultMsg{}
+		case <-m.controller.done:
+			return tuiModeRequestResultMsg{err: errors.New("chat closed before mode change was submitted")}
+		}
 	}
-	return nil
+}
+
+func (m *tuiModel) clearModeChangePending() {
+	m.modeChangePending = false
+	m.modeChangeTarget = ""
 }
 
 func (m *tuiModel) handleKey(key tea.KeyPressMsg) tea.Cmd {
@@ -856,6 +887,9 @@ func (m *tuiModel) resolveApproval(approved bool) {
 func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 	switch event.Kind {
 	case UIEventStatus:
+		if event.Text == "Mode change failed" {
+			m.clearModeChangePending()
+		}
 		if event.Text == "Ready" && m.submissionPending {
 			// The initial Ready can race with the Enter key because both are
 			// delivered to Bubble Tea from different goroutines. Keep the
@@ -903,6 +937,9 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 	case UIEventMode:
 		m.executionMode = event.Text
 		m.permissionProfile = event.Detail
+		if m.modeChangePending && event.Text == m.modeChangeTarget {
+			m.clearModeChangePending()
+		}
 	case UIEventCommandOutput:
 		m.appendCommandOutput(event)
 	case UIEventToolStarted:

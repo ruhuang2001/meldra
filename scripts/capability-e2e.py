@@ -590,6 +590,30 @@ def control_modes(binary, output, terminal=False):
         case.complete()
 
 
+def control_mode_shortcut_burst(binary, output):
+    with Case(binary, output, 'mode-shortcut-burst', [{'text': 'INITIAL_MODE_READY'}]) as case:
+        with Interactive(case, True) as client:
+            client.wait('INITIAL_MODE_READY')
+            ready_after = client.transcript.find(b'INITIAL_MODE_READY') + len(b'INITIAL_MODE_READY')
+            client.wait('Ready', after=ready_after)
+            os.write(client.master, b'\x1b[Z' * 30)
+
+            deadline = time.monotonic() + 2
+            while b'Mode: plan' not in client.transcript and client.process.poll() is None and time.monotonic() < deadline:
+                client.read(0.05)
+            mode_confirmed = b'Mode: plan' in client.transcript
+
+            os.write(client.master, b'\x03')
+            deadline = time.monotonic() + 3
+            while client.process.poll() is None and time.monotonic() < deadline:
+                client.read(0.05)
+            assert client.process.poll() is not None, 'TUI stopped processing input after repeated Shift-Tab'
+            client.read()
+            assert client.process.returncode == 0, (client.process.returncode, client.transcript.decode(errors='replace'))
+            assert mode_confirmed, client.transcript.decode(errors='replace')
+        case.complete()
+
+
 def control_queue(binary, output, terminal=False):
     name = 'queue-' + ('pty' if terminal else 'line')
     with Case(binary, output, name, [{'stream_wait': True}, {}, {'text': 'QUEUE_TWICE_DONE'}]) as case:
@@ -944,6 +968,7 @@ def main():
         for label, scenario in [('stop', control_stop), ('steer', control_steer), ('modes', control_modes), ('queue', control_queue)]:
             for terminal in (False, True):
                 scenarios['control-' + label + ('-pty' if terminal else '-line')] = lambda binary, output, f=scenario, t=terminal: f(binary, output, t)
+        scenarios['control-mode-shortcut-burst-pty'] = control_mode_shortcut_burst
         scenarios['queue-recovery'] = queue_recovery
         scenarios['approval-correction'] = approval_correction
     if args.processes:
