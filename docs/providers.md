@@ -10,14 +10,13 @@ Messages adapter in this version.
 ## Configure a local endpoint
 
 Use a separate private home for the local model. Run `meldra config init`, then
-edit that home's `config.toml`:
+edit that home's `config.toml`. The shared local template is
+[`local-responses.toml`](https://github.com/ruhuang2001/meldra/blob/main/config/examples/local-responses.toml):
 
 ```toml
 model = "your-loaded-model"
-base_url = "http://127.0.0.1:1234/v1"
+base_url = "http://127.0.0.1:8080/v1"
 allow_insecure_base_url = true
-max_provider_response_bytes = 33554432
-max_custom_turn_input_bytes = 4194304
 ```
 
 Set `OPENAI_API_KEY` in that home's private `credentials.env`. Meldra requires a
@@ -37,6 +36,21 @@ endpoints require HTTPS without URL credentials, query strings, or fragments.
 The server and model must support the requested tool schemas. Model context and
 image support are independent of endpoint reachability.
 
+## OpenAI-compatible remote providers
+
+OpenAI's Responses endpoint is the built-in default, so a normal OpenAI setup
+does not need a `base_url`. For another remote provider, start from
+[`openai-compatible.toml`](https://github.com/ruhuang2001/meldra/blob/main/config/examples/openai-compatible.toml):
+
+```toml
+model = "your-provider-model"
+base_url = "https://api.provider.example/v1"
+```
+
+Replace the example hostname and model with the provider's values. Its API key
+goes in `credentials.env`; Meldra sends that key to the configured provider
+host. Use a provider you trust. Remote endpoints must use HTTPS.
+
 ## Server examples and compatibility checks
 
 | Server | Typical base URL | Required check |
@@ -46,8 +60,10 @@ image support are independent of endpoint reachability.
 | vLLM | `http://127.0.0.1:8000/v1` | Confirm Responses support and the model-specific tool parser/template. |
 | llama.cpp | `http://127.0.0.1:8080/v1` | Confirm the installed server actually provides Responses; Chat Completions alone does not work. |
 
-Ports are examples, not discovery rules. Configuration templates are in the
-[repository's config/examples directory](https://github.com/ruhuang2001/meldra/tree/main/config/examples).
+Ports are examples, not discovery rules. The local template uses the same
+settings for these servers; only the endpoint, model name, and server
+capabilities differ. The remote template is for another provider that implements
+the Responses API. Neither template is loaded automatically.
 Consult the server's own documentation and verify your installed build:
 [LM Studio](https://lmstudio.ai/docs/developer/openai-compat/responses),
 [Ollama](https://docs.ollama.com/api/openai-compatibility),

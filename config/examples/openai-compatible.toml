@@ -1,0 +1,4 @@
+# For a remote provider that implements OpenAI's Responses API.
+# Replace both placeholders; keep its API key in credentials.env.
+model = "your-provider-model"
+base_url = "https://api.provider.example/v1"

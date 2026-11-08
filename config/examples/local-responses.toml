@@ -1,0 +1,4 @@
+# Replace the model and URL with the values used by your local Responses server.
+model = "your-loaded-model"
+base_url = "http://127.0.0.1:8080/v1"
+allow_insecure_base_url = true
