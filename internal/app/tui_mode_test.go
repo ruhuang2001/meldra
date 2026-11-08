@@ -14,13 +14,25 @@ func TestTUIShiftTabTogglesModeFromComposer(t *testing.T) {
 	model.width, model.height = 80, 24
 	model.resize()
 
-	model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	command := model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	if command == nil {
+		t.Fatal("idle shift+tab did not submit a mode request")
+	}
+	if result, ok := command().(tuiModeRequestResultMsg); !ok || result.err != nil {
+		t.Fatalf("idle shift+tab result = %#v", result)
+	}
 	if got, ok := controller.nextMessage(); !ok || got != "/plan" {
 		t.Fatalf("idle shift+tab = %q %v, want /plan", got, ok)
 	}
 
 	model.applyEvent(UIEvent{Kind: UIEventMode, Text: string(ModePlan)})
-	model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	command = model.handleKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab, Mod: tea.ModShift}))
+	if command == nil {
+		t.Fatal("plan shift+tab did not submit a mode request")
+	}
+	if result, ok := command().(tuiModeRequestResultMsg); !ok || result.err != nil {
+		t.Fatalf("plan shift+tab result = %#v", result)
+	}
 	if got, ok := controller.nextMessage(); !ok || got != "/build" {
 		t.Fatalf("plan shift+tab = %q %v, want /build", got, ok)
 	}
@@ -42,8 +54,8 @@ func TestTUIShiftTabUsesTurnControlWhileBusy(t *testing.T) {
 	if command == nil {
 		t.Fatal("busy shift+tab did not submit a control")
 	}
-	if result, ok := command().(tuiControlResultMsg); !ok || result.err != nil || result.kind != "mode" {
-		t.Fatalf("busy shift+tab result = %#v", command())
+	if result, ok := command().(tuiModeRequestResultMsg); !ok || result.err != nil {
+		t.Fatalf("busy shift+tab result = %#v", result)
 	}
 	if gotKind != "mode" || gotValue != "plan" {
 		t.Fatalf("control = %q %q, want mode plan", gotKind, gotValue)
