@@ -68,7 +68,7 @@ jobs:
           echo "prefix=setup-go-${RUNNER_OS}-x64-${ImageOS}-go-${{ steps.go.outputs.go-version }}-" >> "$GITHUB_OUTPUT"
       - name: Restore previous Go cache
         if: startsWith(matrix.shard, 'app-') || steps.go.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: |
             ${{ steps.cache-paths.outputs.modules }}
