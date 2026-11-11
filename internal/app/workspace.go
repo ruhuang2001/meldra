@@ -821,9 +821,6 @@ func parseUnifiedPatch(patch string) ([]filePatch, error) {
 		if file.oldPath == "" || file.newPath == "" || (file.oldPath == "/dev/null" && file.newPath == "/dev/null") {
 			return nil, fmt.Errorf("invalid patch paths near line %d", index+1)
 		}
-		if file.oldPath != "/dev/null" && file.newPath != "/dev/null" && file.oldPath != file.newPath {
-			return nil, fmt.Errorf("patch renames are not supported: %s -> %s", file.oldPath, file.newPath)
-		}
 		index += 2
 		for index < len(lines) && !strings.HasPrefix(lines[index], "--- ") {
 			if lines[index] == "" {
@@ -858,7 +855,9 @@ func parseUnifiedPatch(patch string) ([]filePatch, error) {
 			}
 			file.hunks = append(file.hunks, hunk)
 		}
-		if len(file.hunks) == 0 {
+		// A rename without hunks carries the original content to the new path;
+		// every other patch needs at least one hunk to say what changes.
+		if len(file.hunks) == 0 && !isRenamePatch(file) {
 			return nil, fmt.Errorf("patch for %s has no hunks", file.newPath)
 		}
 		files = append(files, file)
@@ -867,6 +866,12 @@ func parseUnifiedPatch(patch string) ([]filePatch, error) {
 		return nil, fmt.Errorf("patch must not be empty")
 	}
 	return files, nil
+}
+
+// isRenamePatch reports whether the file headers move an existing file to a
+// different path. Rename hunks, when present, edit the content on the way.
+func isRenamePatch(file filePatch) bool {
+	return file.oldPath != "/dev/null" && file.newPath != "/dev/null" && file.oldPath != file.newPath
 }
 
 func patchHeaderPath(header string) string {
@@ -908,6 +913,17 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 	changes := make([]fileChange, 0, len(files))
 	var budget changeBudget
 	for _, file := range files {
+		if isRenamePatch(file) {
+			renamed, err := w.preparePatchRename(file, seen, &budget)
+			if err != nil {
+				return nil, err
+			}
+			if err := validateChangeCount(len(changes) + len(renamed)); err != nil {
+				return nil, err
+			}
+			changes = append(changes, renamed...)
+			continue
+		}
 		path := file.newPath
 		if path == "/dev/null" {
 			path = file.oldPath
@@ -953,6 +969,49 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 		})
 	}
 	return changes, nil
+}
+
+// preparePatchRename expands a rename into a delete of the old path and a
+// create of the new path. Both are ordinary prepared changes, so the approval
+// diff, rollback, and undo stack see the move as two verifiable file effects.
+func (w *Workspace) preparePatchRename(file filePatch, seen map[string]bool, budget *changeBudget) ([]fileChange, error) {
+	oldResolved, err := w.resolve(file.oldPath, true)
+	if err != nil {
+		return nil, err
+	}
+	newResolved, err := w.resolve(file.newPath, true)
+	if err != nil {
+		return nil, err
+	}
+	if seen[oldResolved] || seen[newResolved] {
+		return nil, fmt.Errorf("duplicate patch target %q", file.newPath)
+	}
+	seen[oldResolved], seen[newResolved] = true, true
+	before, existed, mode, err := readEditableFile(oldResolved)
+	if err != nil {
+		return nil, err
+	}
+	if !existed {
+		return nil, fmt.Errorf("cannot rename missing file %q", file.oldPath)
+	}
+	after, err := applyHunks(before, file.hunks)
+	if err != nil {
+		return nil, fmt.Errorf("apply patch to %s: %w", file.oldPath, err)
+	}
+	existing, newExists, _, err := readEditableFile(newResolved)
+	if err != nil {
+		return nil, err
+	}
+	if newExists {
+		return nil, fmt.Errorf("cannot rename onto existing file %q", file.newPath)
+	}
+	if err := budget.add(len(before), len(after)); err != nil {
+		return nil, err
+	}
+	return []fileChange{
+		{path: oldResolved, before: before, after: before, existed: true, afterExists: false, mode: mode},
+		{path: newResolved, before: existing, after: after, existed: false, afterExists: true, mode: mode},
+	}, nil
 }
 
 func applyHunks(contents []byte, hunks []patchHunk) ([]byte, error) {

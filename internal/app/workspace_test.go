@@ -329,6 +329,81 @@ func TestWorkspaceAppliesFullDeletionAndUndoesIt(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAppliesRenamesAndUndoesThem(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "old.txt"), []byte("one\ntwo\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "edited.txt"), []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", true)
+	patch := `--- a/old.txt
++++ b/moved.txt
+@@ -1,2 +1,2 @@
+ one
+-two
++TWO
+--- a/edited.txt
++++ b/edited-away.txt
+`
+	if _, err := callTool(t, w, "apply_patch", map[string]any{"patch": patch, "changes": nil}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old path still exists: %v", err)
+	}
+	contents, err := os.ReadFile(filepath.Join(root, "moved.txt"))
+	if err != nil || string(contents) != "one\nTWO\n" {
+		t.Fatalf("moved contents = %q, error = %v", contents, err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "moved.txt")); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("moved mode = %v, error = %v", info.Mode().Perm(), err)
+	}
+	// A rename without hunks carries the original content to the new path.
+	contents, err = os.ReadFile(filepath.Join(root, "edited-away.txt"))
+	if err != nil || string(contents) != "keep\n" {
+		t.Fatalf("hunkless rename contents = %q, error = %v", contents, err)
+	}
+	if _, err := callTool(t, w, "undo_last_change", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if contents, _ := os.ReadFile(filepath.Join(root, "old.txt")); string(contents) != "one\ntwo\n" {
+		t.Fatalf("undo restored = %q", contents)
+	}
+	if _, err := os.Stat(filepath.Join(root, "moved.txt")); !os.IsNotExist(err) {
+		t.Fatal("undo left the moved file in place")
+	}
+	if contents, _ := os.ReadFile(filepath.Join(root, "edited.txt")); string(contents) != "keep\n" {
+		t.Fatalf("undo did not restore hunkless rename source: %q", contents)
+	}
+}
+
+func TestWorkspaceRejectsInvalidRenames(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "source.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "taken.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", true)
+	for name, patch := range map[string]string{
+		"missing source":    "--- a/missing.txt\n+++ b/to.txt\n@@ -1,1 +1,1 @@\n-x\n+X\n",
+		"existing target":   "--- a/source.txt\n+++ b/taken.txt\n@@ -1,1 +1,1 @@\n-x\n+X\n",
+		"same target twice": "--- a/source.txt\n+++ b/one.txt\n@@ -1,1 +1,1 @@\n-x\n+X\n--- a/taken.txt\n+++ b/one.txt\n@@ -1,1 +1,1 @@\n-y\n+Y\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := callTool(t, w, "apply_patch", map[string]any{"patch": patch, "changes": nil}); err == nil {
+				t.Fatal("rename was accepted")
+			}
+		})
+	}
+	if contents, _ := os.ReadFile(filepath.Join(root, "source.txt")); string(contents) != "x\n" {
+		t.Fatalf("rejected rename changed source: %q", contents)
+	}
+}
+
 func TestWorkspaceUndoStackRevertsStepsInOrder(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "a.txt")
@@ -361,6 +436,7 @@ func TestWorkspaceUndoStackRevertsStepsInOrder(t *testing.T) {
 		t.Fatal("undo succeeded with an empty stack")
 	}
 }
+
 func TestWorkspaceToolSchemasRequireEveryProperty(t *testing.T) {
 	w, _ := testWorkspace(t, t.TempDir(), "", true)
 	for _, tool := range w.ToolDefinitions() {
@@ -418,7 +494,7 @@ func TestWorkspaceRejectsAmbiguousPatchSemantics(t *testing.T) {
 	w, _ := testWorkspace(t, root, "", true)
 	patches := []string{
 		"--- a/a.txt\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-first\n",
-		"--- a/a.txt\n+++ b/renamed.txt\n@@ -1,1 +1,1 @@\n-first\n+FIRST\n",
+		"--- a/renamed.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-first\n+FIRST\n",
 		"--- a/a.txt\n+++ b/a.txt\n@@ -1,1 +1,1 @@\n-first\n+FIRST\n\\ No newline at end of file\n",
 	}
 	for _, patch := range patches {
