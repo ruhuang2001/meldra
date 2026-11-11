@@ -834,8 +834,10 @@ def config(binary, output):
         result = dict(line.split('=', 1) for line in case.run(['config', 'show']).stdout.splitlines() if '=' in line)
         assert result['compact_keep_messages'] == '2' and result['compact_threshold_percent'] == '0'
         assert result['max_turn_context_bytes'] == '4194304'
+        assert result['context_window_tokens'] == '0'
         for key, values in [('compact_keep_messages', [1, 65]), ('compact_threshold_percent', [-1, 101]),
-                            ('max_turn_context_bytes', [0, 67108865])]:
+                            ('max_turn_context_bytes', [0, 67108865]),
+                            ('context_window_tokens', [-1, 2000001])]:
             for value in values:
                 original = (case.state / 'config.toml').read_text()
                 case.configure(**{key: value})

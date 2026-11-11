@@ -42,6 +42,7 @@ and retains a recent tail. These `config.toml` settings appear in `config show`:
 | `compact_keep_messages` | `8` | `2..64` messages, counting user and assistant messages together |
 | `compact_threshold_percent` | `80` | `0..100`; `0` disables automatic compaction |
 | `max_turn_context_bytes` | `4194304` (4 MiB) | `1..67108864` bytes |
+| `context_window_tokens` | `0` (unset) | `0..2000000` tokens |
 
 Automatic compaction is enabled by default. When the locally rebuilt text
 context reaches the 80% threshold, compaction makes an additional request to
@@ -55,7 +56,8 @@ compact_threshold_percent = 0
 Manual `/compact [focus]` remains available.
 
 The corresponding process overrides are `MELDRA_COMPACT_KEEP_MESSAGES`,
-`MELDRA_COMPACT_THRESHOLD_PERCENT`, and `MELDRA_MAX_TURN_CONTEXT_BYTES`.
+`MELDRA_COMPACT_THRESHOLD_PERCENT`, `MELDRA_MAX_TURN_CONTEXT_BYTES`, and
+`MELDRA_CONTEXT_WINDOW_TOKENS`.
 
 The threshold measures UTF-8 bytes of the locally rebuilt text context, not
 tokens or model capacity. Native Responses uses `max_turn_context_bytes` as the
@@ -63,6 +65,14 @@ denominator. Custom endpoints use the smaller of that value and
 `max_custom_turn_input_bytes`. Attachment payloads have separate limits.
 Native server-side history is not measurable locally, so the threshold does
 not guarantee that the provider's context window has not been exceeded.
+
+**Unreleased.** Setting `context_window_tokens` to the model's context window
+adds a token trigger. After the first successful response, Meldra pairs the
+provider-reported `input_tokens` with the byte count of the request it built,
+then scales later byte measurements by that ratio. Compaction starts when the
+estimate reaches `compact_threshold_percent` of the configured window. The byte
+budget keeps applying as a hard ceiling in every case, and no token estimate is
+made until a response has calibrated it, so an unset window changes nothing.
 
 Use `/compact [focus]` while idle to request compaction manually, even when the
 automatic threshold is disabled. See [foreground controls](capabilities.md#context-compaction)

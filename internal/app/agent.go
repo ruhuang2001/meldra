@@ -93,6 +93,15 @@ type Agent struct {
 	compactKeepMessages      int
 	compactThresholdPercent  int
 	maxTurnContextBytes      int
+	// contextWindowTokens enables the token trigger and footer waterline. Zero
+	// keeps compaction on the byte budget alone, because the configured model's
+	// context window is not knowable locally.
+	contextWindowTokens int
+	// observedInputTokens and observedContextBytes calibrate the local byte
+	// measure against the provider's last reported prompt size. They live only
+	// in memory; a resumed session recalibrates on its next response.
+	observedInputTokens  int64
+	observedContextBytes int
 	// Runtime credentials are only used to reject reflected secrets at the
 	// compaction boundary; they are never serialized with history.
 	compactionSecrets []string
@@ -423,6 +432,12 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		return err
 	}
 
+	// promptBytes pairs with the first response's input_tokens to calibrate the
+	// local byte measure against the provider's tokenizer. Later requests in the
+	// same turn append tool outcomes that this measure does not include, so the
+	// calibration uses the first response only.
+	promptBytes := len(measured)
+	calibrated := false
 	metrics := UIMetrics{}
 	if a.customProvider {
 		bounded, contextBytes, _, err := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
@@ -521,6 +536,10 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		response := result.Response
 		if response != nil {
+			if !calibrated && promptBytes > 0 {
+				a.recordPromptCalibration(promptBytes, response.InputTokens)
+				calibrated = true
+			}
 			metrics.InputTokens += response.InputTokens
 			metrics.OutputTokens += response.OutputTokens
 		}
@@ -890,6 +909,7 @@ func errorText(err error) string {
 func (a *Agent) emitMetrics(metrics UIMetrics) {
 	if a.events != nil {
 		copy := metrics
+		copy.ContextTokens, copy.ContextLimitTokens, _ = a.contextWaterline()
 		a.emit(UIEvent{Kind: UIEventMetrics, Metrics: &copy})
 	}
 }

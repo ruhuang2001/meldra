@@ -287,3 +287,54 @@ func (a *Agent) compactionDenominator() int {
 	}
 	return a.turnContextLimit()
 }
+
+// compactionDue reports whether the next request should compact. The byte
+// budget always applies. The token trigger only participates once the window is
+// configured and a real prompt measurement has calibrated bytes to tokens;
+// without that calibration the estimate would be a guess in either direction.
+func (a *Agent) compactionDue(contextBytes int) bool {
+	if contextBytes >= a.compactionDenominator()*a.compactThresholdPercent/100 {
+		return true
+	}
+	tokens, ok := a.estimatedContextTokens(contextBytes)
+	if !ok {
+		return false
+	}
+	return tokens >= a.contextWindowTokens*a.compactThresholdPercent/100
+}
+
+// estimatedContextTokens scales a locally measured byte count by the last
+// provider-reported prompt size. It returns false when no calibration exists.
+func (a *Agent) estimatedContextTokens(contextBytes int) (int, bool) {
+	if a.contextWindowTokens <= 0 || a.observedInputTokens <= 0 || a.observedContextBytes <= 0 || contextBytes <= 0 {
+		return 0, false
+	}
+	tokens := int(int64(contextBytes) * a.observedInputTokens / int64(a.observedContextBytes))
+	if tokens <= 0 {
+		return 0, false
+	}
+	return tokens, true
+}
+
+// recordPromptCalibration pairs the measured request text with the provider's
+// reported input tokens so later byte measures can be compared to the window.
+func (a *Agent) recordPromptCalibration(contextBytes int, inputTokens int64) {
+	if contextBytes <= 0 || inputTokens <= 0 {
+		return
+	}
+	a.observedContextBytes, a.observedInputTokens = contextBytes, inputTokens
+}
+
+// contextWaterline describes how full the context currently is, for the footer.
+// It reports false when the window or the calibration is unavailable.
+func (a *Agent) contextWaterline() (tokens, limit int, ok bool) {
+	limit = a.contextWindowTokens
+	if limit <= 0 {
+		return 0, 0, false
+	}
+	tokens, ok = a.estimatedContextTokens(a.observedContextBytes)
+	if !ok {
+		return 0, 0, false
+	}
+	return tokens, limit, true
+}

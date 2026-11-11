@@ -77,7 +77,9 @@ func (a *Agent) autoCompact(ctx context.Context, request string) error {
 	if err != nil {
 		return err
 	}
-	if len(text) < a.compactionDenominator()*a.compactThresholdPercent/100 {
+	// The byte budget stays a hard trigger. The token trigger fires earlier when
+	// the configured window and a calibrated byte/token ratio are both known.
+	if !a.compactionDue(len(text)) {
 		return nil
 	}
 	_, err = a.compactContext(ctx, "threshold", "", request)

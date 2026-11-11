@@ -11,7 +11,7 @@
     "approval_required": {"tool_call_id": "str", "operation": "str", "title": "str", "detail": "str", "detail_hash": "str"},
     "notice": {"text": "str"},
     "error": {"text": "str"},
-    "metrics": {"input_tokens": "int", "output_tokens": "int", "context_bytes": "int"},
+    "metrics": {"input_tokens": "int", "output_tokens": "int", "context_bytes": "int", "context_tokens": "int", "context_limit_tokens": "int"},
     "turn_end": {"status": "str"},
     "session_end": {"status": "str", "exit_reason": "str"}
   },
@@ -24,7 +24,7 @@
     "tool_finished": ["tool_call_id", "name", "status", "duration_ms", "truncated"],
     "approval_required": ["tool_call_id", "operation", "title", "detail", "detail_hash"],
     "notice": ["text"], "error": ["text"],
-    "metrics": ["input_tokens", "output_tokens", "context_bytes"],
+    "metrics": ["input_tokens", "output_tokens", "context_bytes", "context_tokens", "context_limit_tokens"],
     "turn_end": ["status"], "session_end": ["status", "exit_reason"]
   }
 }

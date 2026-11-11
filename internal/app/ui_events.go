@@ -26,6 +26,11 @@ type UIMetrics struct {
 	ContextBytes int
 	InputTokens  int64
 	OutputTokens int64
+	// ContextTokens and ContextLimitTokens are the calibrated prompt estimate
+	// and the configured window. Both are zero when no window is configured or
+	// no provider-reported prompt size has calibrated the estimate yet.
+	ContextTokens      int
+	ContextLimitTokens int
 }
 
 type UIEventKind string

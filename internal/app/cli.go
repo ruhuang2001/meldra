@@ -830,6 +830,7 @@ func newChatRuntime(
 	agent.compactKeepMessages = settings.CompactKeepMessages
 	agent.compactThresholdPercent = settings.CompactThresholdPercent
 	agent.maxTurnContextBytes = settings.MaxTurnContextBytes
+	agent.contextWindowTokens = settings.ContextWindowTokens
 	agent.compactionSecrets = []string{settings.APIKey, settings.DeepSeekAPIKey}
 	agent.output = output
 	agent.session = session
@@ -1000,6 +1001,9 @@ func effectiveSettings(settings Settings) (Settings, error) {
 	if err := validateCompactionConfig(settings.CompactKeepMessages, settings.CompactThresholdPercent, settings.MaxTurnContextBytes); err != nil {
 		return Settings{}, err
 	}
+	if err := validateContextWindowTokens(settings.ContextWindowTokens); err != nil {
+		return Settings{}, err
+	}
 	return settings, nil
 }
 
@@ -1051,6 +1055,7 @@ func overlayEnvironment(settings Settings) (Settings, error) {
 		{CompactKeepMessagesEnv, &settings.CompactKeepMessages, 2, 64},
 		{CompactThresholdEnv, &settings.CompactThresholdPercent, 0, 100},
 		{TurnContextLimitEnv, &settings.MaxTurnContextBytes, 1, maximumTurnContextBytes},
+		{ContextWindowTokensEnv, &settings.ContextWindowTokens, 0, maximumContextWindowTokens},
 	} {
 		if value := strings.TrimSpace(os.Getenv(setting.environment)); value != "" {
 			number, err := strconv.Atoi(value)

@@ -33,7 +33,7 @@ the durable ledger ID. An explicitly approved replay receives a distinct
 | `tool_finished` | `tool_call_id`, `name`, `status`, `duration_ms`, `truncated`, optional `error` |
 | `approval_required` | `tool_call_id`, `operation`, `title`, `detail`, `detail_hash` |
 | `notice`, `error` | `text` |
-| `metrics` | `input_tokens`, `output_tokens`, `context_bytes` |
+| `metrics` | `input_tokens`, `output_tokens`, `context_bytes`, `context_tokens`, `context_limit_tokens` |
 | `turn_end` | `status` |
 | `session_end` | `status`, `exit_reason` |
 

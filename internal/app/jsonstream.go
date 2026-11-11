@@ -95,10 +95,12 @@ func (s *jsonStream) Emit(event UIEvent) {
 			return
 		}
 		data = struct {
-			InputTokens  int64 `json:"input_tokens"`
-			OutputTokens int64 `json:"output_tokens"`
-			ContextBytes int   `json:"context_bytes"`
-		}{event.Metrics.InputTokens, event.Metrics.OutputTokens, event.Metrics.ContextBytes}
+			InputTokens        int64 `json:"input_tokens"`
+			OutputTokens       int64 `json:"output_tokens"`
+			ContextBytes       int   `json:"context_bytes"`
+			ContextTokens      int   `json:"context_tokens"`
+			ContextLimitTokens int   `json:"context_limit_tokens"`
+		}{event.Metrics.InputTokens, event.Metrics.OutputTokens, event.Metrics.ContextBytes, event.Metrics.ContextTokens, event.Metrics.ContextLimitTokens}
 	case UIEventTurnStart:
 		data = struct {
 			TurnID string `json:"turn_id"`

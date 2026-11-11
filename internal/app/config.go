@@ -30,11 +30,15 @@ const (
 	CompactKeepMessagesEnv   = "MELDRA_COMPACT_KEEP_MESSAGES"
 	CompactThresholdEnv      = "MELDRA_COMPACT_THRESHOLD_PERCENT"
 	TurnContextLimitEnv      = "MELDRA_MAX_TURN_CONTEXT_BYTES"
+	ContextWindowTokensEnv   = "MELDRA_CONTEXT_WINDOW_TOKENS"
 
 	defaultCompactKeepMessages     = 8
 	defaultCompactThresholdPercent = 80
 	defaultMaxTurnContextBytes     = 4 * 1024 * 1024
 	maximumTurnContextBytes        = 64 * 1024 * 1024
+	// maximumContextWindowTokens bounds the token trigger. A zero window keeps
+	// the byte budget as the only compaction denominator.
+	maximumContextWindowTokens = 2000000
 
 	privateDirPerm  fs.FileMode = 0o700
 	privateFilePerm fs.FileMode = 0o600
@@ -50,6 +54,7 @@ const defaultConfigTemplate = `# Meldra configuration.
 # compact_keep_messages = 8
 # compact_threshold_percent = 80
 # max_turn_context_bytes = 4194304
+# context_window_tokens = 200000
 # web.fetch_backend = "builtin"
 # web.search_backend = "deepseek"
 `
@@ -73,6 +78,7 @@ type Config struct {
 	CompactKeepMessages      int
 	CompactThresholdPercent  int
 	MaxTurnContextBytes      int
+	ContextWindowTokens      int
 	WebFetchBackend          string
 	WebSearchBackend         string
 	Model                    string
@@ -95,6 +101,7 @@ type Settings struct {
 	CompactKeepMessages      int
 	CompactThresholdPercent  int
 	MaxTurnContextBytes      int
+	ContextWindowTokens      int
 	WebFetchBackend          string
 	WebSearchBackend         string
 	DeepSeekAPIKey           string
@@ -111,6 +118,7 @@ type ConfigShow struct {
 	CompactKeepMessages      int    `json:"compact_keep_messages"`
 	CompactThresholdPercent  int    `json:"compact_threshold_percent"`
 	MaxTurnContextBytes      int    `json:"max_turn_context_bytes"`
+	ContextWindowTokens      int    `json:"context_window_tokens"`
 	WebFetchBackend          string `json:"web_fetch_backend"`
 	WebSearchBackend         string `json:"web_search_backend"`
 	DeepSeekAPIKey           string `json:"deepseek_api_key"`
@@ -242,6 +250,7 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 		CompactKeepMessages:      config.CompactKeepMessages,
 		CompactThresholdPercent:  config.CompactThresholdPercent,
 		MaxTurnContextBytes:      config.MaxTurnContextBytes,
+		ContextWindowTokens:      config.ContextWindowTokens,
 		WebFetchBackend:          config.WebFetchBackend,
 		WebSearchBackend:         config.WebSearchBackend,
 		DeepSeekAPIKey:           credentials.DeepSeekAPIKey,
@@ -269,6 +278,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	if err := validateCompactionConfig(config.CompactKeepMessages, config.CompactThresholdPercent, config.MaxTurnContextBytes); err != nil {
 		return err
 	}
+	if err := validateContextWindowTokens(config.ContextWindowTokens); err != nil {
+		return err
+	}
 	if err := validateWebBackends(config.WebFetchBackend, config.WebSearchBackend); err != nil {
 		return err
 	}
@@ -294,6 +306,9 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	contents += "compact_keep_messages = " + strconv.Itoa(config.CompactKeepMessages) + "\n"
 	contents += "compact_threshold_percent = " + strconv.Itoa(config.CompactThresholdPercent) + "\n"
 	contents += "max_turn_context_bytes = " + strconv.Itoa(config.MaxTurnContextBytes) + "\n"
+	if config.ContextWindowTokens != 0 {
+		contents += "context_window_tokens = " + strconv.Itoa(config.ContextWindowTokens) + "\n"
+	}
 	if config.Model != "" {
 		contents += "model = " + strconv.Quote(config.Model) + "\n"
 	}
@@ -365,6 +380,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 		CompactKeepMessages:      settings.CompactKeepMessages,
 		CompactThresholdPercent:  settings.CompactThresholdPercent,
 		MaxTurnContextBytes:      settings.MaxTurnContextBytes,
+		ContextWindowTokens:      settings.ContextWindowTokens,
 		WebFetchBackend:          settings.WebFetchBackend,
 		WebSearchBackend:         settings.WebSearchBackend,
 		DeepSeekAPIKey:           RedactSecret(settings.DeepSeekAPIKey),
@@ -383,7 +399,7 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 // FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
-		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\ncompact_keep_messages=%d\ncompact_threshold_percent=%d\nmax_turn_context_bytes=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
+		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\ncompact_keep_messages=%d\ncompact_threshold_percent=%d\nmax_turn_context_bytes=%d\ncontext_window_tokens=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
 		show.Home,
 		show.ConfigFile,
 		show.CredentialsFile,
@@ -395,6 +411,7 @@ func FormatConfigShow(show ConfigShow) string {
 		show.CompactKeepMessages,
 		show.CompactThresholdPercent,
 		show.MaxTurnContextBytes,
+		show.ContextWindowTokens,
 		show.APIKey,
 		displayValue(show.WebFetchBackend),
 		displayValue(show.WebSearchBackend),
@@ -669,6 +686,13 @@ func defaultCompactionConfig() Config {
 	}
 }
 
+func validateContextWindowTokens(tokens int) error {
+	if tokens < 0 || tokens > maximumContextWindowTokens {
+		return fmt.Errorf("context_window_tokens must be between 0 and %d", maximumContextWindowTokens)
+	}
+	return nil
+}
+
 func validateCompactionConfig(keepMessages, thresholdPercent, maxContextBytes int) error {
 	if keepMessages < 2 || keepMessages > 64 {
 		return fmt.Errorf("compact_keep_messages must be between 2 and 64")
@@ -709,7 +733,7 @@ func parseConfigTOML(contents string) (Config, error) {
 		rawValue = strings.TrimSpace(rawValue)
 
 		switch key {
-		case "compact_keep_messages", "compact_threshold_percent", "max_turn_context_bytes":
+		case "compact_keep_messages", "compact_threshold_percent", "max_turn_context_bytes", "context_window_tokens":
 			if seen[key] {
 				return Config{}, fmt.Errorf("line %d: duplicate %q setting", lineNumber+1, key)
 			}
@@ -725,8 +749,13 @@ func parseConfigTOML(contents string) (Config, error) {
 				config.CompactThresholdPercent = value
 			case "max_turn_context_bytes":
 				config.MaxTurnContextBytes = value
+			case "context_window_tokens":
+				config.ContextWindowTokens = value
 			}
 			if err := validateCompactionConfig(config.CompactKeepMessages, config.CompactThresholdPercent, config.MaxTurnContextBytes); err != nil {
+				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
+			}
+			if err := validateContextWindowTokens(config.ContextWindowTokens); err != nil {
 				return Config{}, fmt.Errorf("line %d: %w", lineNumber+1, err)
 			}
 		case "web.fetch_backend", "web.search_backend":
