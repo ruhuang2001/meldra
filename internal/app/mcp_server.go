@@ -237,11 +237,12 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 						message = workspace.webApproval(definition.Name, req.Params.Arguments).Detail + "\nAllow external web read?"
 					}
 					if definition.Name == "undo_last_change" {
-						if len(workspace.last) == 0 {
+						changes, ok := workspace.pendingUndo()
+						if !ok {
 							approvalMu.Unlock()
 							return mcpServeResult("no successful change to undo", true), nil
 						}
-						diff, err := workspace.diff(workspace.last, true)
+						diff, err := workspace.diff(changes, true)
 						if err != nil {
 							approvalMu.Unlock()
 							return mcpServeResult(err.Error(), true), nil

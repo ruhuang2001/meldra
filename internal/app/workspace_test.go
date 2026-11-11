@@ -329,6 +329,38 @@ func TestWorkspaceAppliesFullDeletionAndUndoesIt(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUndoStackRevertsStepsInOrder(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, root, "", true)
+	for _, step := range []struct{ old, new string }{{"one\n", "two\n"}, {"two\n", "three\n"}} {
+		if _, err := callTool(t, w, "apply_patch", map[string]any{"changes": []map[string]any{{"path": "a.txt", "old_str": step.old, "new_str": step.new}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first, err := callTool(t, w, "undo_last_change", map[string]any{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(first, "1 earlier change") {
+		t.Fatalf("undo did not report remaining steps: %q", first)
+	}
+	if contents, _ := os.ReadFile(path); string(contents) != "two\n" {
+		t.Fatalf("first undo = %q", contents)
+	}
+	if _, err := callTool(t, w, "undo_last_change", map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if contents, _ := os.ReadFile(path); string(contents) != "one\n" {
+		t.Fatalf("second undo = %q", contents)
+	}
+	if _, err := callTool(t, w, "undo_last_change", map[string]any{}); err == nil {
+		t.Fatal("undo succeeded with an empty stack")
+	}
+}
 func TestWorkspaceToolSchemasRequireEveryProperty(t *testing.T) {
 	w, _ := testWorkspace(t, t.TempDir(), "", true)
 	for _, tool := range w.ToolDefinitions() {

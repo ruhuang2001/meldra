@@ -60,10 +60,11 @@ func (w *Workspace) mcpApprovalContextDigest(name string, raw json.RawMessage) (
 			return "", err
 		}
 	case "undo_last_change":
-		if len(w.last) == 0 {
+		changes, ok := w.pendingUndo()
+		if !ok {
 			return "", fmt.Errorf("no successful change to undo")
 		}
-		for _, change := range w.last {
+		for _, change := range changes {
 			paths = append(paths, change.path)
 		}
 	}

@@ -24,9 +24,13 @@ import (
 )
 
 const (
-	maxReadLines            = 1000
-	maxSearchHits           = 500
-	maxToolOutput           = 256 << 10
+	maxReadLines  = 1000
+	maxSearchHits = 500
+	maxToolOutput = 256 << 10
+	// maxUndoSteps bounds the undo stack; maxUndoEntryBytes keeps a single large
+	// change set from pinning memory for the whole session.
+	maxUndoSteps            = 10
+	maxUndoEntryBytes       = 8 << 20
 	maxLineBytes            = 1 << 20
 	maxSearchBytes          = 8 << 20
 	maxSearchFiles          = 5000
@@ -98,9 +102,12 @@ type Workspace struct {
 	approvalGrant      func() bool
 	present            ApprovalPresenter
 	ctx                context.Context
-	last               []fileChange
-	protected          []string
-	syncDir            func(string) error
+	// undoHistory keeps a bounded stack of applied change sets, newest last, so
+	// several edits can be reverted in order. Each entry is capped by total
+	// content so a long session cannot grow memory without limit.
+	undoHistory [][]fileChange
+	protected   []string
+	syncDir     func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -265,8 +272,8 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 		{Name: "list_files", Description: "Recursively list relative paths inside the workspace without following symlink directories or entering .git.", Parameters: objectSchema(map[string]any{"path": nullableString("Directory inside the workspace; use null for workspace root.")}, []string{"path"}), Function: w.bindTool(w.listFiles)},
 		{Name: "search_files", Description: "Search regular files inside the workspace. Results and output are bounded; .git and symlink directories are skipped.", Parameters: objectSchema(map[string]any{"query": str("Literal text or RE2 regular expression to find."), "regex": map[string]any{"type": []string{"boolean", "null"}, "description": "Use RE2 regular expressions; null or false preserves literal matching."}, "path": nullableString("Directory or file inside the workspace; use null for workspace root."), "glob": nullableString("Optional filepath.Match pattern; use null for all files."), "max_results": nullableInteger("Optional result limit; use null for 100, capped at 500.")}, []string{"query", "path", "glob", "max_results", "regex"}), Function: w.bindTool(w.searchFiles)},
 		{Name: "edit_file", Description: "Replace exact text once, or create a missing file with empty old_str. Prints a unified diff and requires [y/N] confirmation unless auto-approved. Paths must stay in the workspace and outside .git.", Parameters: objectSchema(map[string]any{"path": str("Target path inside workspace."), "old_str": str("Exact text occurring once; empty only to create."), "new_str": str("Replacement or new file contents.")}, []string{"path", "old_str", "new_str"}), Function: w.bindTool(w.editFile)},
-		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.bindTool(w.applyPatch)},
-		{Name: "undo_last_change", Description: "Undo the last successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
+		{Name: "apply_patch", Description: "Create, modify, or delete one or more files with a unified diff or atomic exact changes. Validates every path and hunk, prints the resulting diff, confirms before writing, and rolls back on failure. Set exactly one of patch or changes and set the other to null.", Parameters: objectSchema(map[string]any{"patch": nullableString("Unified diff with ---/+++/@@ hunks, including /dev/null for file creation or deletion and differing ---/+++ paths for a rename; or null."), "changes": map[string]any{"type": []string{"array", "null"}, "items": objectSchema(map[string]any{"path": str("Unique target path inside workspace."), "old_str": str("Exact text, or empty for creation."), "new_str": str("Replacement contents.")}, []string{"path", "old_str", "new_str"})}}, []string{"patch", "changes"}), Function: w.bindTool(w.applyPatch)},
+		{Name: "undo_last_change", Description: "Undo the most recent successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Keeps up to 10 steps, newest first. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
 		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout defaults to the configured command deadline (600 seconds) and is capped at 86400 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; null uses the configured default (600), maximum 86400.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
 		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.bindTool(w.verify)},
 		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
@@ -1119,7 +1126,7 @@ func (w *Workspace) applyChanges(changes []fileChange) (string, error) {
 	if err := w.writeChanges(changes, false); err != nil {
 		return "", err
 	}
-	w.last = cloneChanges(changes)
+	w.pushUndo(changes)
 	return "Applied successfully.\n" + diff, nil
 }
 
@@ -1500,13 +1507,14 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	if e := decodeToolInput(raw, &in); e != nil {
 		return "", e
 	}
-	if len(w.last) == 0 {
+	if len(w.undoHistory) == 0 {
 		return "", fmt.Errorf("no successful change to undo")
 	}
-	if err := w.contextBeforeChanges(w.last); err != nil {
+	changes := w.undoHistory[len(w.undoHistory)-1]
+	if err := w.contextBeforeChanges(changes); err != nil {
 		return "", err
 	}
-	for _, c := range w.last {
+	for _, c := range changes {
 		b, exists, _, err := readEditableFile(c.path)
 		matches := c.afterExists && err == nil && exists && bytes.Equal(b, c.after)
 		if !c.afterExists {
@@ -1516,30 +1524,71 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 			return "", fmt.Errorf("cannot undo: %s changed since it was written", filepath.Base(c.path))
 		}
 	}
-	if err := validatePreparedChanges(w.last); err != nil {
+	if err := validatePreparedChanges(changes); err != nil {
 		return "", err
 	}
-	diff, err := w.diff(w.last, true)
+	diff, err := w.diff(changes, true)
 	if err != nil {
 		return "", err
 	}
 	if !w.requestApproval(ApprovalRequest{
 		Kind:           ApprovalChanges,
-		WorkspaceState: changeFingerprints(w.last, true),
+		WorkspaceState: changeFingerprints(changes, true),
 		Title:          "Review undo changes",
 		Detail:         diff,
 		Prompt:         "Apply changes? [y/N] ",
 	}) {
 		return "Declined; no files changed.", nil
 	}
-	if err := w.contextBeforeChanges(w.last); err != nil {
+	if err := w.contextBeforeChanges(changes); err != nil {
 		return "", err
 	}
-	if e := w.writeChanges(w.last, true); e != nil {
+	if e := w.writeChanges(changes, true); e != nil {
 		return "", e
 	}
-	w.last = nil
-	return "Undo successful.\n" + diff, nil
+	w.undoHistory = w.undoHistory[:len(w.undoHistory)-1]
+	status := "Undo successful."
+	if remaining := len(w.undoHistory); remaining > 0 {
+		status += fmt.Sprintf(" %d earlier change(s) remain undoable.", remaining)
+	}
+	return status + "\n" + diff, nil
+}
+
+// pendingUndo returns the newest applied change set without consuming it.
+func (w *Workspace) pendingUndo() ([]fileChange, bool) {
+	if len(w.undoHistory) == 0 {
+		return nil, false
+	}
+	return w.undoHistory[len(w.undoHistory)-1], true
+}
+
+// replaceTopUndo swaps the newest entry without changing the stack depth.
+func (w *Workspace) replaceTopUndo(changes []fileChange) {
+	if len(w.undoHistory) == 0 || changeBytes(changes) > maxUndoEntryBytes {
+		return
+	}
+	w.undoHistory[len(w.undoHistory)-1] = cloneChanges(changes)
+}
+
+// pushUndo records an applied change set for undo. Oversized change sets are
+// skipped rather than evicting smaller entries, because mixing a partial stack
+// with missing steps would let an undo remove the wrong layer of a file's edits.
+func (w *Workspace) pushUndo(changes []fileChange) {
+	if size := changeBytes(changes); size > maxUndoEntryBytes {
+		return
+	}
+	if len(w.undoHistory) == maxUndoSteps {
+		w.undoHistory = w.undoHistory[1:]
+	}
+	w.undoHistory = append(w.undoHistory, cloneChanges(changes))
+}
+
+func changeBytes(changes []fileChange) int {
+	total := 0
+	for _, change := range changes {
+		total += len(change.before) + len(change.after)
+	}
+	return total
 }
 
 func recordedChangeDirectories(changes []fileChange) []string {

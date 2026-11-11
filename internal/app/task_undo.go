@@ -24,8 +24,8 @@ type undoChange struct {
 }
 
 func (e *taskExecution) saveUndoApproval(ctx context.Context) (task.ArtifactRef, error) {
-	changes := e.workspace.last
-	if len(changes) == 0 {
+	changes, ok := e.workspace.pendingUndo()
+	if !ok {
 		return task.ArtifactRef{}, fmt.Errorf("undo approval has no prepared changes")
 	}
 	if err := validatePreparedChanges(changes); err != nil {
@@ -90,6 +90,13 @@ func (e *taskExecution) restoreUndoApproval(ctx context.Context, approval task.A
 	if err := e.workspace.contextBeforeChanges(changes); err != nil {
 		return err
 	}
-	e.workspace.last = cloneChanges(changes)
+	// The interactive apply already pushed this change set before the approval
+	// was recorded. Replacing an identical top entry keeps the stack free of a
+	// duplicate step that would make the next undo a no-op.
+	if top, ok := e.workspace.pendingUndo(); ok && bytes.Equal(changeFingerprints(top, true), approval.WorkspaceState) {
+		e.workspace.replaceTopUndo(changes)
+	} else {
+		e.workspace.pushUndo(changes)
+	}
 	return nil
 }

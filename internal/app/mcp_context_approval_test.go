@@ -21,7 +21,7 @@ func TestMCPApprovalContextResolvesAllMutationScopesBeforeApproval(t *testing.T)
 			writeContextFixture(t, w, "AGENTS.md", "root")
 			writeContextFixture(t, w, "first/AGENTS.md", "first")
 			writeContextFixture(t, w, "second/AGENTS.md", "second")
-			w.last = []fileChange{{path: "first/deleted.txt"}, {path: "second/edited.txt"}}
+			w.pushUndo([]fileChange{{path: "first/deleted.txt", existed: true, afterExists: false}, {path: "second/edited.txt", existed: true, afterExists: true}})
 			if _, err := w.projectContext.ContextTool().Function(t.Context(), json.RawMessage(`{"path":null}`)); err != nil {
 				t.Fatal(err)
 			}
