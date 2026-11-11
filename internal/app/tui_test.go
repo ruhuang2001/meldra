@@ -167,24 +167,39 @@ func renderViewportTimelineWithoutPrefixCache(model *tuiModel) string {
 	return output.String()
 }
 
-func TestTUIModelKeepsTurnMetricsOutOfTheFooter(t *testing.T) {
+func TestTUIModelFooterShowsTurnUsage(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{})
 	model.width = 120
 	model.height = 24
 	model.resize()
 	model.applyEvent(UIEvent{Kind: UIEventMetrics, Metrics: &UIMetrics{
-		ContextBytes: 2048,
-		InputTokens:  123,
-		OutputTokens: 45,
+		ContextBytes:       2048,
+		InputTokens:        12345,
+		OutputTokens:       1100,
+		ContextTokens:      68000,
+		ContextLimitTokens: 200000,
 	}})
 	view := model.View().Content
-	if model.metrics.ContextBytes != 2048 || model.metrics.InputTokens != 123 || model.metrics.OutputTokens != 45 {
-		t.Fatalf("metrics were not retained internally: %+v", model.metrics)
+	if model.metrics.InputTokens != 12345 || model.metrics.ContextTokens != 68000 {
+		t.Fatalf("metrics were not retained: %+v", model.metrics)
 	}
-	for _, unwanted := range []string{"ctx 2.0 KiB", "tokens 123↓/45↑", "Enter send", "Alt+Enter", "PgUp/PgDn"} {
+	if !strings.Contains(view, "12.3k in / 1.1k out · ctx 34%") {
+		t.Fatalf("footer does not show turn usage: %s", view)
+	}
+	for _, unwanted := range []string{"Enter send", "Alt+Enter", "PgUp/PgDn"} {
 		if strings.Contains(view, unwanted) {
 			t.Errorf("TUI view unexpectedly contains %q: %s", unwanted, view)
 		}
+	}
+}
+
+func TestTUIModelFooterOmitsUsageBeforeFirstResponse(t *testing.T) {
+	model := newTUIModel(newTUIController(nil), tuiInitialState{})
+	model.width = 120
+	model.height = 24
+	model.resize()
+	if strings.Contains(model.View().Content, " in / ") {
+		t.Fatal("footer shows usage before any response reported tokens")
 	}
 }
 

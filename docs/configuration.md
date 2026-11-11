@@ -73,6 +73,8 @@ then scales later byte measurements by that ratio. Compaction starts when the
 estimate reaches `compact_threshold_percent` of the configured window. The byte
 budget keeps applying as a hard ceiling in every case, and no token estimate is
 made until a response has calibrated it, so an unset window changes nothing.
+The TUI footer shows the current turn's usage and, once calibrated, the context
+percentage.
 
 Use `/compact [focus]` while idle to request compaction manually, even when the
 automatic threshold is disabled. See [foreground controls](capabilities.md#context-compaction)

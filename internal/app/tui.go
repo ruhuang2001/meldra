@@ -1156,6 +1156,31 @@ func (m *tuiModel) modeBadge() (string, lipgloss.Style) {
 	return "", tuiDimStyle
 }
 
+// usageText summarizes the current turn's token usage and, when the window is
+// configured and calibrated, how full the context is. It returns an empty
+// string before the first response reports usage.
+func (m *tuiModel) usageText() string {
+	metrics := m.metrics
+	if metrics.InputTokens <= 0 && metrics.OutputTokens <= 0 {
+		return ""
+	}
+	usage := shortTokens(metrics.InputTokens) + " in / " + shortTokens(metrics.OutputTokens) + " out"
+	if metrics.ContextTokens > 0 && metrics.ContextLimitTokens > 0 {
+		percent := metrics.ContextTokens * 100 / metrics.ContextLimitTokens
+		usage += " · ctx " + fmt.Sprint(percent) + "%"
+	}
+	return usage
+}
+
+// shortTokens renders a token count as 999, 1.0k, or 12.3k, rounding half up so
+// 11999 does not read as 11.9k.
+func shortTokens(tokens int64) string {
+	if tokens < 1000 {
+		return fmt.Sprint(tokens)
+	}
+	return fmt.Sprintf("%d.%dk", (tokens+50)/1000, (tokens+50)/100%10)
+}
+
 // composerBox renders the framed input. When there is room, the mode badge
 // replaces border cells in the top-right corner so the layout height is fixed
 // and the cursor offset used for IME positioning stays correct.
@@ -1204,6 +1229,9 @@ func (m *tuiModel) View() tea.View {
 		composer = completion + "\n" + composer
 	}
 	footerText := sanitizeTerminalText(m.status)
+	if usage := m.usageText(); usage != "" {
+		footerText += "  " + usage
+	}
 	if m.pending != nil {
 		footerText += "  Approval: y approve · n/Enter reject"
 	} else if m.mcpPending == nil && !m.stopped {
