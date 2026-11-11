@@ -276,7 +276,7 @@ func (w *Workspace) ToolDefinitions() []ToolDefinition {
 		{Name: "undo_last_change", Description: "Undo the most recent successful workspace edit/apply_patch from this session after showing a reverse diff and confirming. Keeps up to 10 steps, newest first. Refuses if files changed since.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.undo)},
 		{Name: "run_command", Description: "Run an allowlisted command in the workspace without a shell (restricted Python, Go, npm/pnpm, Cargo, Make, formatting, or read-only Git commands). Commands that compile or execute workspace code require direct user confirmation unless auto-approved. Timeout defaults to the configured command deadline (600 seconds) and is capped at 86400 seconds.", Parameters: objectSchema(map[string]any{"command": str("Executable: python3, go, gofmt, npm, pnpm, cargo, make, or git."), "args": map[string]any{"type": []string{"array", "null"}, "items": str("One argument; no shell expansion.")}, "timeout": nullableInteger("Timeout seconds; null uses the configured default (600), maximum 86400.")}, []string{"command", "args", "timeout"}), Function: w.bindTool(w.runCommand)},
 		{Name: "verify", Description: "Run a project-aware verification preset: test, check, build, format, or diff. Detects Make, Go, Python, Node, and Rust projects from root marker files. Presets that compile or execute workspace code require direct user confirmation unless auto-approved.", Parameters: objectSchema(map[string]any{"preset": map[string]any{"type": "string", "enum": []string{"test", "check", "build", "format", "diff"}}}, []string{"preset"}), Function: w.bindTool(w.verify)},
-		{Name: "git_review", Description: "Return bounded git status, staged and unstaged diffs, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
+		{Name: "git_review", Description: "Return bounded git status, a --stat summary of staged and unstaged changes, the diffs themselves, and recent log for the workspace; errors clearly outside a git repository.", Parameters: objectSchema(map[string]any{}, nil), Function: w.bindTool(w.gitReview)},
 	}
 	return w.guardedDefinitions(append(definitions, w.webToolDefinitions()...))
 }
@@ -2584,16 +2584,61 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 	if topLevel != w.root {
 		return "", fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
 	}
-	var out strings.Builder
-	for _, x := range [][]string{{"status", "--short"}, {"diff", "--cached", "--"}, {"diff", "--"}, {"log", "-5", "--oneline"}} {
-		r, e := w.execute("git", x, 60)
+	run := func(args ...string) (string, error) {
+		r, e := w.execute("git", args, 60)
+		return r, e
+	}
+	var summary strings.Builder
+	for _, section := range []struct {
+		title string
+		args  []string
+	}{
+		{"Recent commits", []string{"log", "-5", "--oneline"}},
+		{"Status", []string{"status", "--short"}},
+		{"Staged changes", []string{"diff", "--cached", "--stat", "--"}},
+		{"Unstaged changes", []string{"diff", "--stat", "--"}},
+	} {
+		text, e := run(section.args...)
 		if e != nil {
 			return "", e
 		}
-		out.WriteString(r)
-		out.WriteString("\n")
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		summary.WriteString("## " + section.title + "\n")
+		summary.WriteString(strings.TrimRight(text, "\n"))
+		summary.WriteString("\n\n")
 	}
-	return capText(out.String()), nil
+	staged, err := run("diff", "--cached", "--")
+	if err != nil {
+		return "", err
+	}
+	unstaged, err := run("diff", "--")
+	if err != nil {
+		return "", err
+	}
+	out := summary.String()
+	// The summary is cheap to keep in context; the diffs are bounded and say so
+	// rather than silently dropping the tail. Individual files can be read on
+	// demand or reviewed one at a time.
+	var diffs strings.Builder
+	if staged = strings.TrimSpace(staged); staged != "" {
+		diffs.WriteString("## Staged diff\n" + staged + "\n\n")
+	}
+	if unstaged = strings.TrimSpace(unstaged); unstaged != "" {
+		diffs.WriteString("## Unstaged diff\n" + unstaged + "\n")
+	}
+	if diffs.Len() > 0 {
+		body, truncated := capTextWithFlag(diffs.String())
+		out += body + "\n"
+		if truncated {
+			out += fmt.Sprintf("\n[diffs truncated to %d bytes; the stat summary above lists every changed file]\n", maxToolOutput)
+		}
+	}
+	if strings.TrimSpace(out) == "" {
+		return "Working tree clean; no staged or unstaged changes.", nil
+	}
+	return out, nil
 }
 
 func gitTopLevel(parent context.Context, workspace, gitExecutable string) (string, error) {
@@ -2633,6 +2678,12 @@ func gitTopLevel(parent context.Context, workspace, gitExecutable string) (strin
 }
 func capText(s string) string {
 	return truncateUTF8Text(s, maxToolOutput, false)
+}
+
+// capTextWithFlag reports whether truncation actually dropped content.
+func capTextWithFlag(s string) (string, bool) {
+	capped := truncateUTF8Text(s, maxToolOutput, false)
+	return capped, len(capped) < len(s)
 }
 
 const outputTruncationSuffix = "\n[output truncated]"
