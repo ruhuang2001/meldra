@@ -146,3 +146,28 @@ func TestTUIComposerBadgeFitsTheNarrowestFrame(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyModeEmitsNoNoticeForEventDrivenUIs(t *testing.T) {
+	// The TUI badge already shows the mode. A notice would add a transcript line
+	// per Shift-Tab, so mode changes reach event-driven UIs as data, not text.
+	agent := &Agent{}
+	var kinds []string
+	agent.events = UIEventSinkFunc(func(event UIEvent) { kinds = append(kinds, event.Text) })
+	if err := agent.applyMode(ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"plan", "Mode: plan"}
+	if len(kinds) != len(want) || kinds[0] != want[0] || kinds[1] != want[1] {
+		t.Fatalf("events = %v, want %v", kinds, want)
+	}
+
+	var output strings.Builder
+	line := &Agent{}
+	line.output = &output
+	if err := line.applyMode(ModePlan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Mode: plan") {
+		t.Fatalf("line-mode transcript lost the mode notice: %q", output.String())
+	}
+}

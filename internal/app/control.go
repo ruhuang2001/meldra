@@ -325,7 +325,11 @@ func (a *Agent) applyMode(mode ExecutionMode) error {
 	_, permissions, _ := a.policy.snapshot()
 	a.emit(UIEvent{Kind: UIEventMode, Text: string(mode), Detail: string(permissions)})
 	a.emit(UIEvent{Kind: UIEventStatus, Text: "Mode: " + string(mode)})
-	a.emitNotice("Mode: " + string(mode))
+	if a.events == nil {
+		// Event-driven UIs (the TUI badge, the JSON stream) already carry the
+		// mode; only the line-mode transcript needs the notice.
+		a.emitNotice("Mode: " + string(mode))
+	}
 	return nil
 }
 

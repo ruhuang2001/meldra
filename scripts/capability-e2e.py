@@ -575,13 +575,17 @@ def control_modes(binary, output, terminal=False):
     with Case(binary, output, name, steps) as case:
         with Interactive(case, terminal, ['--permissions', 'workspace-edit']) as client:
             client.wait('INITIAL_MODE_READY')
+            # The TUI reports the mode through the composer badge only; the line-mode
+            # transcript keeps the notice because it has no persistent badge.
+            plan_marker = 'PLAN' if terminal else 'Mode: plan'
+            build_marker = 'BUILD' if terminal else 'Mode: build'
             client.send('/plan')
-            client.wait('Mode: plan')
+            client.wait(plan_marker)
             client.send('PLAN_WORK_REQUEST')
             client.wait('PLAN_MODE_DONE')
             assert not (case.workspace / 'mode.txt').exists(), 'Plan command allowed workspace mutation'
             client.send('/build')
-            client.wait('Mode: build')
+            client.wait(build_marker)
             client.send('BUILD_WORK_REQUEST')
             client.wait('BUILD_MODE_DONE')
             assert (case.workspace / 'mode.txt').read_text() == 'build write\n'
@@ -599,9 +603,9 @@ def control_mode_shortcut_burst(binary, output):
             os.write(client.master, b'\x1b[Z' * 30)
 
             deadline = time.monotonic() + 2
-            while b'Mode: plan' not in client.transcript and client.process.poll() is None and time.monotonic() < deadline:
+            while b'PLAN' not in client.transcript and client.process.poll() is None and time.monotonic() < deadline:
                 client.read(0.05)
-            mode_confirmed = b'Mode: plan' in client.transcript
+            mode_confirmed = b'PLAN' in client.transcript
 
             os.write(client.master, b'\x03')
             deadline = time.monotonic() + 3

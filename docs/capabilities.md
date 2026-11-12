@@ -406,7 +406,9 @@ The badge replaces border cells, so the composer keeps its height and
 the cursor position stays accurate. `Shift-Tab` toggles between Plan and Build
 without editing the draft; during an active turn it goes through turn control
 and is journaled like `/plan` and `/build`. The badge changes only after the
-agent reports the new mode, so a rejected change leaves it unchanged.
+agent reports the new mode, so a rejected change leaves it unchanged. Because the
+badge is always visible, the TUI no longer prints a `Mode: …` notice per change;
+line mode, which has no badge, still does.
 
 Earlier versions showed `Read-only` and `Editing` in the TUI header. That text is
 now only in the badge. These labels describe the current policy, not an

@@ -213,7 +213,7 @@ def terminal(binary, output):
             client.wait('COMMAND_FINISHED')
             assert user_texts(case.requests[-1])[-1] == 'PTY_REVIEW focus'
             client.send('/plan')
-            client.wait('Mode: plan')
+            client.wait('PLAN')
             client.finish()
         case.audit()
         case.complete()
