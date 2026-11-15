@@ -4,7 +4,7 @@ title: "Development"
 
 ## Development
 
-Requires Go 1.26.10. Python 3 is required for the real-terminal integration
+Requires Go 1.26.11. Python 3 is required for the real-terminal integration
 tests; building the binary itself requires only Go.
 
 ```bash

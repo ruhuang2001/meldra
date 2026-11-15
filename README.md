@@ -64,7 +64,7 @@ The [documentation](docs/index.md) has the [Quickstart](docs/quickstart.md),
 
 ## Development
 
-Requires Go 1.26.10 and Python 3 for PTY integration tests. See the
+Requires Go 1.26.11 and Python 3 for PTY integration tests. See the
 [development guide](docs/development.md) for CI, hooks, and release workflows.
 
 ```sh
