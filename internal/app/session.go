@@ -38,6 +38,7 @@ const (
 )
 
 type SessionMessage struct {
+	Inherited       bool                `json:"inherited,omitzero"`
 	RequestSequence int64               `json:"request_sequence,omitzero"`
 	ControlID       string              `json:"control_id,omitempty"`
 	Role            string              `json:"role"`
@@ -432,6 +433,9 @@ func validateSession(session *Session, expectedID string) error {
 		return fmt.Errorf("too many messages or plan steps")
 	}
 	for _, message := range session.Messages {
+		if message.Inherited && (session.ParentSessionID == "" || message.RequestSequence != 0 || message.ControlID != "") {
+			return fmt.Errorf("invalid inherited message identity")
+		}
 		if (message.Role != "user" && message.Role != "assistant") || len(message.Content) > maxSessionMessageBytes || len(message.ControlID) > 256 {
 			return fmt.Errorf("invalid message")
 		}
@@ -458,6 +462,7 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 	decoder.DisallowUnknownFields()
 	var session Session
 	var messageCount int
+	var hasInherited bool
 	var latestUser, latestAssistant SessionMessage
 	var latestUserIndex, latestAssistantIndex int
 	token, err := decoder.Token()
@@ -533,6 +538,12 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 				if err == nil {
 					err = validateReferences(message.References)
 				}
+				if err == nil && message.Inherited {
+					hasInherited = true
+					if message.RequestSequence != 0 || message.ControlID != "" {
+						err = fmt.Errorf("invalid inherited message identity")
+					}
+				}
 				if err == nil && message.Role == "user" {
 					latestUser, latestUserIndex = message, messageCount
 				} else if err == nil {
@@ -554,6 +565,9 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, 0, fmt.Errorf("trailing session data")
+	}
+	if hasInherited && session.ParentSessionID == "" {
+		return nil, 0, fmt.Errorf("inherited history requires a parent session")
 	}
 	if err := validateSession(&session, expectedID); err != nil {
 		return nil, 0, err

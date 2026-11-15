@@ -35,7 +35,7 @@ def check_staged():
     return 1 if failed else 0
 
 
-def run_local_check(snapshot, environment):
+def run_local_check(snapshot, environment, evidence):
     value = environment.get('MELDRA_LOCAL_CI_TIMEOUT', str(DEFAULT_CHECK_TIMEOUT_SECONDS))
     try:
         timeout = float(value)
@@ -45,7 +45,8 @@ def run_local_check(snapshot, environment):
         print('MELDRA_LOCAL_CI_TIMEOUT must be a positive number of seconds', file=sys.stderr)
         return 1
 
-    process = subprocess.Popen(['make', 'check'], cwd=snapshot, env=environment,
+    process = subprocess.Popen(['make', 'check', 'CHECK_DIR=' + str(evidence),
+                                'COVERAGE_FILE=' + str(evidence / 'coverage.out')], cwd=snapshot, env=environment,
                                start_new_session=(os.name != 'nt'))
     def stop_processes():
         if os.name == 'nt':
@@ -91,6 +92,9 @@ def main():
     if args.quick:
         return check_staged()
 
+    evidence_root = Path(os.environ.get('CHECK_DIR', '.artifacts/checks')).resolve()
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    evidence = Path(tempfile.mkdtemp(prefix='local-ci-', dir=evidence_root))
     with tempfile.TemporaryDirectory(prefix='meldra-local-ci-') as directory:
         temporary = Path(directory).resolve()
         snapshot = temporary / 'source'
@@ -113,8 +117,8 @@ def main():
         # exported snapshot its own index without changing the user's checkout.
         subprocess.run(['git', 'init', '--quiet', str(snapshot)], env=environment, check=True)
         subprocess.run(['git', '-C', str(snapshot), 'add', '--all'], env=environment, check=True)
-        print(f'Local CI: {label}; running make check on this computer.', flush=True)
-        return run_local_check(snapshot, environment)
+        print(f'Local CI: {label}; evidence retained in {evidence}', flush=True)
+        return run_local_check(snapshot, environment, evidence)
 
 
 if __name__ == '__main__':

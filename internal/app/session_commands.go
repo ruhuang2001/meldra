@@ -53,6 +53,7 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		return nil
 	}
 	e := a.execution
+	e.requestSequence = 0 // Idle commands have no incoming turn to exclude.
 	sourceID := a.session.ID
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
@@ -64,9 +65,11 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		return err
 	}
 	_, lookupErr := e.db.GetTask(ctx, sourceID)
+	var history *compactionArtifact
 	if lookupErr == nil {
 		// Use the same unresolved-evidence guard as compaction, without inference.
-		if _, err := a.compactionHistory(ctx, len(a.session.Messages)); err != nil {
+		history, err = a.compactionHistory(ctx, len(a.session.Messages))
+		if err != nil {
 			if !errors.Is(err, errCompactionUnresolved) {
 				return err
 			}
@@ -88,6 +91,12 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		return nil
 	}
 	next := *a.session
+	if history != nil {
+		next.Messages = slices.Clone(a.session.Messages)
+		for i := range next.Messages {
+			next.Messages[i].Inherited = history.inheritedMessages[i]
+		}
+	}
 	next.taskSnapshot = true
 	next.PreviousResponseID = ""
 	next.resumed = true
@@ -126,6 +135,7 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		next.ApprovedPlanDigest = ""
 		next.Messages = slices.Clone(a.session.Messages)
 		for i := range next.Messages {
+			next.Messages[i].Inherited = true
 			next.Messages[i].RequestSequence = 0
 			next.Messages[i].ControlID = ""
 		}

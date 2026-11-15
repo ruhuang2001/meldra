@@ -53,7 +53,6 @@ func (m *observingTUIModel) View() tea.View {
 func TestTUIModelAccumulatesAndCompletesAssistantDeltas(t *testing.T) {
 	model := newTUIModel(newTUIController(nil), tuiInitialState{
 		workspace: "/tmp/project",
-		sessionID: "session_1",
 		model:     "gpt-test",
 	})
 	model.width = 80

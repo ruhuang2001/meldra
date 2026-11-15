@@ -101,6 +101,11 @@ func (w *Workspace) executePreparedCommand(spec commandSpec, requestApproval boo
 	if requestApproval && spec.ApprovalRequired && !w.approveCommandSpec(spec) {
 		return "Declined; command not run.", nil
 	}
+	if filepath.Base(spec.Executable) == "git" {
+		if err := w.rejectGitFilters(spec); err != nil {
+			return "", err
+		}
+	}
 	if err := w.admitOperation(ctx); err != nil {
 		return "", err
 	}

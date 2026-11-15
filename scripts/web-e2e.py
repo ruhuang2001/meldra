@@ -216,6 +216,7 @@ def fixture_paths(binary, output, origin):
     alias = directory / 'source-alias'
     alias.symlink_to(ROOT, target_is_directory=True)
     report = []
+    canonical = None
     try:
         for name, pwd in [('canonical', ROOT), ('alias', alias)]:
             case_output = directory / name
@@ -223,10 +224,13 @@ def fixture_paths(binary, output, origin):
             with inherited_pwd(pwd):
                 fixture = fixture_binary(case_output)
             config(fixture, case_output, origin)
+            if name == 'canonical':
+                canonical = fixture
             report.append({'name': name, 'passed': True, 'inherited_pwd': str(pwd)})
             dump(directory / 'report.json', report)
     finally:
         alias.unlink()
+    return canonical
 
 def security(binary, output, origin):
     bad = ['file:///etc/passwd', 'http://user:secret@public.example/', 'https://public.example/#fragment', 'http://localhost/', 'http://service.internal/', 'http://127.0.0.1/', 'http://10.2.3.4/', 'http://172.20.0.1/', 'http://192.168.1.1/', 'http://169.254.169.254/', 'http://100.64.0.1/', 'http://0.0.0.0/', 'http://224.0.0.1/', 'http://198.18.0.1/', 'http://[::1]/', 'http://[::ffff:127.0.0.1]/', 'http://[fc00::1]/', 'http://[fe80::1]/', 'http://[2002:7f00:1::]/', 'http://public.example:0/']
@@ -499,11 +503,14 @@ def main():
     origin = Origin(args.output)
     report = []
     try:
-        fixture = fixture_binary(args.output)
-        for name, function, target in [('fixture-paths', fixture_paths, binary), ('production-security', security, binary), ('configuration', config, fixture), ('builtin', builtin, fixture), ('approval-dns-cancellation', approval_and_dns, fixture), ('hosted', hosted, fixture), ('approval-format', approval_format, fixture), ('mcp-approval', mcp_approval, fixture)]:
+        fixture = None
+        for name, function in [('fixture-paths', fixture_paths), ('production-security', security), ('builtin', builtin), ('approval-dns-cancellation', approval_and_dns), ('hosted', hosted), ('approval-format', approval_format), ('mcp-approval', mcp_approval)]:
             started = time.monotonic()
             try:
-                function(target, args.output, origin)
+                if name == 'fixture-paths':
+                    fixture = function(binary, args.output, origin)
+                else:
+                    function(binary if name == 'production-security' else fixture, args.output, origin)
                 report.append({'name': name, 'passed': True, 'seconds': round(time.monotonic() - started, 2)})
             except Exception:
                 report.append({'name': name, 'passed': False, 'error': traceback.format_exc()})

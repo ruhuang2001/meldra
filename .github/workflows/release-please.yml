@@ -68,7 +68,8 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         run: |
           mkdir -p "$RUNNER_TEMP/release-verification"
-          cp Makefile scripts/mcp-check.py "$RUNNER_TEMP/release-verification/"
+          cp Makefile "$RUNNER_TEMP/release-verification/"
+          cp -R scripts "$RUNNER_TEMP/release-verification/"
           printf 'Verification revision: %s\n' "$(git rev-parse HEAD)"
 
       - uses: actions/checkout@v7
@@ -101,7 +102,8 @@ jobs:
         run: |
           if test -f scripts/capability-e2e.py; then
             make -f "$RUNNER_TEMP/release-verification/Makefile" check \
-              CHECK_SCRIPT="$RUNNER_TEMP/release-verification/mcp-check.py" \
+              CHECK_SCRIPT="$RUNNER_TEMP/release-verification/scripts/mcp-check.py" \
+              SCRIPT_TEST="$RUNNER_TEMP/release-verification/scripts/check-scripts-test.py" \
               DIST_DIR="$RUNNER_TEMP/meldra-checks" CHECK_DIR="$RUNNER_TEMP/meldra-checks" \
               E2E_SLOW=1
           else

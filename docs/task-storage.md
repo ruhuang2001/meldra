@@ -14,8 +14,9 @@ or a pending approval.
 
 ## Driver and layout
 
-The task ledger uses `modernc.org/sqlite v1.60.1`, a pure Go SQLite driver that
-requires Go 1.26.0 (the project builds with Go 1.26.11). It compiles with
+The task ledger uses `modernc.org/sqlite`, a pure Go SQLite driver. The
+[module file](https://github.com/ruhuang2001/meldra/blob/main/go.mod) records its version
+and the project's Go toolchain. It compiles with
 `CGO_ENABLED=0` for Darwin/Linux on both amd64 and arm64. SQLite runs locally
 in WAL mode with `synchronous=FULL`, foreign keys, a five-second busy timeout,
 and a single connection per Store. Mutation transactions use `BEGIN IMMEDIATE`
@@ -151,6 +152,21 @@ cancellation also keeps unrecorded started outcomes unknown rather than
 asserting that no effect occurred.
 
 ## Context compaction
+
+**Unreleased:** forked snapshots label copied messages as `inherited`. These
+messages retain their text and attachment references but have no child request
+sequence or control ID. Model changes and compaction do not try to match them to
+the child's execution ledger. Listing and loading both reject inconsistent
+inherited identities; unresolved tool, approval, and process records still block
+session controls and compaction.
+
+For pre-marker forks, a leading history segment is recognized only when its
+contents and references match the parent's available snapshot and the parent's
+ledger records the matching fork event. A successful model change or compaction
+persists the verified markers through the ordinary atomic snapshot save. Listing
+never migrates or writes files. Missing or changed parent evidence is an error,
+not permission to ignore unmatched child requests. Older binaries reject snapshots
+with the new field; back up the complete private state before downgrading.
 
 **Available since v0.5.0.** Compaction preserves execution records and stores the summary as
 conversation metadata. It never changes an admitted operation, tool outcome,

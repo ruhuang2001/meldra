@@ -6,7 +6,6 @@
 /.references/
 meldra
 *.swp
-.DS_Store
 
 # Benchmarking artifacts (local only). baseline-* files are committed on purpose
 # so benchmark comparisons have a checked-in reference.

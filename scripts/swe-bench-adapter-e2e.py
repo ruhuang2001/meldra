@@ -34,6 +34,9 @@ import sys
 import time
 import traceback
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = 'diff --git a/example.txt b/example.txt\n+fixture change\n'
 

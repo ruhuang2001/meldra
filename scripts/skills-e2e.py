@@ -14,6 +14,9 @@ import tempfile
 import threading
 import traceback
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 ROOT = Path(__file__).resolve().parents[1]
 BODY, REFERENCE, FRESH, SECRET = [f'E2E_PRIVATE_{s}_738af' for s in ('BODY', 'REFERENCE', 'FRESH', 'FORBIDDEN')]
 

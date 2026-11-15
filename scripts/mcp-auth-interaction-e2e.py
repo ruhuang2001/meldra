@@ -26,6 +26,9 @@ import time
 import urllib.parse
 import urllib.request
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 
 def write(path, value):
     path.write_text(json.dumps(value, indent=2) + '\n')

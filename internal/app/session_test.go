@@ -292,6 +292,17 @@ func TestSessionStoreValidatesLoadedFieldLimits(t *testing.T) {
 		"message bytes": func(session *Session) {
 			session.Messages = []SessionMessage{{Role: "user", Content: strings.Repeat("x", maxSessionMessageBytes+1)}}
 		},
+		"inherited without parent": func(session *Session) {
+			session.Messages = []SessionMessage{{Role: "user", Content: "inherited", Inherited: true}, {Role: "user", Content: "latest"}}
+		},
+		"inherited request identity": func(session *Session) {
+			session.ParentSessionID = "parent"
+			session.Messages = []SessionMessage{{Role: "user", Content: "inherited", Inherited: true, RequestSequence: 1}, {Role: "user", Content: "latest"}}
+		},
+		"inherited control identity": func(session *Session) {
+			session.ParentSessionID = "parent"
+			session.Messages = []SessionMessage{{Role: "user", Content: "inherited", Inherited: true, ControlID: "steer"}, {Role: "user", Content: "latest"}}
+		},
 		"plan count":         func(session *Session) { session.Plan = make([]string, maxSessionPlanSteps+1) },
 		"plan step":          func(session *Session) { session.Plan = []string{strings.Repeat("x", maxSessionPlanStepBytes+1)} },
 		"request checkpoint": func(session *Session) { session.LastRequestSequence = -1 },
@@ -314,6 +325,10 @@ func TestSessionStoreValidatesLoadedFieldLimits(t *testing.T) {
 			}
 			if _, err := store.Load(session.ID); err == nil {
 				t.Fatal("Load accepted invalid bounded field")
+			}
+			items, diagnostics, err := store.ListWithDiagnostics()
+			if err != nil || len(items) != 0 || diagnostics.SkippedFiles != 1 {
+				t.Fatalf("List accepted invalid field: items=%+v diagnostics=%+v err=%v", items, diagnostics, err)
 			}
 		})
 	}

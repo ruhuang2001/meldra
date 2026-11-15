@@ -40,7 +40,7 @@ The first valid package admitted to the catalog wins a duplicate name. Shadowed 
 - Quoted values, folded scalars, and CRLF are supported. Duplicate keys and invalid field types are rejected.
 - Other fields do not affect policy. `allowed-tools`, `disable-model-invocation`, `context`, argument substitution, and `agents/openai.yaml` are not implemented. They cannot grant permissions or disable implicit loading.
 
-The implementation uses `go.yaml.in/yaml/v3` v3.0.5 because neither the Go standard library nor the project's existing dependencies provided a YAML parser.
+The implementation uses `go.yaml.in/yaml/v3`; the [module file](https://github.com/ruhuang2001/meldra/blob/main/go.mod) records the dependency version.
 
 | Limit | Behavior |
 | --- | --- |
@@ -102,6 +102,10 @@ The output directory must be new or empty. Stage changes before `make check-loca
 Each E2E run writes `assertions.json` with passing checks, source and binary SHA-256 hashes, HTTP requests/responses, stdout/stderr, task/event JSON, fixtures, generated files, and audit artifacts.
 
 The suite covers external packages containing protected configuration, global reads, CLI/runtime cache protection consistency, static FIFO rejection, hard-linked metadata and credential rejection, approval decline and acceptance, multiline presentation, help, and recovery with fresh bodies.
+
+**Unreleased verification:** automatic Go tests also cover protected hardlinks,
+file/directory symlinks, traversal, lazy body loading, and fresh resource reads.
+The full standalone Skills suite remains a manual integration check.
 
 The scripted provider validates application behavior, not live-model skill selection or instruction compliance. Arbitrary concurrent filesystem replacements, mounts, and malicious-instruction resistance require separate security review.
 

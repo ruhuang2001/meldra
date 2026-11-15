@@ -165,9 +165,9 @@ meldra mcp serve --workspace /path/to/project --permissions workspace-edit
 Plan denies workspace edits, undo, tests, builds, formatting, process creation,
 and unclassified external effects at runtime. `--auto-approve`, Skills, project
 instructions, and MCP `readOnlyHint` annotations cannot override that boundary.
-Plan is local-only while active: starting a Plan session does not connect
-configured external MCP servers, and switching to Build connects them on demand.
-A mode change requires a user action.
+Starting a Plan session does not connect configured external MCP servers;
+switching to Build connects them on demand. Approved built-in web reads remain
+available in Plan, so Plan is not a no-network mode. A mode change requires a user action.
 
 In Plan mode the agent reads the workspace only when the plan needs project
 information. For a simple create or modify request that needs no project
@@ -199,8 +199,11 @@ The tool requires an existing initial commit, a clean staging area, and reposito
 deleted, and new text files; directories, symlinks, protected paths, and new binary
 files are rejected. Each selected file is bounded by the edit limit and selected
 preview evidence is capped at 1 MiB. Existing staged work is never silently included.
-Hooks and signing are disabled. Repositories with configured Git filters require a
-manual commit because even a preview can execute those filters. Avoid concurrent external
+Hooks and signing are disabled. **Unreleased:** all built-in Git reads and checkpoints
+reject repositories with configured Git filters because even a worktree preview can
+execute them. Use Git outside Meldra after reviewing those filters. Checkpoints also
+refuse an active merge, rebase, cherry-pick, revert, or sequencer operation, checking
+again after approval and staging. Finish or abort that operation outside Meldra. Avoid concurrent external
 Git writers: Meldra's leases exclude other Meldra executions, not arbitrary programs.
 
 HEAD, index, and file fingerprints are checked again after approval, then staged
@@ -287,6 +290,9 @@ evidence remains inspectable on the parent; the child inherits its summary, not 
 ledger. This is conversation branching, not a Git branch, worktree or filesystem rewind.
 Pending requests, approvals and unknown outcomes must be handled before model changes
 or forks; legacy or incomplete snapshots require an ordinary resume turn first.
+Inherited history is distinguished from the child's recorded requests, including
+after resume and compaction. Pre-marker forks require matching parent snapshot and
+fork-event evidence; see the [storage contract](task-storage.md#context-compaction).
 
 Ordinary text submitted while the TUI is busy acts as steering. In the line
 interface, use `/steer` explicitly; ordinary piped lines retain their FIFO order.

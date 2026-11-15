@@ -271,8 +271,9 @@ environments. It does not make server-initiated sampling or form answers automat
 
 ## Verification
 
-Run `make check` for Go race tests, six real-binary E2E suites (five MCP suites
-plus `capability-e2e`), and the 75% coverage gate. The suites use local fixtures
+Run `make check` for Go race tests, real-binary MCP and application E2E suites,
+and the 75% coverage gate. The [verification driver](https://github.com/ruhuang2001/meldra/blob/main/scripts/mcp-check.py)
+defines suite selection; each report records `suite_order` and omitted checks. The suites use local fixtures
 and write a fresh `.artifacts/checks/mcp-check-*` evidence directory. Override
 it with `make check CHECK_DIR=/path/to/checks` or
 `scripts/mcp-check.py --output-dir /path/to/checks`. Keep check evidence outside

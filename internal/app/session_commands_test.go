@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -77,6 +78,133 @@ func TestSessionCommandsSwitchForkAndResume(t *testing.T) {
 	}
 	if len(a.session.Messages) != 6 {
 		t.Fatalf("fork replayed parent messages: %+v", a.session.Messages)
+	}
+}
+
+func TestSessionCommandsResetNativeContinuation(t *testing.T) {
+	for _, command := range []string{"model", "fork"} {
+		t.Run(command, func(t *testing.T) {
+			var requests []provider.Request
+			a, _ := recordedAgent(t, inferenceFunc(func(_ context.Context, r provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+				requests = append(requests, r)
+				return provider.Result{Response: finishResponse()}, nil
+			}), nil)
+			for _, input := range []string{"original intent", "establish continuation"} {
+				if err := a.RunTurn(t.Context(), input); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if requests[1].PreviousResponseID == "" {
+				t.Fatal("fixture did not establish native continuation")
+			}
+			value := ""
+			if command == "model" {
+				value = "replacement-model"
+			}
+			if err := a.handleSessionCommand(t.Context(), command, value); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.RunTurn(t.Context(), "continue independently"); err != nil {
+				t.Fatal(err)
+			}
+			if requests[2].PreviousResponseID != "" || !strings.Contains(fmt.Sprintf("%+v", requests[2].Input), "original intent") {
+				t.Fatalf("continuation was not rebuilt: %+v", requests[2])
+			}
+		})
+	}
+}
+
+func TestForkContinuesSessionControlsAndCompaction(t *testing.T) {
+	for _, scenario := range []string{"live", "resumed", "legacy", "legacy-compact", "legacy-mismatch", "legacy-missing-event"} {
+		t.Run(scenario, func(t *testing.T) {
+			backend := inferenceFunc(func(_ context.Context, r provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+				return provider.Result{Response: finishResponse()}, nil
+			})
+			a, paths := recordedAgent(t, backend, nil)
+			if err := a.RunTurn(t.Context(), "inherited intent"); err != nil {
+				t.Fatal(err)
+			}
+			parentID := a.session.ID
+			if err := a.handleSessionCommand(t.Context(), "fork", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.RunTurn(t.Context(), "child intent"); err != nil {
+				t.Fatal(err)
+			}
+			if strings.HasPrefix(scenario, "legacy") {
+				for i := range a.session.Messages {
+					a.session.Messages[i].Inherited = false
+				}
+				if scenario == "legacy-mismatch" {
+					a.session.Messages[0].Content = "not in the parent snapshot"
+				}
+				if scenario == "legacy-missing-event" {
+					parent, err := newTaskSessionStore(paths).Load(parentID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					parent.ID, parent.hasSavedRevision = "unrelated-parent", false
+					if err := newTaskSessionStore(paths).Save(parent); err != nil {
+						t.Fatal(err)
+					}
+					a.session.ParentSessionID = parent.ID
+				}
+				if err := a.store.Save(a.session); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario != "live" {
+				runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "fixture", BaseURL: defaultBaseURL}, ChatOptions{Resume: a.session.ID}, func(root string, auto bool) (*Workspace, error) {
+					w, _ := testWorkspace(t, root, "", auto)
+					return w, nil
+				}, nil, io.Discard)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer runtime.mcp.close()
+				a = runtime.agent
+				a.backend = backend
+			}
+			if scenario == "legacy-mismatch" || scenario == "legacy-missing-event" {
+				model := a.modelName()
+				if err := a.handleSessionCommand(t.Context(), "model", "replacement-model"); err == nil || a.modelName() != model {
+					t.Fatalf("unverified inherited history accepted: %v", err)
+				}
+				return
+			}
+			if scenario == "legacy-compact" {
+				a.compactKeepMessages = 3
+				if err := a.handleCompactCommand(t.Context(), ""); err != nil {
+					t.Fatal(err)
+				}
+				if a.session.ContextCompaction == nil || !a.session.Messages[0].Inherited {
+					t.Fatal("legacy provenance was not retained through compaction")
+				}
+			}
+			if err := a.handleSessionCommand(t.Context(), "model", "replacement-model"); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.handleSessionCommand(t.Context(), "fork", ""); err != nil {
+				t.Fatal(err)
+			}
+			if err := a.RunTurn(t.Context(), "grandchild intent"); err != nil {
+				t.Fatal(err)
+			}
+			a.compactKeepMessages = 3 // The retained tail starts with an inherited assistant.
+			if err := a.handleCompactCommand(t.Context(), ""); err != nil {
+				t.Fatal(err)
+			}
+			if a.session.ContextCompaction == nil || len(a.session.Messages) != 3 {
+				t.Fatal("fork history was not compacted")
+			}
+			if err := a.handleSessionCommand(t.Context(), "model", "after-compaction"); err != nil {
+				t.Fatal(err)
+			}
+			parent, err := newTaskSessionStore(paths).Load(parentID)
+			if err != nil || len(parent.Messages) != 2 {
+				t.Fatalf("parent changed: %+v err=%v", parent, err)
+			}
+		})
 	}
 }
 
@@ -183,10 +311,14 @@ func TestTUIModelSwitchUpdatesHeaderAndClearsWaterline(t *testing.T) {
 }
 
 func TestInitUsesNormalEditApproval(t *testing.T) {
-	for _, mode := range []ExecutionMode{ModePlan, ModeBuild} {
-		t.Run(string(mode), func(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mode   ExecutionMode
+		accept bool
+	}{{"plan", ModePlan, true}, {"declined", ModeBuild, false}, {"approved", ModeBuild, true}} {
+		t.Run(scenario.name, func(t *testing.T) {
 			calls := 0
-			a, _ := recordedAgent(t, inferenceFunc(func(_ context.Context, r provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+			a, paths := recordedAgent(t, inferenceFunc(func(_ context.Context, r provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
 				calls++
 				if calls == 1 {
 					return provider.Result{Response: callResponse("init", "edit_file", `{"path":"AGENTS.md","old_str":"","new_str":"# Project rules\n"}`)}, nil
@@ -194,7 +326,13 @@ func TestInitUsesNormalEditApproval(t *testing.T) {
 				return provider.Result{Response: finishResponse()}, nil
 			}), nil)
 			a.execution.workspace.policy = a.policy
-			if err := a.SetMode(mode); err != nil {
+			a.execution.workspace.autoApprove = false
+			approvals := 0
+			a.execution.workspace.SetApprovalFunc(func(context.Context, ApprovalRequest) bool {
+				approvals++
+				return scenario.accept
+			})
+			if err := a.SetMode(scenario.mode); err != nil {
 				t.Fatal(err)
 			}
 			inputs := []string{"/init"}
@@ -209,12 +347,27 @@ func TestInitUsesNormalEditApproval(t *testing.T) {
 			if err := a.Run(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			_, err := os.Stat(filepath.Join(a.session.Workspace, "AGENTS.md"))
-			if mode == ModePlan && !os.IsNotExist(err) || mode == ModeBuild && err != nil {
-				t.Fatalf("mode=%s file err=%v", mode, err)
+			data, err := os.ReadFile(filepath.Join(a.session.Workspace, "AGENTS.md"))
+			wrote := scenario.mode == ModeBuild && scenario.accept
+			if wrote && (err != nil || string(data) != "# Project rules\n") || !wrote && !os.IsNotExist(err) {
+				t.Fatalf("file=%q err=%v", data, err)
 			}
-			if !strings.Contains(a.session.Messages[0].Content, "Preserve existing guidance") {
-				t.Fatal("init prompt not expanded")
+			recorded, err := openTaskDB(t, paths).Approvals(t.Context(), a.session.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario.mode == ModePlan {
+				if approvals != 0 || len(recorded) != 0 {
+					t.Fatal("Plan offered write approval")
+				}
+			} else {
+				want := task.Declined
+				if scenario.accept {
+					want = task.Approved
+				}
+				if approvals != 1 || len(recorded) != 1 || recorded[0].Decision != want {
+					t.Fatalf("approvals=%d records=%+v", approvals, recorded)
+				}
 			}
 		})
 	}

@@ -1123,6 +1123,8 @@ Configuration:
   Meldra reads ~/.meldra/config.toml and ~/.meldra/credentials.env by default.
   Set MELDRA_HOME to use another configuration directory. OPENAI_* environment
   variables override file values. Meldra never automatically loads a project's .env.
+  A resumed session's /model choice and saved token window override global settings;
+  config show reports global configuration, not a saved session's effective model.
 `
 
 const configUsageText = `Usage:

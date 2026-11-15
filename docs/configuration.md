@@ -21,6 +21,13 @@ Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 2. Files under `~/.meldra`
 3. Built-in defaults
 
+**Unreleased session override:** `/model MODEL` saves a model choice in that
+session. Resuming it restores that model and its saved context-window setting
+over the environment/file values. A switch resets the window to zero and clears
+token calibration; it does not query a model-list endpoint or modify configuration
+files. `config show` describes global configuration, not the effective settings
+of an already saved session. See [session controls](capabilities.md).
+
 Provider responses are capped at 32 MiB by default. Set
 `max_provider_response_bytes` in `config.toml`, or
 `MELDRA_MAX_PROVIDER_RESPONSE_BYTES` for a process override, to choose a
@@ -42,7 +49,7 @@ and retains a recent tail. These `config.toml` settings appear in `config show`:
 | `compact_keep_messages` | `8` | `2..64` messages, counting user and assistant messages together |
 | `compact_threshold_percent` | `80` | `0..100`; `0` disables automatic compaction |
 | `max_turn_context_bytes` | `4194304` (4 MiB) | `1..67108864` bytes |
-| `context_window_tokens` | `0` (unset) | `0..2000000` tokens |
+| `context_window_tokens` (unreleased) | `0` (unset) | `0..2000000` tokens |
 
 Automatic compaction is enabled by default. When the locally rebuilt text
 context reaches the 80% threshold, compaction makes an additional request to
@@ -57,7 +64,7 @@ Manual `/compact [focus]` remains available.
 
 The corresponding process overrides are `MELDRA_COMPACT_KEEP_MESSAGES`,
 `MELDRA_COMPACT_THRESHOLD_PERCENT`, `MELDRA_MAX_TURN_CONTEXT_BYTES`, and
-`MELDRA_CONTEXT_WINDOW_TOKENS`.
+`MELDRA_CONTEXT_WINDOW_TOKENS` (unreleased).
 
 The threshold measures UTF-8 bytes of the locally rebuilt text context, not
 tokens or model capacity. Native Responses uses `max_turn_context_bytes` as the

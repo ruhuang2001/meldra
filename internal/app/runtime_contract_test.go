@@ -99,7 +99,7 @@ func TestStreamTextIsRetainedInCustomToolReplay(t *testing.T) {
 }
 
 func TestNarrowHeaderKeepsCursorOnComposer(t *testing.T) {
-	m := newTUIModel(newTUIController(nil), tuiInitialState{workspace: "/tmp/long-long-workspace", model: strings.Repeat("model", 20), sessionID: strings.Repeat("id", 30)})
+	m := newTUIModel(newTUIController(nil), tuiInitialState{workspace: "/tmp/long-long-workspace", model: strings.Repeat("model", 20)})
 	m.input.Focus()
 	m.width = 30
 	m.height = 24

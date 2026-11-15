@@ -130,6 +130,9 @@ func (a *Agent) compactContext(ctx context.Context, trigger, focus, request stri
 	// cannot reduce the automatically measured context.
 	next := *a.session
 	next.Messages = slices.Clone(a.session.Messages[len(a.session.Messages)-keep:])
+	for i := range next.Messages {
+		next.Messages[i].Inherited = artifact.inheritedMessages[len(a.session.Messages)-keep+i]
+	}
 	next.Summary = ""
 	next.ContextCompaction = new(task.ArtifactRef)
 	projected, err := a.measuredCompactionContext(ctx, request, &next, artifact)

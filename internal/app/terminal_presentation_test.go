@@ -32,7 +32,6 @@ func TestTUIRenderingSanitizesUntrustedPresentationText(t *testing.T) {
 	osc := "\x1b]0;untrusted-title\a"
 	model := newTUIModel(newTUIController(nil), tuiInitialState{
 		workspace: "/tmp/project" + osc,
-		sessionID: "session" + csi,
 		model:     "model" + osc,
 	})
 	model.width = 100

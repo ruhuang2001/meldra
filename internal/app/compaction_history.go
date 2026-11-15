@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/hex"
@@ -36,14 +37,15 @@ type compactionCall struct {
 	Error           string             `json:"error,omitempty"`
 }
 type compactionArtifact struct {
-	SchemaVersion    int             `json:"schema_version"`
-	Focus            string          `json:"focus"`
-	Trigger          string          `json:"trigger"`
-	FromBytes        int             `json:"from_bytes"`
-	ToBytes          int             `json:"to_bytes"`
-	KeptMessages     int             `json:"kept_messages"`
-	SourceTurns      compactionRange `json:"source_turns"`
-	RetainedMessages struct {
+	inheritedMessages []bool
+	SchemaVersion     int             `json:"schema_version"`
+	Focus             string          `json:"focus"`
+	Trigger           string          `json:"trigger"`
+	FromBytes         int             `json:"from_bytes"`
+	ToBytes           int             `json:"to_bytes"`
+	KeptMessages      int             `json:"kept_messages"`
+	SourceTurns       compactionRange `json:"source_turns"`
+	RetainedMessages  struct {
 		First int `json:"first"`
 		Last  int `json:"last"`
 	} `json:"retained_messages"`
@@ -320,7 +322,7 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 	}
 	for i := len(a.session.Messages) - 1; i >= 0; i-- {
 		message := a.session.Messages[i]
-		if message.Role != "user" {
+		if message.Role != "user" || message.Inherited {
 			continue
 		}
 		if message.RequestSequence > 0 {
@@ -340,6 +342,11 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 			}
 		}
 	}
+	inherited, err := a.inheritedHistory(ctx, mapped)
+	if err != nil {
+		return nil, err
+	}
+	result.inheritedMessages = inherited
 	split := len(a.session.Messages) - keep
 	boundary := after + 1
 	if keep > 0 {
@@ -347,7 +354,7 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 		for start > 0 && a.session.Messages[start].Role != "user" {
 			start--
 		}
-		if a.session.Messages[start].Role != "user" && len(requests) > 0 {
+		if a.session.Messages[start].Role != "user" && !inherited[start] && len(requests) > 0 {
 			// A previous exact-tail compaction may have moved this assistant's
 			// user request into its artifact. Recover its turn from the ordered
 			// requests immediately before the next retained user request.
@@ -374,7 +381,7 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 			}
 		}
 		for i := start; i < len(mapped); i++ {
-			if a.session.Messages[i].Role != "user" {
+			if a.session.Messages[i].Role != "user" || inherited[i] {
 				continue
 			}
 			if mapped[i] == 0 {
@@ -478,4 +485,78 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 		return nil, err
 	}
 	return result, nil
+}
+
+// Pre-marker forks cleared parent request identities but did not label copied
+// messages. Recognize only a matching leading snapshot with a recorded fork;
+// never exempt arbitrary unmapped requests from the child's evidence checks.
+func (a *Agent) inheritedHistory(ctx context.Context, mapped []int64) ([]bool, error) {
+	inherited := make([]bool, len(a.session.Messages))
+	marked := false
+	for i, message := range a.session.Messages {
+		inherited[i] = message.Inherited
+		marked = marked || message.Inherited
+	}
+	if marked || a.session.ParentSessionID == "" || a.session.ContextCompaction != nil {
+		return inherited, nil
+	}
+	count := 0
+	for i, message := range a.session.Messages {
+		if mapped[i] != 0 || message.RequestSequence != 0 || message.ControlID != "" {
+			break
+		}
+		count++
+	}
+	if count == 0 {
+		return inherited, nil
+	}
+	parent, err := newTaskSessionStore(a.execution.paths).Load(a.session.ParentSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("verify legacy fork parent: %w", err)
+	}
+	if parent.Workspace != a.session.Workspace || len(parent.Messages) < count {
+		return nil, fmt.Errorf("legacy fork history does not match parent snapshot")
+	}
+	preview := slices.Clone(parent.Messages[:count])
+	for i := range preview {
+		preview[i].Inherited = false
+		preview[i].RequestSequence = 0
+		preview[i].ControlID = ""
+	}
+	expected, err := json.Marshal(preview)
+	if err != nil {
+		return nil, err
+	}
+	actual, err := json.Marshal(a.session.Messages[:count])
+	if err != nil || !bytes.Equal(expected, actual) {
+		return nil, fmt.Errorf("legacy fork history does not match parent snapshot")
+	}
+	var after int64
+	for {
+		page, err := a.execution.db.Events(ctx, parent.ID, after, 1000)
+		if err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			return nil, fmt.Errorf("legacy fork has no matching parent event")
+		}
+		for _, event := range page {
+			after = event.Sequence
+			if event.Kind != "session.fork" {
+				continue
+			}
+			var record struct {
+				SessionID string `json:"session_id"`
+			}
+			if err := json.Unmarshal(event.Data, &record); err != nil {
+				return nil, err
+			}
+			if record.SessionID == a.session.ID {
+				for i := range count {
+					inherited[i] = true
+				}
+				return inherited, nil
+			}
+		}
+	}
 }

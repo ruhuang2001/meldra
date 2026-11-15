@@ -378,6 +378,9 @@ func (w *Workspace) prepareCommand(command string, args []string, seconds int) (
 		if topLevel != w.root {
 			return commandSpec{}, fmt.Errorf("workspace must be the Git repository root (%s)", topLevel)
 		}
+		if err := w.rejectGitFilters(commandSpec{Executable: executable}); err != nil {
+			return commandSpec{}, err
+		}
 		gitArgs := []string{"-c", "core.fsmonitor=false"}
 		if len(args) > 0 && (args[0] == "diff" || args[0] == "show" || args[0] == "log") {
 			gitArgs = append(gitArgs, args[0], "--no-ext-diff", "--no-textconv")
@@ -478,14 +481,19 @@ func commandRequiresApproval(command string) bool {
 	return command == "python3" || command == "go" || command == "npm" || command == "pnpm" || command == "cargo" || command == "make"
 }
 
-func (w *Workspace) confirmCommand(command string, args []string) bool {
-	text := renderCommand(command, args)
-	return w.requestApproval(ApprovalRequest{
-		Kind:   ApprovalCommand,
-		Title:  "Run command with OS user privileges",
-		Detail: text + "\n\nThis command runs repository code with your OS user privileges and may access the filesystem and network.",
-		Prompt: fmt.Sprintf("Run command with OS-user privileges? %s [y/N] ", text),
-	})
+// Worktree reads can execute clean/process filters, even with textconv and
+// external diff disabled. Check the effective configuration, including includes.
+func (w *Workspace) rejectGitFilters(spec commandSpec) error {
+	keys, err := w.commitGitRead(spec, "config", "--list", "--name-only", "-z")
+	if err != nil {
+		return err
+	}
+	for key := range strings.SplitSeq(keys, "\x00") {
+		if strings.HasPrefix(strings.ToLower(key), "filter.") {
+			return fmt.Errorf("configured Git filters require manual review outside Meldra")
+		}
+	}
+	return nil
 }
 
 func renderCommand(command string, args []string) string {

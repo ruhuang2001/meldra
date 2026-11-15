@@ -111,8 +111,9 @@ Cross-protocol reasoning preservation is not promised.
 
 The second-phase [Anthropic adapter issue](https://github.com/ruhuang2001/meldra/issues/66)
 defines explicit capability queries and provider-switch history rebuilding.
-The [context compaction design](proposals/context-compaction.md) records the
-summary and evidence contract.
+The [task storage contract](task-storage.md) defines current summary/evidence
+preservation, and [configuration](configuration.md#context-compaction) defines
+triggers. The [original compaction design](proposals/context-compaction.md) is historical.
 
 ## Repeatable offline verification
 

@@ -24,6 +24,13 @@ rewrite working files. Full local checks time out after 15 minutes and stop
 their process group; set `MELDRA_LOCAL_CI_TIMEOUT` to a positive number of
 seconds to adjust this limit.
 
+**Unreleased:** snapshot checks retain logs, reports, and `coverage.out` in a
+unique `.artifacts/checks/local-ci-*` directory outside the disposable sources,
+including on failure or timeout. Set the `CHECK_DIR` environment variable to
+choose the parent evidence directory. Verification rejects Python `-O` and
+`PYTHONOPTIMIZE`, which would otherwise disable E2E assertions. Script regression
+checks run in `make check`, `make check-fast`, and remote CI.
+
 Additional manual E2E suites:
 
 ```bash
@@ -45,8 +52,8 @@ Choose a new output directory for each run.
 jobs. Two partition `internal/app` with complementary `-run` / `-skip` filters:
 command/process/output/verification tests and everything else (including new
 tests, examples, and fuzz seeds). The third covers every other package discovered
-by `go list ./...` and runs fresh non-race storage tests, a CGO-disabled build,
-and the pinned vulnerability scan. No existing remote check is omitted. Logs
+by `go list ./...` and runs fresh non-race storage tests, verification-script
+regressions, a CGO-disabled build, and the pinned vulnerability scan. No existing remote check is omitted. Logs
 are retained for seven days. Formatting, dependency tidiness, standalone vet,
 E2E, and coverage remain in full local/release checks; `go test` also runs its
 default vet checks remotely.
@@ -115,8 +122,10 @@ before merging.
 
 ## Faster local feedback
 
-**Available since v0.4.1:** `make check-fast` runs ordinary Go tests and the capability E2E
-suite, including PTY exit checks. It skips race, coverage, and MCP-specific E2E
+**Available since v0.4.1:** `make check-fast` provides local feedback. It currently
+runs ordinary Go tests and selected non-MCP E2E suites, including PTY exit checks.
+The [driver](https://github.com/ruhuang2001/meldra/blob/main/scripts/mcp-check.py) and
+its report's `suite_order` identify the selected suites. It skips race, coverage, and MCP-specific E2E
 suites and does not replace `coverage.out`. Run the full `make check` before
 submitting changes.
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -96,6 +97,19 @@ func (w *Workspace) prepareGitCommit(raw json.RawMessage) (_ *preparedGitCommit,
 	review, err := w.gitReview(json.RawMessage(`{}`))
 	if err != nil {
 		return nil, err
+	}
+	var previewErr error
+	tool.Observe(w.ctx, func(o *tool.Observation) {
+		if o.Result.Status != "" || o.Err != nil {
+			previewErr = fmt.Errorf("Git review did not complete successfully")
+			return
+		}
+		// Completed read-only previews are not evidence that a write started.
+		o.Started = false
+		o.Result.ExitCode = nil
+	})
+	if previewErr != nil {
+		return nil, previewErr
 	}
 	request := ApprovalRequest{Kind: ApprovalCommand, Title: "Commit selected workspace files", WorkspaceState: json.RawMessage(state),
 		Detail: "Message:\n" + in.Message + "\n\nSelected files:\n" + strings.Join(paths, "\n") + "\n\n" + preview + "\n\n" + review + "\nHooks and commit signing are disabled; configured Git filters are rejected. Failure can leave these files staged; inspect git_review before retrying.",
@@ -197,16 +211,20 @@ func (w *Workspace) commitGitReadInput(spec commandSpec, input io.Reader, args .
 }
 
 func (w *Workspace) gitCommitState(spec commandSpec, paths []string) (string, string, error) {
-	// Even a worktree diff can execute a clean/process filter before approval.
-	// Reject configured filters before any worktree inspection, including the
-	// repository-wide git_review preview, not just filters on selected files.
-	keys, err := w.commitGitRead(spec, "config", "--list", "--name-only", "-z")
+	if err := w.rejectGitFilters(spec); err != nil {
+		return "", "", err
+	}
+	// These states can change commit parentage or finish a sequenced operation
+	// without changing HEAD or the staged diff. Recheck after approval/staging.
+	directory, err := w.commitGitRead(spec, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return "", "", err
 	}
-	for key := range strings.SplitSeq(keys, "\x00") {
-		if strings.HasPrefix(strings.ToLower(key), "filter.") {
-			return "", "", fmt.Errorf("configured Git filters require manual review and commit")
+	for _, operation := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {
+		if _, err := os.Lstat(filepath.Join(strings.TrimSpace(directory), operation)); err == nil {
+			return "", "", fmt.Errorf("Git operation %s is in progress; finish or abort it outside Meldra before committing", operation)
+		} else if !os.IsNotExist(err) {
+			return "", "", err
 		}
 	}
 	head, err := w.commitGitRead(spec, "rev-parse", "--verify", "HEAD")

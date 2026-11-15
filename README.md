@@ -68,7 +68,7 @@ Requires Go 1.26.11 and Python 3 for PTY integration tests. See the
 [development guide](docs/development.md) for CI, hooks, and release workflows.
 
 ```sh
-make check-fast       # local Go checks and capability E2E
+make check-fast       # local Go checks and selected non-MCP E2E suites
 make check            # full race, E2E, coverage, and build gate
 make check E2E_WORKERS=1  # run independent E2E suites serially
 make check E2E_SLOW=1     # also run deliberately slow E2E scenarios

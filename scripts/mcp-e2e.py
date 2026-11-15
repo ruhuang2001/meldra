@@ -18,6 +18,9 @@ import threading
 import time
 import traceback
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 # Scenarios that deliberately wait past real deadlines; opt in with --slow.
 SLOW_SCENARIOS = ('serve-approval-budget',)
 

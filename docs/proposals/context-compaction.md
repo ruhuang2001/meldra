@@ -1,18 +1,19 @@
 # Model-generated context compaction
 
-Status: **available since v0.5.0.** Design of record for
-[issue #65](https://github.com/ruhuang2001/meldra/issues/65). This document
-replaces the earlier draft's open questions with decided values; implementation
-follows the stable JSON stream protocol.
+Status: **historical v0.5.0 design** for
+[issue #65](https://github.com/ruhuang2001/meldra/issues/65). The decisions below
+describe the original scope, not every current behavior. Current contracts live
+in [configuration](../configuration.md#context-compaction) and
+[task storage](../task-storage.md); later token-window triggering supersedes
+this design's byte-only measurement and token-threshold exclusion.
 
 ## Problem
 
-Native Responses continuation retains implicit server history, while saved
-conversation snapshots have bounded retention but no model-generated summary.
-Custom-provider budgeting replaces older tool outputs with omission markers;
-that bounds input but does not explain what was discarded. `Session.Summary`
-exists today but is only ever written by the `save_summary` tool, and
-`resumeContext()` injects it only for resumed or custom-provider turns.
+Before v0.5.0, native Responses continuation retained implicit server history,
+while saved conversation snapshots had bounded retention but no model-generated
+summary. Custom-provider budgeting replaced older tool outputs with omission
+markers. `Session.Summary` was written only by `save_summary`, and
+`resumeContext()` injected it only for resumed or custom-provider turns.
 
 ## Decisions
 

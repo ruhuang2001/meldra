@@ -13,6 +13,9 @@ import subprocess
 import sys
 import time
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 
 def record_pid(wire):
     wire.with_suffix('.pid').write_text(str(os.getpid()))

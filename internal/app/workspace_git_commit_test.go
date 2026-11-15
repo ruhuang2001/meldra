@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -150,6 +151,142 @@ func TestGitCommitRejectsFiltersBeforeApproval(t *testing.T) {
 	}
 	if git("rev-parse", "HEAD") != head {
 		t.Fatal("filter output committed")
+	}
+}
+
+func TestPlanGitReadsRejectFilters(t *testing.T) {
+	for _, name := range []string{"git_review", "run_command", "verify"} {
+		t.Run(name, func(t *testing.T) {
+			root, git := commitFixture(t)
+			git("config", "filter.probe.clean", "touch filter-ran; cat")
+			if err := os.WriteFile(filepath.Join(root, ".gitattributes"), []byte("selected.txt filter=probe\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			w, _ := testWorkspace(t, root, "", false)
+			w.policy, _ = newRuntimePolicy(ModePlan, PermissionInteractive)
+			w.SetApprovalFunc(func(context.Context, ApprovalRequest) bool {
+				t.Error("unsafe Git read reached approval")
+				return false
+			})
+			raw := json.RawMessage(`{}`)
+			if name == "run_command" {
+				raw = json.RawMessage(`{"command":"git","args":["diff"],"timeout":null}`)
+			} else if name == "verify" {
+				raw = json.RawMessage(`{"preset":"diff"}`)
+			}
+			registry, err := tool.New(w.ToolDefinitions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := registry.Invoke(t.Context(), name, raw)
+			if err == nil || result.Status != tool.Failed {
+				t.Errorf("unsafe read: result=%+v err=%v", result, err)
+			}
+			if _, err := os.Stat(filepath.Join(root, "filter-ran")); !os.IsNotExist(err) {
+				t.Fatal("Git filter executed in Plan mode")
+			}
+		})
+	}
+}
+
+func TestGitCommitRejectsPendingOperations(t *testing.T) {
+	for _, operation := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"} {
+		for _, afterApproval := range []bool{false, true} {
+			name := operation
+			if afterApproval {
+				name += "-after-review"
+			}
+			t.Run(name, func(t *testing.T) {
+				root, git := commitFixture(t)
+				head := git("rev-parse", "HEAD")
+				start := func() {
+					if operation == "MERGE_HEAD" {
+						side := strings.TrimSpace(git("-c", "core.hooksPath=/dev/null", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "side history"))
+						git("-c", "core.hooksPath=/dev/null", "merge", "--no-commit", "--no-ff", "-s", "ours", side)
+					} else if strings.HasSuffix(operation, "_HEAD") {
+						if err := os.WriteFile(filepath.Join(root, ".git", operation), []byte(head), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					} else if err := os.Mkdir(filepath.Join(root, ".git", operation), 0o700); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if !afterApproval {
+					start()
+				}
+				w, _ := testWorkspace(t, root, "", false)
+				w.SetApprovalFunc(func(context.Context, ApprovalRequest) bool {
+					if !afterApproval {
+						t.Error("pending operation reached approval")
+					} else {
+						start()
+					}
+					return true
+				})
+				registry, err := tool.New(w.ToolDefinitions())
+				if err != nil {
+					t.Fatal(err)
+				}
+				result, err := registry.Invoke(t.Context(), "git_commit", json.RawMessage(`{"paths":["selected.txt"],"message":"checkpoint"}`))
+				if err == nil || result.Status != tool.Failed {
+					t.Errorf("pending operation accepted: result=%+v err=%v", result, err)
+				}
+				if git("rev-parse", "HEAD") != head || git("diff", "--cached") != "" {
+					t.Fatal("rejected checkpoint changed HEAD or index")
+				}
+			})
+		}
+	}
+}
+
+func TestGitCommitReportsPartialFailure(t *testing.T) {
+	for _, failure := range []string{"add", "commit", "cancel"} {
+		t.Run(failure, func(t *testing.T) {
+			root, git := commitFixture(t)
+			head := git("rev-parse", "HEAD")
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := t.TempDir()
+			script := fmt.Sprintf("#!/bin/sh\nfor arg do\n case \"$arg\" in\n add) [ %q != add ] || exit 73 ;;\n commit) touch commit-attempted; if [ %q = cancel ]; then echo commit-started; exec sleep 30; fi; exit 74 ;;\n esac\ndone\nexec %q \"$@\"\n", failure, failure, realGit)
+			if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			w, _ := testWorkspace(t, root, "", true)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			w.SetCommandOutput(func(output CommandOutput) {
+				if failure == "cancel" && strings.Contains(output.Text, "commit-started") {
+					cancel()
+				}
+			})
+			registry, err := tool.New(w.ToolDefinitions())
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := registry.Invoke(ctx, "git_commit", json.RawMessage(`{"paths":["selected.txt"],"message":"checkpoint"}`))
+			want := tool.Failed
+			if failure == "cancel" {
+				want = tool.Unknown
+			}
+			if result.Status != want {
+				t.Fatalf("status=%s want=%s err=%v", result.Status, want, err)
+			}
+			if git("rev-parse", "HEAD") != head {
+				t.Fatal("failed checkpoint changed HEAD")
+			}
+			staged := strings.TrimSpace(git("diff", "--cached", "--name-only"))
+			_, attempted := os.Stat(filepath.Join(root, "commit-attempted"))
+			if failure == "add" {
+				if staged != "" || !os.IsNotExist(attempted) {
+					t.Fatal("commit ran after failed staging")
+				}
+			} else if staged != "selected.txt" || attempted != nil {
+				t.Fatalf("partial stage evidence lost: staged=%q attempted=%v", staged, attempted)
+			}
+		})
 	}
 }
 

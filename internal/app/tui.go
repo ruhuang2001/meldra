@@ -157,7 +157,6 @@ type tuiAgentStoppedMsg struct {
 
 type tuiInitialState struct {
 	workspace   string
-	sessionID   string
 	model       string
 	mode        string
 	permissions string
@@ -455,7 +454,6 @@ type tuiModel struct {
 	permissionProfile string
 	controller        *tuiController
 	workspace         string
-	sessionID         string
 	modelName         string
 
 	width  int
@@ -532,7 +530,6 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	return &tuiModel{
 		controller:        controller,
 		workspace:         initial.workspace,
-		sessionID:         initial.sessionID,
 		modelName:         initial.model,
 		executionMode:     initial.mode,
 		permissionProfile: initial.permissions,
@@ -1312,7 +1309,6 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	started := false
 	uiErr := controller.run(chatCtx, stdin, stdout, tuiInitialState{
 		workspace:   runtime.workspace.root,
-		sessionID:   runtime.session.ID,
 		model:       runtime.agent.modelName(),
 		mode:        string(runtime.session.Mode),
 		permissions: string(runtime.session.Permissions),

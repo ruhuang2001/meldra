@@ -4,6 +4,7 @@ CHECK_DIR := .artifacts/checks
 COVERAGE_FILE := coverage.out
 COVERAGE_MIN := 75.0
 CHECK_SCRIPT ?= scripts/mcp-check.py
+SCRIPT_TEST ?= scripts/check-scripts-test.py
 E2E_WORKERS ?= 3
 E2E_SLOW ?=
 # Local builds should identify the source they were built from just like
@@ -13,7 +14,7 @@ VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage build check check-fast check-ci check-staged check-local-ci release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage build check check-fast check-staged check-local-ci release-check release-snapshot install-hooks clean
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)
@@ -37,18 +38,15 @@ build:
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o $(DIST_DIR)/$(APP) .
 
 check:
+	python3 -B "$(SCRIPT_TEST)"
 	test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))"
 	go vet ./...
 	go mod tidy -diff
 	$(MAKE) -f "$(firstword $(MAKEFILE_LIST))" test-coverage
 	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
 
-check-ci:
-	$(MAKE) test-race
-	go test -count=1 ./internal/store
-	go build -trimpath -ldflags "$(VERSION_LDFLAGS)" -o /dev/null .
-
 check-fast:
+	python3 -B "$(SCRIPT_TEST)"
 	test -z "$$(gofmt -l $$(go list -f '{{.Dir}}' ./...))"
 	go vet ./...
 	go mod tidy -diff

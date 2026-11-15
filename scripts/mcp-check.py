@@ -35,6 +35,9 @@ import sys
 import tempfile
 import time
 
+if not __debug__:
+    raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
+
 
 def merge_profiles(profiles):
     mode, blocks = None, {}
@@ -116,7 +119,7 @@ def main():
                         help='check evidence directory (separate from release artifacts)')
     parser.add_argument('--self-check', action='store_true')
     parser.add_argument('--fast', action='store_true',
-                        help='local feedback: ordinary Go tests and capability E2E only; no race or coverage gate')
+                        help='local feedback: ordinary Go tests and selected non-MCP E2E suites; no race or coverage gate')
     parser.add_argument('--slow', action='store_true',
                         help='include E2E scenarios that deliberately wait past real deadlines')
     parser.add_argument('--e2e-workers', type=int, default=3,

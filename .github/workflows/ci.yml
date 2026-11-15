@@ -90,6 +90,9 @@ jobs:
               go test -race $packages 2>&1 | tee .artifacts/ci/race.log
               ;;
           esac
+      - name: Verification script regressions
+        if: matrix.shard == 'other'
+        run: python3 -B scripts/check-scripts-test.py 2>&1 | tee .artifacts/ci/scripts.log
       - name: Fresh storage tests
         if: matrix.shard == 'other'
         run: go test -count=1 ./internal/store 2>&1 | tee .artifacts/ci/store.log
