@@ -215,6 +215,19 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 				}
 				fingerprintData := append([]byte(definition.Name), req.Params.Arguments...)
 				fingerprintData = fmt.Appendf(fingerprintData, "\nproject instructions: %s", instructionDigest)
+				var commitPreview *preparedGitCommit
+				if definition.Name == "git_commit" {
+					workspace.SetContext(ctx)
+					commitPreview, err = workspace.prepareGitCommit(req.Params.Arguments)
+					if err != nil {
+						approvalMu.Lock()
+						delete(pending, req.Params.RequestState)
+						approvalMu.Unlock()
+						return mcpServeResult(err.Error(), true), nil
+					}
+					fingerprintData = append(fingerprintData, commitPreview.request.WorkspaceState...)
+					fingerprintData = append(fingerprintData, commitPreview.request.Detail...)
+				}
 				if definition.Name == "undo_last_change" {
 					fingerprintData = fmt.Appendf(fingerprintData, "\nundo generation: %d", undoGeneration)
 				}
@@ -233,6 +246,9 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					}
 					state := rand.Text()
 					message := "Allow " + definition.Name + " with arguments " + string(req.Params.Arguments) + "?"
+					if commitPreview != nil {
+						message = commitPreview.request.Detail + "\nCommit these files?"
+					}
 					if toolEffect(definition.Name) == task.ExternalRead {
 						message = workspace.webApproval(definition.Name, req.Params.Arguments).Detail + "\nAllow external web read?"
 					}
@@ -264,7 +280,12 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 				}
 				accepted, _ := answer.Content["approve"].(bool)
 				declined = answer.Action != "accept" || !accepted
-				approve = func(context.Context, ApprovalRequest) bool { return answer.Action == "accept" && accepted }
+				approve = func(_ context.Context, request ApprovalRequest) bool {
+					if commitPreview != nil && (string(request.WorkspaceState) != string(commitPreview.request.WorkspaceState) || request.Detail != commitPreview.request.Detail) {
+						return false
+					}
+					return answer.Action == "accept" && accepted
+				}
 			} else {
 				approve = func(ctx context.Context, request ApprovalRequest) bool {
 					// Human approval does not consume the workspace command deadline.

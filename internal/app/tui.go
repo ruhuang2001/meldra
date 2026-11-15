@@ -886,6 +886,9 @@ func (m *tuiModel) resolveApproval(approved bool) {
 
 func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 	switch event.Kind {
+	case UIEventModel:
+		m.modelName = event.Text
+		m.metrics = UIMetrics{}
 	case UIEventStatus:
 		if event.Text == "Mode change failed" {
 			m.clearModeChangePending()
@@ -1310,7 +1313,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	uiErr := controller.run(chatCtx, stdin, stdout, tuiInitialState{
 		workspace:   runtime.workspace.root,
 		sessionID:   runtime.session.ID,
-		model:       settings.Model,
+		model:       runtime.agent.modelName(),
 		mode:        string(runtime.session.Mode),
 		permissions: string(runtime.session.Permissions),
 		messages:    append([]SessionMessage(nil), runtime.session.Messages...),

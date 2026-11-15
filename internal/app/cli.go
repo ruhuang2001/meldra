@@ -823,6 +823,10 @@ func newChatRuntime(
 	agent.workspace = workspace
 	agent.projectContext = workspace.projectContext
 	agent.suppressNextReferences = options.RemotePrompt
+	if session.Model != "" {
+		settings.Model = session.Model
+		settings.ContextWindowTokens = session.ModelContextWindow
+	}
 	agent.model = settings.Model
 	agent.customProvider = isCustomBaseURL(settings.BaseURL)
 	agent.maxProviderResponseBytes = settings.MaxProviderResponseBytes
@@ -1099,6 +1103,12 @@ const usageText = `Usage:
   meldra config [show]           Show effective configuration without secrets.
   meldra update                  Check for and install the latest stable release.
   meldra version                 Print the installed version.
+
+Interactive commands (while idle):
+  /model [model]                 Show or switch model on the current provider.
+  /init                          Draft AGENTS.md using normal edit approvals.
+  /fork                          Branch conversation; workspace files stay shared.
+  /compact [focus]               Summarize older context.
 
 Options:
   --workspace PATH               Restrict all file and command tools to PATH.

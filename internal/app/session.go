@@ -46,6 +46,9 @@ type SessionMessage struct {
 }
 
 type Session struct {
+	Model                             string            `json:"model,omitempty"`
+	ModelContextWindow                int               `json:"model_context_window,omitzero"`
+	ParentSessionID                   string            `json:"parent_session_id,omitempty"`
 	ContextCompaction                 *task.ArtifactRef `json:"context_compaction,omitempty"`
 	CompactedThroughSequence          int64             `json:"compacted_through_sequence,omitzero"`
 	Title                             string            `json:"title,omitempty"`
@@ -404,6 +407,9 @@ func readSessionFile(path string) ([]byte, error) {
 }
 
 func validateSession(session *Session, expectedID string) error {
+	if session.Model != "" && !validModelName(session.Model) || session.ModelContextWindow < 0 || session.ParentSessionID != "" && !validSessionID(session.ParentSessionID) {
+		return fmt.Errorf("invalid model or parent session metadata")
+	}
 	if !utf8.ValidString(session.Title) || utf8.RuneCountInString(session.Title) > 60 {
 		return fmt.Errorf("invalid session title")
 	}
@@ -470,6 +476,12 @@ func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 		}
 		seen[key] = true
 		switch key {
+		case "model":
+			err = decoder.Decode(&session.Model)
+		case "model_context_window":
+			err = decoder.Decode(&session.ModelContextWindow)
+		case "parent_session_id":
+			err = decoder.Decode(&session.ParentSessionID)
 		case "policy_generation":
 			err = decoder.Decode(&session.PolicyGeneration)
 		case "approved_plan_digest":

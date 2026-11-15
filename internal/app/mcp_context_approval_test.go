@@ -11,6 +11,7 @@ func TestMCPApprovalContextResolvesAllMutationScopesBeforeApproval(t *testing.T)
 		name, raw string
 		want      []string
 	}{
+		{"git_commit", `{"paths":["first/file.txt","second/file.txt"],"message":"checkpoint"}`, []string{".", "first", "second"}},
 		{"edit_file", `{"path":"first/new/deep.txt","old_str":"","new_str":"new"}`, []string{".", "first"}},
 		{"apply_patch", `{"patch":null,"changes":[{"path":"first/new.txt","old_str":"","new_str":"a"},{"path":"second/new.txt","old_str":"","new_str":"b"}]}`, []string{".", "first", "second"}},
 		{"apply_patch", `{"patch":"--- a/first/old.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-old\n--- /dev/null\n+++ b/second/new.txt\n@@ -0,0 +1 @@\n+new\n","changes":null}`, []string{".", "first", "second"}},

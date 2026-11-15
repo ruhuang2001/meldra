@@ -72,14 +72,14 @@ func (c *turnControl) record(kind string, request ControlRequest) error {
 // SubmitControl accepts a human control request only while the turn owns its
 // durable journal. Success means received, not yet applied or stopped.
 func (a *Agent) SubmitControl(kind, text string) error {
-	if kind == "compact" {
+	if kind == "compact" || kind == "model" || kind == "fork" || kind == "init" {
 		c := a.initControl()
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if !c.active {
 			return ErrNoActiveTurn
 		}
-		return fmt.Errorf("compact is available only while idle")
+		return fmt.Errorf("%s is available only while idle", kind)
 	}
 	if kind != "steer" && kind != "queue" && kind != "stop" && kind != "mode" {
 		return fmt.Errorf("unknown control %q", kind)
@@ -242,6 +242,8 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 func parseControlText(text string) (kind, value string, ok bool) {
 	command, rest := splitSlashInput(text)
 	switch command {
+	case "/model", "/fork", "/init":
+		return strings.TrimPrefix(command, "/"), strings.TrimSpace(rest), true
 	case "/compact":
 		return "compact", strings.TrimSpace(rest), true
 	case "/stop":

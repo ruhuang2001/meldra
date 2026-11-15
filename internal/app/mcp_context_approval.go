@@ -15,6 +15,12 @@ func (w *Workspace) mcpApprovalContextDigest(name string, raw json.RawMessage) (
 	}
 	var paths []string
 	switch name {
+	case "git_commit":
+		var in gitCommitInput
+		if err := decodeToolInput(raw, &in, "paths", "message"); err != nil {
+			return "", err
+		}
+		paths = in.Paths
 	case "edit_file":
 		var in struct {
 			Path string `json:"path"`

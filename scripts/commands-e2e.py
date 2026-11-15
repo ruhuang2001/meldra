@@ -219,6 +219,37 @@ def terminal(binary, output):
         case.complete()
 
 
+def session_controls(binary, output):
+    for terminal_mode in (False, True):
+        name = 'session-controls-' + ('pty' if terminal_mode else 'line')
+        with Case(binary, output, name, [{'text': 'SESSION_READY'}, {'text': 'BRANCH_READY'}, {'text': 'RESUMED_READY'}]) as case:
+            with Interactive(case, terminal=terminal_mode) as client:
+                client.wait('SESSION_READY')
+                time.sleep(0.2)
+                client.send('/model fast-fixture')
+                client.wait('Model switched to')
+                time.sleep(0.2)
+                client.send('/fork')
+                client.wait('Forked session')
+                time.sleep(0.2)
+                client.send('Explore alternative')
+                client.wait('BRANCH_READY')
+                client.finish()
+            snapshots = [json.loads(path.read_text()) for path in (case.state / 'tasks/sessions').glob('*.json')]
+            assert len(snapshots) == 2, snapshots
+            child = next(value for value in snapshots if value.get('parent_session_id'))
+            parent = next(value for value in snapshots if value['id'] == child['parent_session_id'])
+            assert len(parent['messages']) == 2 and len(child['messages']) == 4, snapshots
+            assert case.requests[1]['model'] == 'fast-fixture', case.requests
+            assert not case.requests[1].get('previous_response_id'), case.requests[1]
+            assert 'Initial controlled request.' in json.dumps(case.requests[1]), case.requests[1]
+            case.run(['resume', child['id'], '--prompt', 'Continue branch'], label='resume-branch')
+            assert case.requests[-1]['model'] == 'fast-fixture', case.requests[-1]
+            assert 'Explore alternative' in json.dumps(case.requests[-1]), case.requests[-1]
+            case.audit()
+            case.complete()
+
+
 def refresh(binary, output):
     with Case(binary, output, 'refresh', [{}, {}]) as case:
         path = command(case, 'review', 'FIRST_BODY')
@@ -241,7 +272,7 @@ def main():
     os.environ['MELDRA_DISABLE_UPDATE_CHECK'] = '1'
     binary, output = args.binary.resolve(), args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
-    scenarios = dict(catalog=catalog, rejects=rejects, limits=limits, expansion=expansion, policy=policy, controls=controls, terminal=terminal, busy_terminal=busy_terminal, refresh=refresh)
+    scenarios = dict(catalog=catalog, rejects=rejects, limits=limits, expansion=expansion, policy=policy, controls=controls, terminal=terminal, busy_terminal=busy_terminal, refresh=refresh, session_controls=session_controls)
     if args.only:
         unknown = set(args.only) - scenarios.keys()
         if unknown:

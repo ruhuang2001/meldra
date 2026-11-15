@@ -186,6 +186,29 @@ isolated environment; it never expands Plan permissions.
 
 ## Commands and managed processes
 
+### Explicit Git checkpoints (unreleased)
+
+`git_commit(paths, message)` commits an explicit list of up to 32 workspace-relative
+files. It presents `git_review` evidence plus the selected diff and new text-file
+contents through the command approval path. Plan mode denies it; the workspace-edit
+profile alone does not approve it. `--auto-approve` retains its existing meaning.
+`run_command` continues to allow only read-only Git operations.
+
+The tool requires an existing initial commit, a clean staging area, and repository-local
+`user.name` and `user.email` (commands use an isolated HOME). It supports modified,
+deleted, and new text files; directories, symlinks, protected paths, and new binary
+files are rejected. Each selected file is bounded by the edit limit and selected
+preview evidence is capped at 1 MiB. Existing staged work is never silently included.
+Hooks and signing are disabled. Repositories with configured Git filters require a
+manual commit because even a preview can execute those filters. Avoid concurrent external
+Git writers: Meldra's leases exclude other Meldra executions, not arbitrary programs.
+
+HEAD, index, and file fingerprints are checked again after approval, then staged
+blobs are checked before committing. Failure can leave the selected files staged;
+inspect `git_review` before retrying. Interrupted effects remain unknown and use the
+ordinary explicit task recovery path. This is not automatic committing, pushing,
+or a durable extension of `undo_last_change`.
+
 ```sh
 meldra --command-timeout 900
 meldra --allow-executable /absolute/path/to/tool
@@ -240,6 +263,30 @@ The same commands are available in the TUI and line interface:
 | `/continue-queue` | Explicitly apply queued requests recovered after a restart. |
 | `/context [path]` | Inspect applicable `AGENTS.md` sources while idle without calling the model. |
 | `/compact [focus]` | **Available since v0.5.0:** summarize older context while idle using the configured model. |
+| `/model [model]` | **Unreleased:** show or switch the model on the current provider while idle. |
+| `/init` | **Unreleased:** ask the model to inspect the project and draft `AGENTS.md` through ordinary tools and approvals. |
+| `/fork` | **Unreleased:** continue a saved conversation under a new session ID; files remain shared. |
+
+`/model` preserves the saved conversation and clears the old provider response chain.
+The selection is saved in this session and reused on resume, taking precedence over
+the configured model; it does not edit configuration or change the provider URL/key.
+Model availability is checked by the provider on the next request, not by a discovery
+API. Switching clears token calibration and the configured token window, so compaction
+continues using its byte budget rather than showing a misleading window percentage.
+
+`/init` expands into a repository-inspection request. In Build it uses the same edit
+approval path as any user request; in Plan it proposes text without writing. Existing
+guidance is to be preserved and improved, not replaced wholesale. Generated guidance
+still needs review; Meldra does not independently certify the model's recommendations.
+
+`/fork` copies retained messages, references, plan and summary into a new saved session
+and continues there. It records the parent session ID, leaving the parent's snapshot
+and execution ledger intact. It does not copy execution records, approvals, queued
+requests, provider response IDs, or the in-memory undo stack. Earlier compacted
+evidence remains inspectable on the parent; the child inherits its summary, not its
+ledger. This is conversation branching, not a Git branch, worktree or filesystem rewind.
+Pending requests, approvals and unknown outcomes must be handled before model changes
+or forks; legacy or incomplete snapshots require an ordinary resume turn first.
 
 Ordinary text submitted while the TUI is busy acts as steering. In the line
 interface, use `/steer` explicitly; ordinary piped lines retain their FIFO order.

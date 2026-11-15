@@ -192,6 +192,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 		if kind, value, control := parseControlText(userInput); control && pending == nil {
 			switch kind {
+			case "model", "fork":
+				if err := a.handleSessionCommand(ctx, kind, value); err != nil {
+					return err
+				}
+				continue
+			case "init":
+				if value != "" {
+					a.emitNotice("Usage: /init")
+					continue
+				}
+				userInput = initProjectPrompt
 			case "compact":
 				if err := a.handleCompactCommand(ctx, value); err != nil {
 					return err

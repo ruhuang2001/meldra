@@ -39,6 +39,7 @@ const (
 	UIEventTurnStart        UIEventKind = "turn_start"
 	UIEventTurnEnd          UIEventKind = "turn_end"
 	UIEventMode             UIEventKind = "mode"
+	UIEventModel            UIEventKind = "model"
 	UIEventCommandOutput    UIEventKind = "command_output"
 	UIEventStatus           UIEventKind = "status"
 	UIEventUserMessage      UIEventKind = "user_message"

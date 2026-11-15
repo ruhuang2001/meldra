@@ -45,6 +45,9 @@ var builtinSlashCommands = []slashCommand{
 	{Name: "continue-queue", Description: "Apply recovered queued requests"},
 	{Name: "context", Description: "Inspect project instructions while idle", ArgumentHint: "[path]"},
 	{Name: "compact", Description: "Summarize older context while idle", ArgumentHint: "[focus]"},
+	{Name: "model", Description: "Show or switch the model while idle", ArgumentHint: "[model]"},
+	{Name: "init", Description: "Draft project-specific AGENTS.md with normal approvals"},
+	{Name: "fork", Description: "Branch the saved conversation while idle"},
 }
 
 // Commands and bodies form an immutable startup snapshot. Expanding a command
