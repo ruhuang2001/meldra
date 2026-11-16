@@ -15,7 +15,7 @@ require (
 	github.com/openai/openai-go/v3 v3.96.0
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/net v0.62.0
-	golang.org/x/oauth2 v0.37.0
+	golang.org/x/oauth2 v0.38.0
 	modernc.org/sqlite v1.61.1
 )
 
