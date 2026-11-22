@@ -14,15 +14,12 @@ const (
 	Unknown   = "unknown"
 )
 
-// OutputArtifact retains bounded output separately from the model-facing excerpt.
 type OutputArtifact struct {
 	Name      string
 	Content   []byte
 	Truncated bool
 }
 
-// Result describes execution independently of the model-facing text. An unknown
-// effect must be reconciled, never retried automatically. DurationMS is wall time.
 type Result struct {
 	Attachments []OutputArtifact `json:"-"`
 	Status      string           `json:"status"`
@@ -34,9 +31,6 @@ type Result struct {
 	Retryable   bool             `json:"retryable"`
 }
 
-// Observation lets composite built-in handlers report outcomes at the point of
-// execution without parsing their human-readable output. It belongs to one
-// synchronous invocation; handlers must not retain it after returning.
 type Observation struct {
 	Result  Result
 	Started bool

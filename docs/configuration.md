@@ -15,6 +15,8 @@ title: "Configuration"
 ~/.meldra/tasks/artifacts/  # bounded tool/verification output, named by digest
 ```
 
+The local and OpenAI-compatible TOML examples in `config/examples/` use placeholder model names and provider URLs. Set both values for your Responses API server. Store the remote provider’s API key in `credentials.env`.
+
 Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 
 1. `OPENAI_API_KEY`, `OPENAI_MODEL`, `OPENAI_BASE_URL` environment variables

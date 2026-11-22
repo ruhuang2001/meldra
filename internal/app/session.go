@@ -74,20 +74,15 @@ type Session struct {
 	hasSavedRevision                  bool
 }
 
-// SessionSaver is the persistence boundary used by the runner and session tools.
-// CLI listing and selection remain responsibilities of the concrete store.
 type SessionSaver interface{ Save(*Session) error }
 
 type SessionStore struct {
 	includeTaskSnapshots bool
 	paths                ConfigPaths
 	dir                  string
-	// syncDir defaults to syncDirectory; tests can inject post-rename failures.
-	syncDir func(string) error
+	syncDir              func(string) error
 }
 
-// sessionSaveError distinguishes an unchanged snapshot from a replacement
-// whose directory entry could not be confirmed durable.
 type sessionSaveError struct {
 	err      error
 	replaced bool
@@ -96,9 +91,6 @@ type sessionSaveError struct {
 func (e *sessionSaveError) Error() string { return e.err.Error() }
 func (e *sessionSaveError) Unwrap() error { return e.err }
 
-// SessionListDiagnostics describes files skipped while listing sessions.
-// It intentionally omits file names and errors because session files can
-// contain user prompts, summaries, and provider response IDs.
 type SessionListDiagnostics struct {
 	SkippedFiles int
 }
@@ -294,9 +286,6 @@ func (s *SessionStore) List() ([]Session, error) {
 	return sessions, err
 }
 
-// ListWithDiagnostics returns saved sessions along with a safe aggregate
-// diagnostic for unreadable or invalid session files. Like List, it never
-// modifies session files.
 func (s *SessionStore) listDirectory() ([]Session, SessionListDiagnostics, error) {
 	var diagnostics SessionListDiagnostics
 	entries, err := os.ReadDir(s.dir)
@@ -336,8 +325,6 @@ func (s *SessionStore) ListWorkspace(workspace string) ([]Session, error) {
 	return sessions, err
 }
 
-// ListWorkspaceWithDiagnostics returns the sessions that belong to workspace
-// along with aggregate diagnostics for any skipped session files.
 func (s *SessionStore) ListWorkspaceWithDiagnostics(workspace string) ([]Session, SessionListDiagnostics, error) {
 	root, err := canonicalWorkspacePath(workspace)
 	if err != nil {
@@ -451,8 +438,6 @@ func validateSession(session *Session, expectedID string) error {
 	return nil
 }
 
-// readSessionListMetadata validates the complete schema while retaining only
-// the message needed to produce the existing latest-user list preview.
 func readSessionListMetadata(path, expectedID string) (*Session, int, error) {
 	contents, err := readSessionFile(path)
 	if err != nil {
@@ -607,7 +592,6 @@ func (s *Session) appendMessage(role, content string) {
 	s.Messages = append(s.Messages, SessionMessage{Role: role, Content: content, RequestSequence: s.LastRequestSequence})
 }
 
-// ensureTitle derives metadata from the earliest retained user request.
 func (s *Session) ensureTitle() {
 	if s.Title != "" {
 		return
@@ -629,7 +613,6 @@ func truncateSessionMessage(content string) string {
 func (s *Session) resumeContext() string {
 	var result strings.Builder
 	if s.Summary != "" {
-		// Compacted summaries are quoted once in developer instructions.
 		if s.ContextCompaction == nil {
 			fmt.Fprintf(&result, "Previous session summary:\n%s\n\n", s.Summary)
 		}
@@ -749,8 +732,6 @@ func (s *SessionTools) saveSummary(ctx context.Context, raw json.RawMessage) (st
 }
 
 func (s *SessionTools) persist(ctx context.Context, next Session) error {
-	// A generic SessionSaver can fail after writing. Only the concrete store's
-	// explicit pre-replacement error proves that the snapshot was not changed.
 	tool.Observe(ctx, func(o *tool.Observation) { o.Started = true })
 	if err := s.store.Save(&next); err != nil {
 		if saveErr, ok := errors.AsType[*sessionSaveError](err); ok && !saveErr.replaced {
@@ -795,8 +776,6 @@ func (s *SessionStore) ListWithDiagnostics() ([]Session, SessionListDiagnostics,
 	}
 	diagnostics.SkippedFiles += more.SkippedFiles
 	seen := map[string]bool{}
-	// A corrupt task snapshot still shadows its legacy source. Falling back in
-	// listing would advertise a session that Load correctly refuses to restore.
 	entries, readErr := os.ReadDir(newTaskSessionStore(s.paths).dir)
 	if readErr != nil && !errors.Is(readErr, fs.ErrNotExist) {
 		return nil, diagnostics, readErr

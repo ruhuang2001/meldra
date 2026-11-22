@@ -61,8 +61,6 @@ def run_local_check(snapshot, environment, evidence):
             except subprocess.TimeoutExpired:
                 pass
             finally:
-                # Children can outlive make or ignore SIGTERM. Always clean
-                # the entire group, even if make has already exited.
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
@@ -113,8 +111,6 @@ def main():
         environment = os.environ.copy()
         for name in git('rev-parse', '--local-env-vars').decode().splitlines():
             environment.pop(name, None)
-        # MCP coverage fingerprints enumerate indexed sources. Give the
-        # exported snapshot its own index without changing the user's checkout.
         subprocess.run(['git', 'init', '--quiet', str(snapshot)], env=environment, check=True)
         subprocess.run(['git', '-C', str(snapshot), 'add', '--all'], env=environment, check=True)
         print(f'Local CI: {label}; evidence retained in {evidence}', flush=True)

@@ -10,8 +10,6 @@ import (
 	"meldra/internal/task"
 )
 
-// BenchmarkToolLifecycle benchmarks the complete lifecycle of a tool call.
-// This measures the overhead of task storage and SQLite transactions.
 func BenchmarkToolLifecycle(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -65,7 +63,6 @@ func BenchmarkToolLifecycle(b *testing.B) {
 	}
 }
 
-// BenchmarkMultipleToolCalls benchmarks a run with multiple tool calls.
 func BenchmarkMultipleToolCalls(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -109,7 +106,6 @@ func BenchmarkMultipleToolCalls(b *testing.B) {
 	}
 }
 
-// BenchmarkEventAppend benchmarks event append performance.
 func BenchmarkEventAppend(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -144,7 +140,6 @@ func BenchmarkEventAppend(b *testing.B) {
 	}
 }
 
-// BenchmarkEventPagination benchmarks reading events with pagination.
 func BenchmarkEventPagination(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -163,7 +158,6 @@ func BenchmarkEventPagination(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	// Prepare: insert 1000 events
 	for i := 0; i < 1000; i++ {
 		s.AppendEvent(ctx, l, task.Event{TaskID: t.ID, Kind: "test"})
 	}
@@ -187,7 +181,6 @@ func BenchmarkEventPagination(b *testing.B) {
 	}
 }
 
-// BenchmarkTaskList benchmarks listing tasks in a workspace.
 func BenchmarkTaskList(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -198,7 +191,6 @@ func BenchmarkTaskList(b *testing.B) {
 	workspace := b.TempDir()
 	ctx := context.Background()
 
-	// Prepare: create 50 tasks
 	for i := 0; i < 50; i++ {
 		s.EnsureTask(ctx, task.Task{
 			ID:        NewID(),
@@ -221,8 +213,6 @@ func BenchmarkTaskList(b *testing.B) {
 	}
 }
 
-// BenchmarkToolLookup benchmarks looking up tool calls by ID.
-// This tests the performance of the tool call index.
 func BenchmarkToolLookup(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {
@@ -247,7 +237,6 @@ func BenchmarkToolLookup(b *testing.B) {
 		Config: task.Config{Model: "bench", Provider: "test"},
 	})
 
-	// Create 100 tool calls
 	callIDs := make([]string, 100)
 	for i := 0; i < 100; i++ {
 		call, _ := s.PlanTool(ctx, l, task.ToolCall{
@@ -266,7 +255,6 @@ func BenchmarkToolLookup(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		// Look up a random call by ID
 		callID := callIDs[i%100]
 		existing, err := s.GetToolCall(ctx, callID)
 		if err != nil {
@@ -278,7 +266,6 @@ func BenchmarkToolLookup(b *testing.B) {
 	}
 }
 
-// BenchmarkApprovalFlow benchmarks the approval record and decision flow.
 func BenchmarkApprovalFlow(b *testing.B) {
 	s, err := Open(filepath.Join(b.TempDir(), "bench"))
 	if err != nil {

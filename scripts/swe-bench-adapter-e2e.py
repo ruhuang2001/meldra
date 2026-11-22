@@ -304,7 +304,6 @@ def check_recovery(case, broken_tail):
 
 
 def check_timeout(case):
-    # Allow interpreter startup under concurrent builds before testing shutdown.
     process = case.invoke('--agent-timeout', '5', '--termination-grace', '2')
     assert process.returncode != 0, 'timeout exited successfully'
     children = case.events('child')
@@ -376,7 +375,6 @@ def check_escalation(case):
                             capture_output=True, text=True, timeout=5)
     dump(case.root / 'child-after-escalation.json',
          {'pid': child_pid, 'status': status.stdout.strip(), 'returncode': status.returncode})
-    # A dead orphan can briefly await OS reaping; it must not remain executable.
     assert not status.stdout.strip() or status.stdout.strip().startswith('Z'), 'child survived escalation'
     assert case.predictions() == [], 'stubborn timeout submitted a prediction'
     assert 'timeout' in json.dumps(case.attempts()).lower(), 'timeout evidence missing'

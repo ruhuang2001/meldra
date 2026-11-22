@@ -65,8 +65,6 @@ func (w *Workspace) verify(raw json.RawMessage) (string, error) {
 
 	var output strings.Builder
 	for index, spec := range specs {
-		// Completed earlier commands do not make a later unstarted process
-		// uncertain. Keep accumulated exit codes and output, reset the boundary.
 		previousFailure := false
 		tool.Observe(w.ctx, func(o *tool.Observation) {
 			previousFailure = o.Result.Status == tool.Failed
@@ -325,9 +323,6 @@ func (w *Workspace) gitReview(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	out := summary.String()
-	// The summary is cheap to keep in context; the diffs are bounded and say so
-	// rather than silently dropping the tail. Individual files can be read on
-	// demand or reviewed one at a time.
 	var diffs strings.Builder
 	if staged = strings.TrimSpace(staged); staged != "" {
 		diffs.WriteString("## Staged diff\n" + staged + "\n\n")
@@ -366,8 +361,6 @@ func gitTopLevel(parent context.Context, workspace, gitExecutable string) (strin
 	output.limit = maxToolOutput
 	check.Stdout = &output
 	check.Stderr = io.Discard
-	// rev-parse is a read-only preflight. A missing repository or cancelled
-	// lookup has a known outcome; only the actual operation marks effects started.
 	if err := runCommandProcess(ctx, check); err != nil {
 		if ctx.Err() != nil {
 			return "", fmt.Errorf("Git workspace lookup cancelled: %w", ctx.Err())

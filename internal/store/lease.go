@@ -12,9 +12,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Lease owns one task and canonical workspace until Close. Lock files are not
-// deleted: unlinking an advisory lock lets another process lock a new inode.
-// A killed process loses its locks automatically, but its records remain.
 type Lease struct {
 	mu                sync.Mutex
 	store             *Store
@@ -118,9 +115,6 @@ func (s *Store) owned(ctx context.Context, l *Lease, taskID string, fn func(*sql
 		if err != nil {
 			return err
 		}
-		// Paths differing only in case can refer to the same directory on APFS.
-		// Compare filesystem identity, and reject a renamed/replaced directory
-		// instead of keeping a stale path-based ownership claim.
 		identity, identityErr := directoryIdentity(record.Workspace)
 		if identityErr != nil || identity != l.workspaceIdentity {
 			return fmt.Errorf("%w: workspace changed", task.ErrLease)
@@ -129,8 +123,6 @@ func (s *Store) owned(ctx context.Context, l *Lease, taskID string, fn func(*sql
 	})
 }
 
-// OwnershipDirectories is independent of MELDRA_HOME. Persistent locks survive
-// cache eviction; legacy cache locks still exclude older running builds.
 func OwnershipDirectories() ([]string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {

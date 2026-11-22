@@ -74,7 +74,6 @@ func allowedPython3(args []string) bool {
 	if len(args) == 1 && strings.HasSuffix(strings.ToLower(args[0]), ".py") {
 		return true
 	}
-	// Support running pytest: python3 -m pytest [options...] [paths...]
 	if len(args) >= 2 && args[0] == "-m" && args[1] == "pytest" {
 		return allowedPytestArgs(args[2:])
 	}
@@ -89,8 +88,6 @@ func allowedPytestArgs(args []string) bool {
 			}
 			continue
 		}
-		// A pytest node ID is a workspace path followed by one or more :: selectors.
-		// Only the path portion is resolved at execution time.
 		if !allowedPytestNodeID(arg) {
 			return false
 		}
@@ -99,9 +96,6 @@ func allowedPytestArgs(args []string) bool {
 }
 
 func allowedPytestNodeID(nodeID string) bool {
-	// Pytest expands a positional argument beginning with @ as an argument
-	// file after Meldra has validated the command line. That would allow the
-	// file contents to bypass this allowlist.
 	if strings.HasPrefix(nodeID, "@") {
 		return false
 	}
@@ -136,9 +130,6 @@ func allowedPytestFlag(arg string) bool {
 	return false
 }
 
-// allowedPytestOverrideINI accepts a single pytest name=value override. The
-// addopts setting is deliberately excluded because it is parsed as another
-// command line and could bypass the command allowlist.
 func allowedPytestOverrideINI(override string) bool {
 	key, value, ok := strings.Cut(override, "=")
 	if !ok || !safePytestINIKey(key) || value == "" || key == "addopts" {
@@ -245,10 +236,6 @@ func (w *Workspace) validatePytestPath(path string, write bool) error {
 	return nil
 }
 
-// pytest expands ~ and environment-variable syntax in some path options after
-// command validation. Reject them so the path passed to pytest is the same path
-// that resolve verifies remains inside the workspace. Percent syntax matters on
-// Windows, where os.path.expandvars supports %NAME%.
 func pytestPathUsesExpansion(path string) bool {
 	return strings.HasPrefix(path, "~") || strings.ContainsAny(path, "$%")
 }
@@ -481,8 +468,6 @@ func commandRequiresApproval(command string) bool {
 	return command == "python3" || command == "go" || command == "npm" || command == "pnpm" || command == "cargo" || command == "make"
 }
 
-// Worktree reads can execute clean/process filters, even with textconv and
-// external diff disabled. Check the effective configuration, including includes.
 func (w *Workspace) rejectGitFilters(spec commandSpec) error {
 	keys, err := w.commitGitRead(spec, "config", "--list", "--name-only", "-z")
 	if err != nil {
@@ -524,9 +509,6 @@ func newCommandEnvironment() ([]string, func(), error) {
 	return safeCommandEnvironment(home, temporary), func() { _ = os.RemoveAll(directory) }, nil
 }
 
-// safeCommandEnvironment deliberately starts from an empty environment. A
-// temporary HOME keeps repository commands from loading user shell or tool
-// configuration, while the narrow allowlist retains normal command runtime.
 func safeCommandEnvironment(home, temporary string) []string {
 	environment := []string{
 		"HOME=" + home,

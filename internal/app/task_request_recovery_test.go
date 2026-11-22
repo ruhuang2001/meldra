@@ -40,8 +40,6 @@ func TestTaskRecoveryReplaysRequestsBeforeStartingAnotherRun(t *testing.T) {
 	if err := agent.execution.begin(t.Context(), "continue"); err != nil {
 		t.Fatal(err)
 	}
-	// Recovery must be durable before the new Run's request snapshot: simulate
-	// another crash here and prove the changed instruction survives both exits.
 	saved, err := loadSessionForResume(paths, session.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +140,6 @@ func TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint(t *testing.T) {
 			users = append(users, message.Content)
 		}
 	}
-	// Without a watermark, preserve durable requests once instead of guessing.
 	if strings.Join(users, "|") != "original|original|newer request|continue" {
 		t.Fatalf("upgraded user history=%v", users)
 	}
@@ -166,7 +163,6 @@ func TestTaskRecoveryUpgradesSnapshotsWithoutRequestCheckpoint(t *testing.T) {
 	if err := recovered.finish(t.Context(), nil); err != nil {
 		t.Fatal(err)
 	}
-	// The lightweight list decoder must understand the new optional field too.
 	sessions, diagnostics, err := NewSessionStore(paths).ListWithDiagnostics()
 	if err != nil || diagnostics.SkippedFiles != 0 || len(sessions) != 1 {
 		t.Fatalf("list=%v diagnostics=%+v err=%v", sessions, diagnostics, err)

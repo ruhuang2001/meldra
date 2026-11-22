@@ -69,8 +69,6 @@ func (w *Workspace) webApproval(name string, input json.RawMessage) ApprovalRequ
 	if backend == "" {
 		backend = "builtin"
 	}
-	// Match durable RawMessage encoding: it compacts and HTML-escapes JSON.
-	// Approval detail hashes must remain stable when those arguments replay.
 	if canonical, err := json.Marshal(input); err == nil {
 		input = canonical
 	}
@@ -181,7 +179,6 @@ func (w *Workspace) doWebRequest(client *http.Client, request *http.Request) (*h
 		if w.ctx.Err() != nil {
 			return nil, w.ctx.Err()
 		}
-		// A transport error may contain credentials or a reflected request URL.
 		return nil, fmt.Errorf("web request failed before a complete response was received")
 	}
 	return response, nil
@@ -411,7 +408,6 @@ func (w *Workspace) deepSeekWeb(operation string, body []byte, target string) (s
 	if err != nil {
 		return "", fmt.Errorf("DeepSeek web API response was incomplete")
 	}
-	// Never retain a reflected credential even if an upstream error embeds it.
 	content = bytes.ReplaceAll(content, []byte(w.web.apiKey), []byte("[redacted]"))
 	if truncated {
 		return w.webResult("web_"+operation, meta, content, true, fmt.Errorf("DeepSeek web API response exceeds the 1 MiB limit; retained prefix is incomplete JSON"))

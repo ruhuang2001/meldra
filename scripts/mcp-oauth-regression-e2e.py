@@ -172,8 +172,6 @@ def run_case(binary, output, name):
                 assert evidence['logout_waited_for_refresh'], 'logout did not serialize with refresh'
                 evidence['cache_absent_after_logout'] = True
             else:
-                # Keep stdin and process alive beyond startup cancellation;
-                # detached cleanup must not initiate a second token refresh.
                 time.sleep(2)
                 server.refresh_release.set()
                 time.sleep(0.5)
@@ -268,7 +266,7 @@ def run_case(binary, output, name):
             evidence['orphaned_cache_removed'] = True
         elif name == 'chat-reauthorization':
             registrations = server.registrations
-            server.token_serial += 1  # Reject the valid but revoked cached token.
+            server.token_serial += 1
             code, transcript = finish(start(binary, workspace, env), directory, 'reauthorization')
             assert 'unavailable' in transcript, transcript
             assert server.registrations == registrations, 'chat startup dynamically registered an unused OAuth client'

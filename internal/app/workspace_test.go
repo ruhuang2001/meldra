@@ -360,7 +360,6 @@ func TestWorkspaceAppliesRenamesAndUndoesThem(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(root, "moved.txt")); err != nil || info.Mode().Perm() != 0o640 {
 		t.Fatalf("moved mode = %v, error = %v", info.Mode().Perm(), err)
 	}
-	// A rename without hunks carries the original content to the new path.
 	contents, err = os.ReadFile(filepath.Join(root, "edited-away.txt"))
 	if err != nil || string(contents) != "keep\n" {
 		t.Fatalf("hunkless rename contents = %q, error = %v", contents, err)

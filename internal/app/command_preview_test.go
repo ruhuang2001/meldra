@@ -17,8 +17,6 @@ func TestCommandPreviewHelper(t *testing.T) {
 	if index < 0 {
 		return
 	}
-	// os.Exit bypasses testing's coverage teardown. A private destination keeps
-	// coverage diagnostics from becoming part of the command output fixture.
 	t.Setenv("GOCOVERDIR", os.Args[index+2])
 	data, err := os.ReadFile(os.Args[index+1])
 	if err != nil {

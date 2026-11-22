@@ -15,16 +15,12 @@ import (
 )
 
 const (
-	// MeldraHomeEnv lets users keep separate Meldra configurations, which is
-	// useful for CI and for keeping work and personal credentials apart.
 	MeldraHomeEnv = "MELDRA_HOME"
 
 	defaultMeldraHomeName = ".meldra"
 	configFileName        = "config.toml"
 	credentialsFileName   = "credentials.env"
 
-	// ProviderResponseLimitEnv overrides the configured provider response budget
-	// for one process without exposing any credential.
 	ProviderResponseLimitEnv = "MELDRA_MAX_PROVIDER_RESPONSE_BYTES"
 	CustomTurnInputLimitEnv  = "MELDRA_MAX_CUSTOM_TURN_INPUT_BYTES"
 	CompactKeepMessagesEnv   = "MELDRA_COMPACT_KEEP_MESSAGES"
@@ -36,9 +32,7 @@ const (
 	defaultCompactThresholdPercent = 80
 	defaultMaxTurnContextBytes     = 4 * 1024 * 1024
 	maximumTurnContextBytes        = 64 * 1024 * 1024
-	// maximumContextWindowTokens bounds the token trigger. A zero window keeps
-	// the byte budget as the only compaction denominator.
-	maximumContextWindowTokens = 2000000
+	maximumContextWindowTokens     = 2000000
 
 	privateDirPerm  fs.FileMode = 0o700
 	privateFilePerm fs.FileMode = 0o600
@@ -64,16 +58,12 @@ const defaultCredentialsTemplate = `# Meldra credentials. Keep this file private
 # DEEPSEEK_API_KEY="separate_key_for_optional_web_backend"
 `
 
-// ConfigPaths contains every file that belongs to one Meldra configuration.
-// Construct it with ResolveConfigPaths or ConfigPathsForHome so the files stay
-// inside the same private configuration directory.
 type ConfigPaths struct {
 	Home            string
 	ConfigFile      string
 	CredentialsFile string
 }
 
-// Config contains non-secret settings stored in config.toml.
 type Config struct {
 	CompactKeepMessages      int
 	CompactThresholdPercent  int
@@ -88,15 +78,11 @@ type Config struct {
 	MaxCustomTurnInputBytes  int64
 }
 
-// Credentials contains the secret settings stored in credentials.env.
 type Credentials struct {
 	OpenAIAPIKey   string
 	DeepSeekAPIKey string
 }
 
-// Settings is the combined file-based Meldra configuration. Environment and
-// command-line overrides intentionally belong to the caller, so their
-// precedence stays explicit at the CLI boundary.
 type Settings struct {
 	CompactKeepMessages      int
 	CompactThresholdPercent  int
@@ -113,7 +99,6 @@ type Settings struct {
 	MaxCustomTurnInputBytes  int64
 }
 
-// ConfigShow is safe to display or serialize: APIKey is always redacted.
 type ConfigShow struct {
 	CompactKeepMessages      int    `json:"compact_keep_messages"`
 	CompactThresholdPercent  int    `json:"compact_threshold_percent"`
@@ -133,8 +118,6 @@ type ConfigShow struct {
 	APIKey                   string `json:"openai_api_key"`
 }
 
-// ResolveConfigPaths returns the current user's Meldra configuration paths.
-// MELDRA_HOME takes precedence over the default ~/.meldra directory.
 func ResolveConfigPaths() (ConfigPaths, error) {
 	home := os.Getenv(MeldraHomeEnv)
 	if home == "" {
@@ -147,9 +130,6 @@ func ResolveConfigPaths() (ConfigPaths, error) {
 	return ConfigPathsForHome(home)
 }
 
-// ConfigPathsForHome returns Meldra's configuration paths rooted at home.
-// The returned paths are absolute to make the configuration independent of a
-// later working-directory change.
 func ConfigPathsForHome(home string) (ConfigPaths, error) {
 	if strings.TrimSpace(home) == "" {
 		return ConfigPaths{}, fmt.Errorf("Meldra home directory must not be empty")
@@ -166,9 +146,6 @@ func ConfigPathsForHome(home string) (ConfigPaths, error) {
 	}, nil
 }
 
-// InitializeConfig creates a private Meldra configuration directory and
-// non-overwriting starter files. Existing regular files are preserved while
-// their permissions are tightened to 0600.
 func InitializeConfig(paths ConfigPaths) error {
 	if err := ensureConfigHome(paths); err != nil {
 		return err
@@ -182,8 +159,6 @@ func InitializeConfig(paths ConfigPaths) error {
 	return nil
 }
 
-// LoadConfig loads non-secret runtime settings from the explicit config.toml
-// path. A missing configuration directory or file uses the compaction defaults.
 func LoadConfig(paths ConfigPaths) (Config, error) {
 	if err := validateConfigPaths(paths); err != nil {
 		return Config{}, err
@@ -207,8 +182,6 @@ func LoadConfig(paths ConfigPaths) (Config, error) {
 	return config, nil
 }
 
-// LoadCredentials loads OPENAI_API_KEY from the explicit credentials.env path.
-// It never reads a .env file from the current working directory.
 func LoadCredentials(paths ConfigPaths) (Credentials, error) {
 	if err := validateConfigPaths(paths); err != nil {
 		return Credentials{}, err
@@ -223,20 +196,13 @@ func LoadCredentials(paths ConfigPaths) (Credentials, error) {
 		return Credentials{}, nil
 	}
 
-	// godotenv.Read receives the exact credentials path. Unlike godotenv.Load,
-	// it does not search for or load the working directory's .env file.
 	values, err := godotenv.Read(paths.CredentialsFile)
 	if err != nil {
-		// godotenv parse errors can include the malformed input, which may be
-		// the API key itself. Do not propagate dependency error details.
 		return Credentials{}, fmt.Errorf("parse credentials file %s: invalid credentials syntax", paths.CredentialsFile)
 	}
 	return Credentials{OpenAIAPIKey: values["OPENAI_API_KEY"], DeepSeekAPIKey: values["DEEPSEEK_API_KEY"]}, nil
 }
 
-// LoadSettings combines the file-based config and credentials. It does not
-// apply process environment overrides; callers should apply those explicitly
-// after loading so the precedence is visible in their command handling.
 func LoadSettings(paths ConfigPaths) (Settings, error) {
 	config, err := LoadConfig(paths)
 	if err != nil {
@@ -263,12 +229,7 @@ func LoadSettings(paths ConfigPaths) (Settings, error) {
 	}, nil
 }
 
-// SaveConfig writes non-secret settings to config.toml with private file
-// permissions. API keys are deliberately not part of Config and cannot be
-// written through this method.
 func SaveConfig(paths ConfigPaths, config Config) error {
-	// Zero keeps older Config literals valid for positive-only settings. The
-	// threshold's zero is meaningful and must survive a save as disabled.
 	if config.CompactKeepMessages == 0 {
 		config.CompactKeepMessages = defaultCompactKeepMessages
 	}
@@ -336,9 +297,6 @@ func SaveConfig(paths ConfigPaths, config Config) error {
 	return nil
 }
 
-// SaveAPIKey replaces OPENAI_API_KEY while preserving the independent web key.
-// Callers should avoid accepting API keys directly as a positional shell
-// argument because shells commonly retain those arguments in history.
 func SaveAPIKey(paths ConfigPaths, apiKey string) error {
 	if strings.TrimSpace(apiKey) == "" {
 		return fmt.Errorf("API key must not be empty")
@@ -362,9 +320,6 @@ func SaveAPIKey(paths ConfigPaths, apiKey string) error {
 	return nil
 }
 
-// ShowConfig loads the file-based settings and returns data that is safe to
-// print. For an effective view that includes caller-applied environment
-// overrides, use ConfigShowData with those effective settings instead.
 func ShowConfig(paths ConfigPaths) (ConfigShow, error) {
 	settings, err := LoadSettings(paths)
 	if err != nil {
@@ -373,8 +328,6 @@ func ShowConfig(paths ConfigPaths) (ConfigShow, error) {
 	return ConfigShowData(paths, settings), nil
 }
 
-// ConfigShowData builds display-safe configuration data. Its APIKey field is
-// always redacted, even when the given Settings came from another source.
 func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 	return ConfigShow{
 		CompactKeepMessages:      settings.CompactKeepMessages,
@@ -396,7 +349,6 @@ func ConfigShowData(paths ConfigPaths, settings Settings) ConfigShow {
 	}
 }
 
-// FormatConfigShow renders a compact, human-readable config show result.
 func FormatConfigShow(show ConfigShow) string {
 	return fmt.Sprintf(
 		"MELDRA_HOME=%s\nconfig_file=%s\ncredentials_file=%s\nmodel=%s\nbase_url=%s\nallow_insecure_base_url=%t\nmax_provider_response_bytes=%d\nmax_custom_turn_input_bytes=%d\ncompact_keep_messages=%d\ncompact_threshold_percent=%d\nmax_turn_context_bytes=%d\ncontext_window_tokens=%d\nopenai_api_key=%s\nweb.fetch_backend=%s\nweb.search_backend=%s\ndeepseek_api_key=%s\n",
@@ -419,9 +371,6 @@ func FormatConfigShow(show ConfigShow) string {
 	)
 }
 
-// RedactSecret returns a display-safe replacement for a secret. It does not
-// reveal a prefix or suffix, which prevents a config show command from leaking
-// any part of an API key to logs, terminals, or bug reports.
 func RedactSecret(secret string) string {
 	if secret == "" {
 		return "<not set>"
@@ -480,8 +429,6 @@ func ensureConfigHome(paths ConfigPaths) error {
 	return nil
 }
 
-// verifyConfigHome checks an existing config home without creating it. The
-// bool result says whether it exists.
 func verifyConfigHome(paths ConfigPaths) (bool, error) {
 	info, err := os.Lstat(paths.Home)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -835,9 +782,6 @@ func parseConfigTOML(contents string) (Config, error) {
 			if strings.HasPrefix(key, "web.") {
 				return Config{}, fmt.Errorf("line %d: unknown web setting %q", lineNumber+1, key)
 			}
-			// Unknown top-level keys are deliberately ignored. That makes config
-			// files forward-compatible without permitting unknown keys to affect
-			// credentials, workspace boundaries, or other security policy.
 		}
 	}
 	if err := validateWebBackends(config.WebFetchBackend, config.WebSearchBackend); err != nil {

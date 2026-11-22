@@ -57,8 +57,6 @@ func (s *Store) CreateProcess(ctx context.Context, l *Lease, p task.Process) (ta
 	return p, err
 }
 
-// SaveProcess records only lifecycle evidence from the current owner. It cannot
-// change the immutable launch specification or revive a completed process.
 func (s *Store) SaveProcess(ctx context.Context, l *Lease, p task.Process) error {
 	if l == nil {
 		return task.ErrLease
@@ -115,8 +113,6 @@ func (s *Store) Processes(ctx context.Context, taskID string) ([]task.Process, e
 	return queryRecords[task.Process](ctx, s.db, "SELECT record FROM processes WHERE task_id=? ORDER BY rowid DESC LIMIT 1000", taskID)
 }
 
-// LatestProcesses limits record decoding for model recovery independently of
-// the task's full process history. Historical handles are evidence, not owners.
 func (s *Store) LatestProcesses(ctx context.Context, taskID string) ([]task.Process, error) {
 	return queryRecords[task.Process](ctx, s.db, "SELECT record FROM processes WHERE task_id=? ORDER BY rowid DESC LIMIT 10", taskID)
 }

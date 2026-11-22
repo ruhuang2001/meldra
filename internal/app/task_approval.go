@@ -9,8 +9,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Stream approval evidence binds the full preview (including truncated tails),
-// policy, inspected project scopes and the tool's own file/command fingerprints.
 type approvalDetail struct {
 	Title              string            `json:"title"`
 	Detail             string            `json:"detail"`
@@ -52,8 +50,6 @@ func (e *taskExecution) loadApproval(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		// Only a clean, explicitly suspended call is eligible. Crashes remain
-		// recovery work and cannot be turned into authorization by a hash.
 		if run.Status != task.RunWaitingApproval || call.Status != task.ToolCancelled || call.Result.Output != "Awaiting explicit approval; operation not admitted." {
 			return fmt.Errorf("approval is not a cleanly suspended operation")
 		}
@@ -108,8 +104,6 @@ func (e *taskExecution) matchesApproval(request ApprovalRequest, detail approval
 	if json.Unmarshal(old.Detail, &recorded) != nil {
 		return false
 	}
-	// Stored RawMessage JSON is compacted during persistence. The replay uses
-	// those exact stored arguments; the original hash remains in old evidence.
 	return old.Operation == string(request.Kind) && bytes.Equal(e.resumeCall.Arguments, e.current.Arguments) &&
 		e.resumeCall.Name == e.current.Name && bytes.Equal(old.WorkspaceState, request.WorkspaceState) &&
 		recorded.Title == detail.Title && recorded.FullDetailHash == detail.FullDetailHash &&

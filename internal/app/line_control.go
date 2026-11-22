@@ -80,16 +80,12 @@ func (w *synchronizedWriter) Write(data []byte) (int, error) {
 	if err != nil {
 		w.recordError(err)
 		if errors.Is(err, os.ErrDeadlineExceeded) && w.fatal == nil {
-			// Never replay the partially delivered payload. A resumed writer
-			// reports the gap once, and keeps any partial notice's cursor.
 			w.pending = []byte(resumedOutputNotice)
 		}
 	}
 	return n, err
 }
 
-// Keep the first failure for the CLI's exit status, but a temporary stalled
-// terminal must not suppress all later prompts and results in this session.
 func (w *synchronizedWriter) recordError(err error) {
 	hadError := w.err != nil
 	if !hadError {
@@ -107,9 +103,6 @@ func (w *synchronizedWriter) recordError(err error) {
 
 func (w *synchronizedWriter) Err() error { w.mu.Lock(); defer w.mu.Unlock(); return w.err }
 
-// Fd exposes the caller's terminal for detection and window-size queries. The
-// actual writer can be an independently reopened device or a private relay pipe.
-// SyscallConn avoids File.Fd changing a Go-pollable file to blocking mode.
 func (w *synchronizedWriter) Fd() uintptr {
 	file := w.terminal
 	if file == nil {
@@ -129,13 +122,10 @@ func (w *synchronizedWriter) Fd() uintptr {
 	return fd
 }
 
-// Terminal libraries use io.ReadWriteCloser plus Fd to identify output devices.
-// This wrapper neither reads terminal input nor closes the caller's file.
 func (w *synchronizedWriter) Read([]byte) (int, error) { return 0, os.ErrPermission }
 
 func (w *synchronizedWriter) Close() error {
 	w.closeOnce.Do(func() {
-		// Close interrupts a concurrent OS write before waiting for the mutex.
 		if w.cleanup != nil {
 			if err := w.cleanup(); err != nil {
 				w.mu.Lock()
@@ -147,9 +137,6 @@ func (w *synchronizedWriter) Close() error {
 	return w.Err()
 }
 
-// Ordinary embedders retain the usual io.Writer contract. Background live
-// output is only enabled for bounded OS descriptors or the nonblocking discard
-// sink; an arbitrary writer may block forever and cannot be safely detached.
 func newSynchronizedWriter(ctx context.Context, output io.Writer) (*synchronizedWriter, func(), error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -173,8 +160,6 @@ func (w *synchronizedWriter) writeLive(ctx context.Context, data []byte) (int, e
 	if !w.live {
 		return 0, errors.New("live output requires a bounded writer")
 	}
-	// Write has its own one-second deadline. The main context interrupts real
-	// shutdown immediately; per-turn cancellation discards remaining updates.
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -198,8 +183,6 @@ type lineController struct {
 	output  io.Writer
 }
 
-// One reader owns stdin for chat, approvals and MCP forms. Only explicit slash
-// controls are intercepted while busy; ordinary piped lines retain their order.
 func newLineController(ctx context.Context, input *mcpCLIInput, agent *Agent, output io.Writer) *lineController {
 	ctx, cancel := context.WithCancel(ctx)
 	l := &lineController{ctx: ctx, cancel: cancel, input: input, agent: agent, output: output, lines: make(chan inputLine, 32), done: make(chan struct{})}
@@ -232,8 +215,6 @@ func (l *lineController) read() {
 					}
 					continue
 				}
-				// The turn may have ended while the line was read. Preserve the
-				// original input for the next ordinary request instead of losing it.
 			}
 		}
 		select {

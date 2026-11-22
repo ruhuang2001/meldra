@@ -26,8 +26,6 @@ func TestWorkspaceOwnershipUsesFilesystemIdentity(t *testing.T) {
 	}
 	aliasInfo, err := os.Stat(alias)
 	if errors.Is(err, os.ErrNotExist) {
-		// Case-sensitive filesystems must allow genuinely different directories;
-		// lowercasing paths would incorrectly serialize these two workspaces.
 		if err := os.Mkdir(alias, 0700); err != nil {
 			t.Fatal(err)
 		}

@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 )
 
-// UIEvent is a presentation-safe update emitted by the agent while it works.
-// It deliberately excludes raw requests, model reasoning, and credentials.
 type UIEvent struct {
 	TaskID, RunID, ToolCallID string
 	Status                    string
@@ -21,14 +19,10 @@ type UIEvent struct {
 	Metrics                   *UIMetrics
 }
 
-// UIMetrics contains safe per-turn provider usage totals.
 type UIMetrics struct {
-	ContextBytes int
-	InputTokens  int64
-	OutputTokens int64
-	// ContextTokens and ContextLimitTokens are the calibrated prompt estimate
-	// and the configured window. Both are zero when no window is configured or
-	// no provider-reported prompt size has calibrated the estimate yet.
+	ContextBytes       int
+	InputTokens        int64
+	OutputTokens       int64
 	ContextTokens      int
 	ContextLimitTokens int
 }
@@ -53,8 +47,6 @@ const (
 	UIEventError            UIEventKind = "error"
 )
 
-// UIEventSink implementations must return promptly; slow consumers should buffer
-// or coalesce updates rather than blocking execution and cancellation.
 type UIEventSink interface {
 	Emit(UIEvent)
 }
@@ -73,8 +65,6 @@ const (
 	ApprovalExternalRead ApprovalKind = "external_read"
 )
 
-// ApprovalRequest contains the complete user-visible operation before it is
-// applied. UI implementations must default to rejection when unavailable.
 type ApprovalRequest struct {
 	MCPServer      string          `json:"mcp_server,omitempty"`
 	MCPBinding     string          `json:"mcp_binding,omitempty"`
@@ -88,6 +78,4 @@ type ApprovalRequest struct {
 
 type ApprovalFunc func(context.Context, ApprovalRequest) bool
 
-// ApprovalPresenter shows an operation that was approved without requiring a
-// confirmation response, such as an operation approved by --auto-approve.
 type ApprovalPresenter func(ApprovalRequest)

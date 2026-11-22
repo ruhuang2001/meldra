@@ -19,8 +19,6 @@ import (
 	"meldra/internal/tool"
 )
 
-// taskExecution is the foreground composition adapter. Its lease spans every
-// side effect in a turn, while inspection commands need neither a model nor lease.
 type taskExecution struct {
 	noninteractive     bool
 	stream             *jsonStream
@@ -62,7 +60,6 @@ func providerIdentity(base string) string {
 	if err != nil {
 		return "custom"
 	}
-	// Credentials and query strings are never part of the persisted identity.
 	return parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath()
 }
 
@@ -104,7 +101,6 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		return lookupErr
 	}
 	if errors.Is(lookupErr, task.ErrNotFound) && e.resume {
-		// The original JSON file is retained. Loading already validated its schema.
 		data, readErr := readSessionFile(filepath.Join(e.paths.Home, sessionsDirName, e.session.ID+".json"))
 		if readErr != nil {
 			return readErr
@@ -144,8 +140,6 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 			return err
 		}
 	}
-	// Snapshot the admitted policy for this Run. Later mode changes never rewrite
-	// an earlier Run's execution configuration.
 	if e.workspace.policy != nil {
 		e.session.Mode, e.session.Permissions, e.session.PolicyGeneration = e.workspace.policy.snapshot()
 	}
@@ -204,11 +198,8 @@ func (e *taskExecution) finish(ctx context.Context, runErr error) error {
 		return nil
 	}
 	if e.waitingApproval && e.err == nil && onlyError(runErr, errApprovalRequired) {
-		// RecordApproval committed waiting_approval. Release ownership without
-		// expiring the approval or claiming the suspended operation completed.
 		return e.close()
 	}
-	// Record cancellation even when the request context is already cancelled.
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	status := task.RunSucceeded
@@ -279,8 +270,6 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 		}
 		return tool.Result{Status: tool.Failed, Error: validation.Error()}, validation
 	}
-	// Provider call IDs are stable operation identities. Re-delivery of a known
-	// result supplies that result again without repeating the side effect.
 	if callID != "" {
 		old, err := e.db.GetScopedToolCall(ctx, e.session.ID, callID, e.replayScope)
 		if errors.Is(err, task.ErrNotFound) && e.legacyReplayScope != "" && e.legacyReplayScope != e.replayScope {
@@ -367,7 +356,6 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	if name == "run_command" || name == "verify" || name == "git_review" || name == "apply_patch" || name == "edit_file" || name == "undo_last_change" {
 		saveArtifact(name+".txt", []byte(stored.Output))
 	}
-	// Artifact IO may exhaust its deadline. Give the known outcome its own save.
 	resultCtx, resultCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer resultCancel()
 	if err = e.db.FinishTool(resultCtx, e.lease, call.ID, stored); err != nil {
@@ -378,8 +366,6 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 		e.err = &persistenceError{artifactFailure}
 		return result, e.err
 	}
-	// A session snapshot failure is fatal even if the ledger is still writable.
-	// Record its known/unknown outcome first, then stop the rest of the batch.
 	if _, ok := errors.AsType[*persistenceError](callErr); ok {
 		e.err = callErr
 		return result, e.err
@@ -554,8 +540,6 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	if e.session.RequestsReplayedWithoutCheckpoint {
 		b.WriteString("The snapshot had no request checkpoint. Durable requests were replayed in sequence without guessing from wall-clock timestamps; some previously saved requests may appear twice.\n")
 	}
-	// A bounded excerpt retains the most recent tool evidence; the full ledger
-	// remains queryable through the task CLI without sending it all to the model.
 	for _, call := range calls {
 		fmt.Fprintf(&b, "%s %s: %s\n%s\n", call.ID, call.Name, call.Status, truncateUTF8(call.Result.Output, 2048, " [truncated]"))
 	}
@@ -568,9 +552,6 @@ func (e *taskExecution) recoveryContext(ctx context.Context, record task.Task) (
 	return b.String(), nil
 }
 
-// restoreRequests closes the gap between a committed turn.started event and
-// its conversation snapshot. Persist replayed messages before starting another
-// Run, so repeated crashes cannot replace a lost request with "continue".
 func (e *taskExecution) restoreRequests(ctx context.Context) error {
 	upgrading := e.session.LastRequestSequence == 0 && len(e.session.Messages) > 0
 	for {
@@ -586,8 +567,6 @@ func (e *taskExecution) restoreRequests(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
-			// Without a checkpoint, neither timestamps nor repeated message text
-			// prove which requests were saved. Replay once rather than drop intent.
 			e.session.RequestsReplayedWithoutCheckpoint = e.session.RequestsReplayedWithoutCheckpoint || upgrading
 			e.session.appendMessage("user", input.Request)
 			e.session.Messages[len(e.session.Messages)-1].RequestSequence = event.Sequence

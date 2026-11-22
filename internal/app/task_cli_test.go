@@ -256,8 +256,6 @@ func TestTaskResumeReconstructsMissingInitialSnapshot(t *testing.T) {
 }
 
 func TestTaskWorkspaceProtectsExecutionLockNamespace(t *testing.T) {
-	// A user may choose a workspace that contains their normal OS cache. Runtime
-	// ownership files must stay protected just like configuration and sessions.
 	cache, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatal(err)

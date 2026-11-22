@@ -55,56 +55,44 @@ func NewAgent(backend provider.Inference, getUserMessage func() (string, bool), 
 }
 
 type Agent struct {
-	connectExternal        func() error
-	controlInit            sync.Once
-	control                *turnControl
-	policy                 *RuntimePolicy
-	modeError              error
-	projectContext         *ProjectContext
-	suppressNextReferences bool
-	workspace              *Workspace
-	commands               *commandCatalog
-	commandWarningsShown   bool
-	skills                 *skillCatalog
-	execution              *taskExecution
-	toolFailure            error
-	turnMu                 sync.Mutex
-	previousResponseID     string
-	registry               *tool.Registry
-	getUserMessage         func() (string, bool)
-	tools                  []ToolDefinition
-	output                 io.Writer
-	session                *Session
-	store                  SessionSaver
-	backend                provider.Inference
-	events                 UIEventSink
-	completeMessages       bool
-	turnEvents             bool
-	turnIndex              int64
-	model                  string
-	customProvider         bool
-	// streamIdleTimeout is only overridden by tests. A zero value uses the
-	// conservative default; a negative value disables the watchdog.
-	streamIdleTimeout time.Duration
-	// maxProviderResponseBytes is only overridden by tests. A zero value uses
-	// the conservative default.
+	connectExternal          func() error
+	controlInit              sync.Once
+	control                  *turnControl
+	policy                   *RuntimePolicy
+	modeError                error
+	projectContext           *ProjectContext
+	suppressNextReferences   bool
+	workspace                *Workspace
+	commands                 *commandCatalog
+	commandWarningsShown     bool
+	skills                   *skillCatalog
+	execution                *taskExecution
+	toolFailure              error
+	turnMu                   sync.Mutex
+	previousResponseID       string
+	registry                 *tool.Registry
+	getUserMessage           func() (string, bool)
+	tools                    []ToolDefinition
+	output                   io.Writer
+	session                  *Session
+	store                    SessionSaver
+	backend                  provider.Inference
+	events                   UIEventSink
+	completeMessages         bool
+	turnEvents               bool
+	turnIndex                int64
+	model                    string
+	customProvider           bool
+	streamIdleTimeout        time.Duration
 	maxProviderResponseBytes int64
 	maxCustomTurnInputBytes  int
 	compactKeepMessages      int
 	compactThresholdPercent  int
 	maxTurnContextBytes      int
-	// contextWindowTokens enables the token trigger and footer waterline. Zero
-	// keeps compaction on the byte budget alone, because the configured model's
-	// context window is not knowable locally.
-	contextWindowTokens int
-	// observedInputTokens and observedContextBytes calibrate the local byte
-	// measure against the provider's last reported prompt size. They live only
-	// in memory; a resumed session recalibrates on its next response.
-	observedInputTokens  int64
-	observedContextBytes int
-	// Runtime credentials are only used to reject reflected secrets at the
-	// compaction boundary; they are never serialized with history.
-	compactionSecrets []string
+	contextWindowTokens      int
+	observedInputTokens      int64
+	observedContextBytes     int
+	compactionSecrets        []string
 }
 
 func (a *Agent) Run(ctx context.Context) error {
@@ -241,9 +229,6 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-// A control cancellation is recoverable only when no independent cleanup or
-// persistence error was joined to it. Matching any cancellation in the error
-// tree would hide those errors.
 func onlyError(err error, targets ...error) bool {
 	switch wrapped := err.(type) {
 	case interface{ Unwrap() []error }:
@@ -269,12 +254,8 @@ func onlyError(err error, targets ...error) bool {
 	}
 }
 
-// ErrAgentBusy means the same agent is already executing a turn.
 var ErrAgentBusy = errors.New("agent already has an active turn")
 
-// RunTurn executes one user request without reading terminal input. The caller
-// owns its context and may provide an event sink without starting a TUI.
-// A single Agent owns mutable conversation state and cannot run parallel turns.
 func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	if !a.turnMu.TryLock() {
 		return ErrAgentBusy
@@ -443,10 +424,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		return err
 	}
 
-	// promptBytes pairs with the first response's input_tokens to calibrate the
-	// local byte measure against the provider's tokenizer. Later requests in the
-	// same turn append tool outcomes that this measure does not include, so the
-	// calibration uses the first response only.
 	promptBytes := len(measured)
 	calibrated := false
 	metrics := UIMetrics{}
@@ -566,10 +543,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 		assistantText := response.OutputText()
 		if assistantText == "" {
-			// A few Responses-compatible gateways omit the completed response's
-			// output array even though text was sent in the stream. Preserve that
-			// text as the final answer instead of treating the turn as finished
-			// with no assistant output.
 			assistantText = result.StreamedText
 		}
 		requestedCalls := countToolCalls(response.Output)
@@ -599,8 +572,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			a.finishAssistantStream()
 		}
 		if assistantText != "" {
-			// The final response remains the source of truth for session
-			// persistence. Its text has already been presented from SSE deltas.
 			if !result.StreamedTextShown || a.completeMessages {
 				a.emitAssistantMessage(assistantText)
 			}
@@ -636,9 +607,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 			return a.handleInterruption(true)
 		}
 		if a.customProvider {
-			// A third-party endpoint can accept previous_response_id without
-			// retaining its actual context. Replay the complete current turn so
-			// it always receives the original user request, calls, and outputs.
 			followUp, err := provider.FollowUp(response.Output, toolResults)
 			if err != nil {
 				return err
@@ -725,8 +693,6 @@ func (a *Agent) handleInterruption(activeTurn bool) error {
 		a.session.PreviousResponseID = ""
 	}
 	a.session.resumed = true
-	// Idle task state is already durable. Writing it here can create a task-era
-	// snapshot before legacy import and replace the source revision used by resume.
 	if a.store != nil && (activeTurn || a.execution == nil) {
 		if err := a.store.Save(a.session); err != nil {
 			return err

@@ -21,7 +21,6 @@ type gitCommitInput struct {
 	Message string   `json:"message"`
 }
 
-// Git writes have their own approval boundary; run_command stays read-only.
 func (w *Workspace) gitCommit(raw json.RawMessage) (string, error) {
 	prepared, err := w.prepareGitCommit(raw)
 	if err != nil {
@@ -80,7 +79,6 @@ func (w *Workspace) prepareGitCommit(raw json.RawMessage) (_ *preparedGitCommit,
 			return nil, err
 		}
 	}
-	// Refuse an existing staged selection rather than silently absorbing it.
 	staged, err := w.commitGitRead(spec, "diff", "--cached", "--name-only")
 	if err != nil {
 		return nil, err
@@ -92,8 +90,6 @@ func (w *Workspace) prepareGitCommit(raw json.RawMessage) (_ *preparedGitCommit,
 	if err != nil {
 		return nil, err
 	}
-	// Reuse git_review's status/log evidence, supplemented with exact selected
-	// diffs and complete new-file contents that git diff does not display.
 	review, err := w.gitReview(json.RawMessage(`{}`))
 	if err != nil {
 		return nil, err
@@ -104,7 +100,6 @@ func (w *Workspace) prepareGitCommit(raw json.RawMessage) (_ *preparedGitCommit,
 			previewErr = fmt.Errorf("Git review did not complete successfully")
 			return
 		}
-		// Completed read-only previews are not evidence that a write started.
 		o.Started = false
 		o.Result.ExitCode = nil
 	})
@@ -130,8 +125,6 @@ func (w *Workspace) executeGitCommit(spec commandSpec, paths []string, message, 
 			return "", err
 		}
 	}
-	// Every mutating subprocess uses the normal admission, cancellation, logs,
-	// and unknown-outcome path. Never infer success from a nil Go error.
 	spec.Arguments = append(commitGitPrefix(), "add", "--")
 	spec.Arguments = append(spec.Arguments, paths...)
 	output, err := w.executePreparedCommand(spec, false)
@@ -145,8 +138,6 @@ func (w *Workspace) executeGitCommit(spec commandSpec, paths []string, message, 
 	if stop || !strings.Contains(output, "\nstatus: 0\n") {
 		return output, nil
 	}
-	// Check the complete staged diff, so an unrelated concurrent git add or a
-	// content-changing clean filter cannot enter the approved commit.
 	names, err := w.commitGitRead(spec, "diff", "--cached", "--name-only", "--no-renames", "-z", "--")
 	if err != nil {
 		return output, err
@@ -214,8 +205,6 @@ func (w *Workspace) gitCommitState(spec commandSpec, paths []string) (string, st
 	if err := w.rejectGitFilters(spec); err != nil {
 		return "", "", err
 	}
-	// These states can change commit parentage or finish a sequenced operation
-	// without changing HEAD or the staged diff. Recheck after approval/staging.
 	directory, err := w.commitGitRead(spec, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return "", "", err

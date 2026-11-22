@@ -5,10 +5,6 @@ import (
 	"unicode/utf8"
 )
 
-// truncateUTF8 returns valid UTF-8 whose encoded length never exceeds limit.
-// When truncation is needed, suffix is included in the limit. Invalid input
-// bytes are replaced before the byte boundary is selected so callers never
-// pass a split rune to JSON or terminal rendering.
 func truncateUTF8(value string, limit int, suffix string) string {
 	if limit <= 0 {
 		return ""
@@ -20,8 +16,6 @@ func truncateUTF8(value string, limit int, suffix string) string {
 	return truncateUTF8WithSuffix(value, limit, suffix)
 }
 
-// truncateUTF8WithSuffix always appends suffix, including when the caller has
-// already detected truncation while buffering raw bytes.
 func truncateUTF8WithSuffix(value string, limit int, suffix string) string {
 	if limit <= 0 {
 		return ""

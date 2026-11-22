@@ -22,8 +22,6 @@ func TestMCPArgumentsRejectLossyNumericTokens(t *testing.T) {
 }
 
 func TestMCPFormNumericFailureSurvivesOtherFields(t *testing.T) {
-	// Repeated maps exercise both field orders; a later valid field cannot
-	// overwrite a precision rejection from the numeric field.
 	for range 40 {
 		w, _ := testWorkspace(t, t.TempDir(), "{\"number\":0.1234567890123456789,\"text\":\"valid\"}\n", false)
 		result, err := w.elicitMCP(t.Context(), "fixture", &mcp.ElicitParams{RequestedSchema: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{"number": {Type: "number"}, "text": {Type: "string"}}, Required: []string{"number", "text"}}})

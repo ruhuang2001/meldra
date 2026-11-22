@@ -147,7 +147,6 @@ def main():
                'suite_seconds': {}}
     print('MCP check artifacts: ' + str(directory), flush=True)
     try:
-        # The release workflow also uses this driver against older immutable tags.
         if Path('scripts/swe-bench-lite.py').exists():
             adapter_output = directory / 'swe-bench-adapter-e2e'
             run([sys.executable, 'scripts/swe-bench-adapter-e2e.py', '--output', str(adapter_output)],
@@ -158,8 +157,6 @@ def main():
             summary['swe-bench-adapter-e2e'] = len(adapter_report['scenarios'])
         else:
             summary['omitted_checks'].append('SWE-bench adapter absent from source revision')
-        # Keep both full-suite gates without compounding race and coverage
-        # overhead in deadline-sensitive child-process fixtures.
         if args.fast:
             run(['go', 'test', './...'], directory, 'go-test')
         else:
@@ -178,21 +175,15 @@ def main():
             summary['omitted_checks'].append('web E2E race fixture')
         if Path('scripts/compaction-e2e.py').exists():
             scripts += ('compaction-e2e',)
-        # Start historically expensive suites first to avoid a long final tail.
-        # Sort only the selected suites so fast mode and older tags keep their gates.
         priority = ('compaction-e2e', 'capability-e2e', 'stream-review-e2e',
                     'images-e2e', 'commands-e2e', 'web-e2e',
                     'mcp-oauth-regression-e2e', 'mcp-e2e')
         scripts = sorted(scripts, key=lambda script: priority.index(script)
                          if script in priority else len(priority))
         summary['suite_order'] = scripts
-        # Slow scenarios are opt-in; older immutable tags lack the --slow flag
-        # and run them unconditionally, so probe the script before passing it.
         e2e_supports_slow = Path('scripts/mcp-e2e.py').exists() and '--slow' in Path('scripts/mcp-e2e.py').read_text()
         if e2e_supports_slow and not (args.fast or args.slow):
             summary['omitted_checks'].append('slow E2E scenarios (serve-approval-budget)')
-        # Build caches are concurrency-safe and contain no runtime configuration.
-        # Resolve them before isolated HOME changes their implicit locations.
         go_caches = json.loads(subprocess.check_output(['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE'], text=True))
         for key in ('GOCACHE', 'GOMODCACHE'):
             if not go_caches.get(key) or not Path(go_caches[key]).is_absolute():
@@ -213,7 +204,6 @@ def main():
             env = dict(os.environ, **go_caches, **{key: str(path) for key, path in paths.items()},
                        GOCOVERDIR=str(suite_covdir), PYTHONDONTWRITEBYTECODE='1',
                        MELDRA_DISABLE_UPDATE_CHECK='1',
-                       # Each instrumented binary would otherwise sleep 1s at exit.
                        GORACE=(os.environ.get('GORACE', '') + ' atexit_sleep_ms=0').strip())
             arguments = ['--controls', '--processes', '--stream-json'] if script == 'capability-e2e' else []
             if script == 'mcp-e2e' and args.slow and e2e_supports_slow:
@@ -227,8 +217,6 @@ def main():
 
         failures = []
         e2e_started = time.monotonic()
-        # Only separate suite processes overlap. Each fixture owns its Agent,
-        # workspace, HOME, log, ports, and coverage directory.
         with ThreadPoolExecutor(max_workers=args.e2e_workers) as executor:
             futures = {executor.submit(suite, script): script for script in scripts}
             for future in as_completed(futures):

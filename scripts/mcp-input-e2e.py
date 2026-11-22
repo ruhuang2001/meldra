@@ -132,7 +132,6 @@ def main():
             fixture.set_config(home, {'command': sys.executable, 'args': [str(Path(__file__).resolve()), '--tracked-fixture', str(directory / 'wire.jsonl'), mode], 'sampling': mode.startswith('sampling'), 'tool_timeout_sec': 1})
             started = time.monotonic()
             process = subprocess.Popen([str(binary), '--workspace', str(workspace), '--prompt', 'request interaction', '--auto-approve'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-            # Leave stdin open deliberately: communicate(input='') would hide the bug.
             process.wait(timeout=8)
             stdout, stderr = process.communicate()
             (directory / 'transcript.txt').write_text(stdout + stderr)
@@ -217,7 +216,6 @@ def stdin_sources(binary, output, fixture):
             regular = directory / 'stdin.txt'
             regular.write_text('')
             source = regular if name == 'regular-file' else Path(os.devnull if name == 'dev-null' else '/dev/zero')
-            # --prompt avoids a blocking user read before the unsupported-device guard.
             with source.open('rb') as stdin:
                 result = subprocess.run([str(binary), '--workspace', str(workspace), '--prompt', 'EOF fixture'], stdin=stdin, capture_output=True, timeout=8, env=env)
             (directory / 'transcript.txt').write_bytes(result.stdout + result.stderr)

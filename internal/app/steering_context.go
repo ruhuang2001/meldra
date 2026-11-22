@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// steeringContext rebuilds a valid provider request after cancelling a response.
-// Conversation messages alone omit tool results, so retain bounded durable
-// execution evidence and original attachment snapshots before continuing.
 func (a *Agent) steeringContext(ctx context.Context, correction string) (string, error) {
 	var b strings.Builder
 	var references string

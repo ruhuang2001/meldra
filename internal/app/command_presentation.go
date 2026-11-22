@@ -8,8 +8,6 @@ import (
 	"sync/atomic"
 )
 
-// Drain workers never block on the terminal. The full bounded process log is
-// separate; coalesced presentation updates may be skipped under backpressure.
 func (a *Agent) startCommandPresentation(ctx context.Context) func() {
 	if a.workspace == nil {
 		return func() {}
@@ -21,8 +19,6 @@ func (a *Agent) startCommandPresentation(ctx context.Context) func() {
 		} else if a.writer() == io.Discard {
 			write = func(_ context.Context, data []byte) (int, error) { return len(data), nil }
 		} else {
-			// Do not create an unjoinable worker around arbitrary embedding IO.
-			// Final command results remain available through the normal interface.
 			a.workspace.SetCommandOutput(nil)
 			return func() {}
 		}

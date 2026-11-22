@@ -14,8 +14,6 @@ import (
 	"meldra/internal/task"
 )
 
-// PutArtifact stores bounded content by its digest in a private directory.
-// Artifacts contain full tool output, so callers must exclude secrets explicitly.
 func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, data []byte) (task.ArtifactRef, error) {
 	ref := task.ArtifactRef{ID: Hash(data), Name: name, SHA256: Hash(data), Size: int64(len(data))}
 	if name == "" || len(name) > 256 || len(data) > MaxArtifactBytes {
@@ -47,8 +45,6 @@ func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, 
 			}
 			var total int64
 			for _, entry := range entries {
-				// The immediate write transaction excludes every other artifact writer.
-				// Temporary files can only be leftovers from a terminated writer here.
 				if strings.HasPrefix(entry.Name(), ".pending-") {
 					if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
 						return err
@@ -62,8 +58,6 @@ func (s *Store) PutArtifact(ctx context.Context, l *Lease, taskID, name string, 
 				total += info.Size()
 			}
 			if total+ref.Size > MaxArtifactTotalBytes {
-				// Reclaim only digest files with no committed save event or tool
-				// reference. The immediate transaction excludes concurrent writers.
 				for _, entry := range entries {
 					if !validDigest(entry.Name()) {
 						continue

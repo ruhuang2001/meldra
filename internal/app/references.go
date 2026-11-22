@@ -26,8 +26,6 @@ type FileReference struct {
 	EndLine   int    `json:"end_line,omitzero"`
 }
 
-// ReferenceSnapshot identifies immutable submitted bytes. Content is transient:
-// durable messages retain artifact references, never flattened message text.
 type ReferenceSnapshot struct {
 	FileReference
 	ActualStartLine int              `json:"actual_start_line,omitzero"`
@@ -41,8 +39,6 @@ type ReferenceSnapshot struct {
 	ImageData       []byte           `json:"-"`
 }
 
-// ParseFileReferences accepts references at token boundaries, outside fenced or
-// inline code. A backslash escapes a literal @; emails are never attachments.
 func ParseFileReferences(text string) ([]FileReference, error) {
 	var refs []FileReference
 	var fence byte
@@ -300,7 +296,6 @@ func referenceInput(refs []ReferenceSnapshot) string {
 			b.WriteByte('\n')
 			continue
 		}
-		// JSON quoting keeps arbitrary file text from forging attachment headers.
 		value := struct {
 			Path      string `json:"path"`
 			Start     int    `json:"start_line,omitzero"`
@@ -316,8 +311,6 @@ func referenceInput(refs []ReferenceSnapshot) string {
 	return b.String()
 }
 
-// Images are declared by userInferenceInput after history selection and digest
-// deduplication, so their declarations always match the actual payload order.
 func textReferenceInput(refs []ReferenceSnapshot) string {
 	var textRefs []ReferenceSnapshot
 	for _, ref := range refs {
@@ -362,9 +355,6 @@ func (a *Agent) prepareReferences(ctx context.Context, text string) (string, []R
 	return text + textReferenceInput(refs), refs, nil
 }
 
-// prepareControlReferences runs while the caller holds turnControl.mu. It only
-// uses the control's immutable journal identity, never the active tool pointer
-// or request sequence. Restoring accepted references does not reread the files.
 func (a *Agent) prepareControlReferences(ctx context.Context, request ControlRequest) (string, []ReferenceSnapshot, error) {
 	if len(request.References) > 0 {
 		refs := append([]ReferenceSnapshot(nil), request.References...)
@@ -402,8 +392,6 @@ func (a *Agent) prepareControlReferences(ctx context.Context, request ControlReq
 	if a.projectContext == nil {
 		return request.Text, nil, nil
 	}
-	// Queued work does not change the current inference's scoped instruction set.
-	// Discovery occurs when its saved snapshots are applied above.
 	refs, err := a.projectContext.workspace.resolveReferences(request.Text, false)
 	if err != nil {
 		return "", nil, err
@@ -491,8 +479,6 @@ func validateReferences(refs []ReferenceSnapshot) error {
 	return nil
 }
 
-// restoreRequestReferences joins durable attachment evidence to a replayed
-// request by sequence identity, never by ambiguous message text or timestamp.
 func (e *taskExecution) restoreRequestReferences(ctx context.Context, sequence int64, message *SessionMessage) error {
 	after := sequence
 	for {

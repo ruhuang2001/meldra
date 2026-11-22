@@ -8,8 +8,6 @@ import (
 	"time"
 )
 
-// Keep resolution and raw dialing separate: webDialContext validates every
-// answer, then dials that numeric address without a second DNS lookup.
 func webLookup(ctx context.Context, host string) ([]netip.Addr, error) {
 	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 }

@@ -77,8 +77,6 @@ func (r *ReferenceSnapshot) restoreBytes(data []byte) {
 	}
 }
 
-// userInferenceInput reconstructs images from accepted immutable references.
-// Base64 exists only in this transient provider input, never durable messages.
 func (a *Agent) userInferenceInput(ctx context.Context, text string, current []ReferenceSnapshot) (provider.Input, provider.Items, error) {
 	refs := current
 	if a.session != nil {
@@ -141,8 +139,6 @@ func (a *Agent) userInferenceInput(ctx context.Context, text string, current []R
 	if omitted > 0 {
 		text += fmt.Sprintf("\n[%d older image snapshots omitted by the %d byte / 32 image history budget; original artifacts remain in task history.]\n", omitted, maxImageReferenceTotalBytes)
 	}
-	// Declare current and historical images together, after selection, so each
-	// retained digest has one declaration in the same order as its image payload.
 	if len(images) == 0 {
 		return provider.UserInput(text), provider.UserItems(text), nil
 	}

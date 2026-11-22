@@ -30,9 +30,6 @@ type evaluationScenario struct {
 	summary       string
 }
 
-// Runtime contract coverage uses a scripted provider without network requests.
-// A scripted provider proposes operations, while real tools, approvals, file
-// writes and session persistence run and are graded by independent assertions.
 func TestOfflineEvaluation(t *testing.T) {
 	edit := func(path, old, new string) map[string]any {
 		return map[string]any{"path": path, "old_str": old, "new_str": new}

@@ -99,8 +99,6 @@ func TestTUIComposerShowsModeBadgeInTopBorder(t *testing.T) {
 }
 
 func TestTUIComposerBadgeIsTheModeNameAlone(t *testing.T) {
-	// The permission profile is policy detail, not a mode. Keep it out of the
-	// badge so the composer reads as PLAN or BUILD and nothing else.
 	for _, want := range []struct {
 		permissions string
 		label       string
@@ -125,8 +123,6 @@ func TestTUIComposerBadgeIsTheModeNameAlone(t *testing.T) {
 }
 
 func TestTUIComposerBadgeFitsTheNarrowestFrame(t *testing.T) {
-	// The badge is a mode name alone, so it fits the minimum composer width and
-	// must never push the frame wider or break its corners.
 	model := newTUIModel(newTUIController(nil), tuiInitialState{mode: string(ModePlan)})
 	model.width, model.height = 14, 24
 	model.resize()
@@ -148,8 +144,6 @@ func TestTUIComposerBadgeFitsTheNarrowestFrame(t *testing.T) {
 }
 
 func TestApplyModeEmitsNoNoticeForEventDrivenUIs(t *testing.T) {
-	// The TUI badge already shows the mode. A notice would add a transcript line
-	// per Shift-Tab, so mode changes reach event-driven UIs as data, not text.
 	agent := &Agent{}
 	var kinds []string
 	agent.events = UIEventSinkFunc(func(event UIEvent) { kinds = append(kinds, event.Text) })

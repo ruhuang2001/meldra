@@ -70,7 +70,6 @@ class Case:
                     'MELDRA_HOME': str(self.state), 'TMPDIR': str(self.tmp),
                     'XDG_CACHE_HOME': str(self.home / '.cache'), 'NO_COLOR': '1',
                     'TERM': 'dumb', 'LANG': 'C.UTF-8', 'OPENAI_API_KEY': 'offline-fixture-not-a-credential'}
-        # Preserve explicit harness controls without importing user configuration.
         for key in ('GOCOVERDIR', 'GORACE', 'MELDRA_DISABLE_UPDATE_CHECK'):
             if key in os.environ:
                 self.env[key] = os.environ[key]
@@ -495,8 +494,6 @@ def terminal_exit(binary, output):
             with Case(binary, output, name, [{'stream_wait': True} if busy else {}]) as case:
                 with Interactive(case, terminal=True) as client:
                     client.wait('CAPABILITY_PARTIAL_STREAM' if busy else 'CAPABILITY_COMPLETE')
-                    # Require an enabled protocol, so missing teardown cannot pass
-                    # merely because this fixture never entered enhanced input.
                     assert b'\x1b[>4;2m' in client.transcript, 'keyboard protocol was not enabled'
                     start = len(client.transcript)
                     started = time.monotonic()
@@ -577,8 +574,6 @@ def control_modes(binary, output, terminal=False):
     with Case(binary, output, name, steps) as case:
         with Interactive(case, terminal, ['--permissions', 'workspace-edit']) as client:
             client.wait('INITIAL_MODE_READY')
-            # The TUI reports the mode through the composer badge only; the line-mode
-            # transcript keeps the notice because it has no persistent badge.
             plan_marker = 'PLAN' if terminal else 'Mode: plan'
             build_marker = 'BUILD' if terminal else 'Mode: build'
             client.send('/plan')

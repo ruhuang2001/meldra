@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 )
 
-// Inspection remains possible on other platforms, but lockFile below refuses
-// execution rather than pretending that path spelling establishes ownership.
 func directoryIdentity(path string) (string, error) { return filepath.EvalSymlinks(path) }
 
 func lockFile(string) (*os.File, error) {

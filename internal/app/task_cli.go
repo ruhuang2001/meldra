@@ -391,7 +391,6 @@ func runTaskCommand(ctx context.Context, args []string, in io.Reader, out io.Wri
 	}
 }
 
-// Preserve output failures even on the human-readable inspection paths.
 type taskOutput struct {
 	io.Writer
 	err error
@@ -409,9 +408,6 @@ func (w *taskOutput) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// A crash after task creation but before the first JSON snapshot must remain
-// explicitly resumable. Missing snapshots can be reconstructed from the ledger;
-// corrupt or inaccessible snapshots are never silently replaced.
 func loadSessionForResume(paths ConfigPaths, id string) (*Session, error) {
 	legacy := NewSessionStore(paths)
 	session, err := legacy.Load(id)

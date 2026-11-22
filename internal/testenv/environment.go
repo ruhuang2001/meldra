@@ -1,5 +1,3 @@
-// Package testenv isolates application test state and shares it with helper
-// subprocesses. It is only imported by test entry points.
 package testenv
 
 import (
@@ -10,7 +8,6 @@ import (
 
 func Run(run func() int) (code int) {
 	if root := os.Getenv("MELDRA_TEST_HOME"); root != "" && os.Getenv("HOME") == root && os.Getenv("XDG_CACHE_HOME") == filepath.Join(root, "cache") {
-		// Preserve a child helper's explicit fixture within the isolated home.
 		return run()
 	}
 	root, err := os.MkdirTemp("", "meldra-tests-")

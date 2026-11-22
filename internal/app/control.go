@@ -34,8 +34,6 @@ var errTurnStopped = errors.New("turn stopped by user")
 
 var ErrNoActiveTurn = errors.New("no active turn; submit the text as a normal message")
 
-// turnControl owns concurrent input. The Agent remains the sole conversation
-// writer; control callbacks only journal requests and cancel bounded operations.
 type turnControl struct {
 	mu              sync.Mutex
 	active          bool
@@ -69,8 +67,6 @@ func (c *turnControl) record(kind string, request ControlRequest) error {
 	return c.db.AppendEvent(ctx, c.lease, task.Event{TaskID: c.taskID, RunID: c.runID, Kind: kind, Data: raw})
 }
 
-// SubmitControl accepts a human control request only while the turn owns its
-// durable journal. Success means received, not yet applied or stopped.
 func (a *Agent) SubmitControl(kind, text string) error {
 	if kind == "compact" || kind == "model" || kind == "fork" || kind == "init" {
 		c := a.initControl()
@@ -218,15 +214,12 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 			a.session.ensureTitle()
 			a.session.Messages[len(a.session.Messages)-1].References = refs
 			a.session.Messages[len(a.session.Messages)-1].ControlID = r.ID
-			// Steering is identified by its control journal, not the enclosing
-			// turn.started request. Compaction maps this stable control identity.
 			a.session.Messages[len(a.session.Messages)-1].RequestSequence = 0
 			a.session.PreviousResponseID = ""
 			a.session.Mode, a.session.Permissions, a.session.PolicyGeneration = a.policy.snapshot()
 			if err := a.store.Save(a.session); err != nil {
 				return "", err
 			}
-			// Durable referenceHistory adds these snapshots once when rebuilding.
 			augmented = r.Text
 		}
 		if err := c.record("control.applied", r); err != nil {
@@ -286,8 +279,6 @@ func (a *Agent) applyMode(mode ExecutionMode) error {
 	}
 	previousMode, _, _ := a.policy.snapshot()
 	failedSave := func(err error) error {
-		// Keep the running policy no more permissive than before the failed
-		// transition. Advancing again also invalidates every old permit.
 		_ = a.policy.setMode(previousMode)
 		a.modeError = &persistenceError{fmt.Errorf("record mode change; reload the session before continuing: %w", err)}
 		return a.modeError
@@ -313,7 +304,6 @@ func (a *Agent) applyMode(mode ExecutionMode) error {
 			raw, _ := json.Marshal(next.Plan)
 			next.ApprovedPlanDigest = digest(raw)
 		}
-		// A legacy source must be imported before any task snapshot changes its revision.
 		if a.session.taskSnapshot || a.execution == nil {
 			if a.store == nil {
 				return failedSave(fmt.Errorf("session requires a persistence store"))
@@ -328,8 +318,6 @@ func (a *Agent) applyMode(mode ExecutionMode) error {
 	a.emit(UIEvent{Kind: UIEventMode, Text: string(mode), Detail: string(permissions)})
 	a.emit(UIEvent{Kind: UIEventStatus, Text: "Mode: " + string(mode)})
 	if a.events == nil {
-		// Event-driven UIs (the TUI badge, the JSON stream) already carry the
-		// mode; only the line-mode transcript needs the notice.
 		a.emitNotice("Mode: " + string(mode))
 	}
 	return nil
@@ -343,7 +331,6 @@ func (a *Agent) emitNotice(text string) {
 	}
 }
 
-// finishSelected runs after its conversation snapshot is durable, before inference.
 func (a *Agent) finishSelected() error {
 	c := a.initControl()
 	c.mu.Lock()
@@ -426,12 +413,9 @@ func (a *Agent) loadPendingControls() error {
 			}
 		}
 	}
-	// Snapshot commit may precede the applied event. Identity closes that gap.
 	for _, m := range a.session.Messages {
 		delete(outstanding, m.ControlID)
 	}
-	// A compaction artifact also proves application after its snapshot message
-	// was folded away. Validate it before suppressing any received control.
 	if a.session.ContextCompaction != nil {
 		reader := &Agent{session: a.session, execution: &taskExecution{db: db}}
 		artifact, err := reader.loadCompaction(context.Background())
@@ -469,8 +453,6 @@ func (a *Agent) continueRecovered() bool {
 	return true
 }
 
-// A selected request is local execution state, not a durable claim of application.
-// Keep its journal record on errors, but never let it replace a later user input.
 func (a *Agent) clearSelected(selected *ControlRequest) {
 	c := a.initControl()
 	c.mu.Lock()

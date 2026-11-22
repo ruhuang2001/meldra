@@ -212,12 +212,10 @@ func TestTaskRecoveryRecognizesFilePostimages(t *testing.T) {
 	if err := e.workspace.writeChanges(changes, false); err != nil {
 		t.Fatal(err)
 	}
-	// Simulate process death after side effect and before result commit.
 	if err := e.close(); err != nil {
 		t.Fatal(err)
 	}
 	e.resume = true
-	// Persist session needed for explicit recovery's legacy lookup, then mark as known task.
 	if err := agent.store.Save(agent.session); err != nil {
 		t.Fatal(err)
 	}

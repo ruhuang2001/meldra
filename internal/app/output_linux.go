@@ -15,8 +15,6 @@ func independentOutput(file *os.File, info os.FileInfo) (*os.File, error) {
 	var bounded *os.File
 	var openErr error
 	if err := connection.Control(func(fd uintptr) {
-		// Opening procfs fd paths, unlike dup or Darwin's /dev/fd, creates a
-		// new file description with independent status flags.
 		bounded, openErr = os.OpenFile(fmt.Sprintf("/proc/self/fd/%d", fd), os.O_WRONLY|syscall.O_NONBLOCK|syscall.O_NOCTTY, 0)
 	}); err != nil {
 		return nil, err

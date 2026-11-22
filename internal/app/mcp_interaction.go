@@ -79,7 +79,7 @@ func (w *Workspace) mcpHumanInput(ctx context.Context, prompt string) (string, b
 	}
 	if w.approve != nil {
 		return "", false
-	} // A UI must own its input; never compete for stdin.
+	}
 	fmt.Fprintln(w.output, prompt)
 	line, err := w.input.ReadString('\n')
 	if ctx.Err() != nil || (err != nil && (err != io.EOF || line == "")) {
@@ -156,9 +156,6 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 			}
 		}
 	}
-	// jsonschema-go recognizes json.Number for numeric bounds, but classifies
-	// its Go string kind as a string for type checks. Check numeric types below
-	// and let the resolver validate their remaining constraints without rounding.
 	validationSchema := schema
 	validationSchema.Properties = maps.Clone(schema.Properties)
 	for name, field := range schema.Properties {
@@ -220,9 +217,6 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 						break
 					}
 					if field.Type == "integer" {
-						// The MCP SDK validates results using Go's native integer
-						// kinds. Convert without passing through float64 so values
-						// above JavaScript's safe-integer range remain exact on wire.
 						integer := rational.Num()
 						switch {
 						case integer.IsInt64():
@@ -234,8 +228,6 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 						}
 					} else {
 						float, err := number.Float64()
-						// Match the value that encoding/json will send, permitting
-						// ordinary decimals such as 0.1 while rejecting lost digits.
 						wireValue, valid := new(big.Rat).SetString(strconv.FormatFloat(float, 'g', -1, 64))
 						if err != nil || !valid || rational.Cmp(wireValue) != 0 {
 							declared = false
@@ -257,7 +249,6 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 	return nil, fmt.Errorf("elicitation response failed validation three times")
 }
 
-// Forms support the protocol's primitive fields and titled enums, not arbitrary JSON Schema composition.
 func validateMCPFormShape(data []byte) error {
 	var root map[string]any
 	if json.Unmarshal(data, &root) != nil || root == nil {
@@ -394,7 +385,6 @@ func (w *Workspace) beginMCPInteraction(ctx context.Context, server string) func
 	return func() {
 		w.mcpActiveServer.Store(nil)
 		cancel()
-		// Join callbacks before the chat reads stdin or replaces workspace state.
 		w.mcpInteractionMu.Lock()
 		w.mcpInteractionMu.Unlock()
 	}
@@ -406,7 +396,6 @@ type mcpCLIInput struct {
 	source    io.Reader
 }
 
-// cancelreader calls Fd during reads; cache it while SyscallConn protects against signal-time Close.
 type mcpInputFile struct {
 	*os.File
 	descriptor uintptr
@@ -434,7 +423,6 @@ func newMCPCLIInput(input io.Reader) (*mcpCLIInput, func(), error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		// epoll cannot watch regular files or /dev/null.
 		if info.Mode().IsRegular() {
 			return &mcpCLIInput{Reader: bufferedInput(input)}, func() {}, nil
 		}
@@ -473,7 +461,6 @@ func (input *mcpCLIInput) humanInput(output io.Writer) func(context.Context, str
 			defer func() {
 				if !stop() {
 					<-done
-					// CancelReader cancellation is permanent; preserve read-ahead for the next interaction.
 					pending, _ := input.Peek(input.Buffered())
 					pending = bytes.Clone(pending)
 					_ = input.interrupt.Close()

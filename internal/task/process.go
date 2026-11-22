@@ -14,8 +14,6 @@ const (
 	ProcessUnknown  ProcessState = "unknown"
 )
 
-// Process is independent of its successful start tool call. PID is historical
-// evidence only: it must never be used to signal or reconnect after recovery.
 type Process struct {
 	ID               string        `json:"id"`
 	TaskID           string        `json:"task_id"`
@@ -28,7 +26,7 @@ type Process struct {
 	Directory        string        `json:"directory"`
 	TimeoutSeconds   int           `json:"timeout_seconds"`
 	State            ProcessState  `json:"state"`
-	Effects          string        `json:"effects"` // pending, known, unknown, or resolved
+	Effects          string        `json:"effects"`
 	PID              int           `json:"pid,omitzero"`
 	StartedAt        time.Time     `json:"started_at"`
 	EndedAt          time.Time     `json:"ended_at,omitzero"`

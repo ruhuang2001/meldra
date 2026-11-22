@@ -57,8 +57,6 @@ func TestManagedProcessRealChildPersistenceWindows(t *testing.T) {
 					childPID.Store(int64(p.PID))
 				}
 				if window == "after_spawn" && p.State == task.ProcessRunning {
-					// Require execution beyond fork: the child has written its marker
-					// and emitted output before losing durable running evidence.
 					select {
 					case <-ready:
 					case <-time.After(5 * time.Second):
@@ -119,7 +117,6 @@ func TestManagedProcessRealChildPersistenceWindows(t *testing.T) {
 			if window == "after_exit" && (stored.State != task.ProcessRunning || stored.ExitCode != nil) {
 				t.Fatalf("uncommitted completion invented: %+v", stored)
 			}
-			// Even after process cleanup, ownership belongs to the unfinished Run.
 			observer, err := taskstore.Open(taskDirectory(paths))
 			if err != nil {
 				t.Fatal(err)

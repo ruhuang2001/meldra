@@ -609,8 +609,6 @@ func TestAgentStreamsFromCustomSSEEndpointWithoutContentType(t *testing.T) {
 			writer.WriteHeader(http.StatusNotFound)
 			return
 		}
-		// Deliberately omit Content-Type: some compatible gateways do this even
-		// though their body is valid SSE.
 		_, _ = fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"first token\"}\n\n")
 		writer.(http.Flusher).Flush()
 		close(firstEventWritten)
@@ -644,7 +642,6 @@ func TestAgentStreamsFromCustomSSEEndpointWithoutContentType(t *testing.T) {
 
 	select {
 	case <-firstDelta:
-		// The first delta must be available before the server closes the stream.
 	case <-time.After(time.Second):
 		close(releaseStream)
 		<-runDone
@@ -801,10 +798,6 @@ func TestAgentDoesNotRetryOversizedProviderResponse(t *testing.T) {
 func TestAgentNormalizesEscapableJSONWithoutExpandingResponseBudget(t *testing.T) {
 	text := strings.Repeat("<", 64<<10)
 	responseBody := `{"id":"resp_json","status":"completed","output":[{"type":"message","id":"msg_json","status":"completed","role":"assistant","content":[{"type":"output_text","text":"` + text + `","annotations":[]}]}]}`
-	// The raw provider body exactly fits the budget. Re-marshalling this JSON
-	// escapes every '<' into six bytes, and limiting the synthetic SSE envelope
-	// instead of the raw provider response would also reject it for its fixed
-	// framing overhead.
 	limit := int64(len(responseBody))
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, incoming *http.Request) {
@@ -963,7 +956,6 @@ func TestRunInferenceTimesOutAnIdleStreamAfterPartialOutput(t *testing.T) {
 	}
 	select {
 	case <-stream.released:
-		// The watchdog closed the blocked stream rather than leaving Next stuck.
 	default:
 		t.Fatal("idle watchdog did not close the blocked stream")
 	}

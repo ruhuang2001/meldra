@@ -121,8 +121,6 @@ func parseUnifiedPatch(patch string) ([]filePatch, error) {
 			}
 			file.hunks = append(file.hunks, hunk)
 		}
-		// A rename without hunks carries the original content to the new path;
-		// every other patch needs at least one hunk to say what changes.
 		if len(file.hunks) == 0 && !isRenamePatch(file) {
 			return nil, fmt.Errorf("patch for %s has no hunks", file.newPath)
 		}
@@ -134,8 +132,6 @@ func parseUnifiedPatch(patch string) ([]filePatch, error) {
 	return files, nil
 }
 
-// isRenamePatch reports whether the file headers move an existing file to a
-// different path. Rename hunks, when present, edit the content on the way.
 func isRenamePatch(file filePatch) bool {
 	return file.oldPath != "/dev/null" && file.newPath != "/dev/null" && file.oldPath != file.newPath
 }
@@ -327,7 +323,6 @@ func (w *Workspace) undo(raw json.RawMessage) (string, error) {
 	return status + "\n" + diff, nil
 }
 
-// pendingUndo returns the newest applied change set without consuming it.
 func (w *Workspace) pendingUndo() ([]fileChange, bool) {
 	if len(w.undoHistory) == 0 {
 		return nil, false
@@ -335,7 +330,6 @@ func (w *Workspace) pendingUndo() ([]fileChange, bool) {
 	return w.undoHistory[len(w.undoHistory)-1], true
 }
 
-// replaceTopUndo swaps the newest entry without changing the stack depth.
 func (w *Workspace) replaceTopUndo(changes []fileChange) {
 	if len(w.undoHistory) == 0 || changeBytes(changes) > maxUndoEntryBytes {
 		return
@@ -343,9 +337,6 @@ func (w *Workspace) replaceTopUndo(changes []fileChange) {
 	w.undoHistory[len(w.undoHistory)-1] = cloneChanges(changes)
 }
 
-// pushUndo records an applied change set for undo. Oversized change sets are
-// skipped rather than evicting smaller entries, because mixing a partial stack
-// with missing steps would let an undo remove the wrong layer of a file's edits.
 func (w *Workspace) pushUndo(changes []fileChange) {
 	if size := changeBytes(changes); size > maxUndoEntryBytes {
 		return

@@ -148,7 +148,6 @@ func TestTaskVerificationPreservesFailureAndStopsUnknown(t *testing.T) {
 						case <-ctx.Done():
 							return
 						case <-poll:
-							// Cancel only after the child has performed its recorded effect.
 							if calls, err := os.ReadFile(marker); err == nil && string(calls) == "vet\n" {
 								cancel()
 								return

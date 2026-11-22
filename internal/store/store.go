@@ -1,5 +1,3 @@
-// Package store persists foreground tasks in a local SQLite database. Reads
-// never start execution or acquire workspace ownership.
 package store
 
 import (
@@ -33,17 +31,13 @@ const (
 )
 
 type Store struct {
-	db          *sql.DB
-	dir         string
-	lockDir     string
-	dirIdentity string
-	// beforeCommit is used only by package fault-injection tests. Production
-	// commits always use the normal SQLite transaction path.
+	db           *sql.DB
+	dir          string
+	lockDir      string
+	dirIdentity  string
 	beforeCommit func() error
 }
 
-// Open creates a private local store and migrates older schemas transactionally.
-// It does not recover or execute any previously recorded work.
 func Open(dir string) (*Store, error) {
 	dir, err := privateRoot(dir)
 	if err != nil {
@@ -84,8 +78,6 @@ func Open(dir string) (*Store, error) {
 	q := u.Query()
 	q.Add("_pragma", "busy_timeout(5000)")
 	q.Add("_pragma", "foreign_keys(1)")
-	// Acquire SQLite's write reservation before reading mutable state, avoiding
-	// deferred-transaction snapshot races between different task processes.
 	q.Set("_txlock", "immediate")
 	u.RawQuery = q.Encode()
 	db, err := sql.Open("sqlite", u.String())
@@ -117,8 +109,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	if version > task.DatabaseSchemaVersion {
 		return fmt.Errorf("task database schema %d is newer than supported schema %d", version, task.DatabaseSchemaVersion)
 	}
-	// Check schema first, then cap all schema/index writes before they can grow
-	// the file. SQLite may otherwise accept an oversized effective page limit.
 	var pageSize, pageCount int64
 	if err := tx.QueryRowContext(ctx, "PRAGMA page_size").Scan(&pageSize); err != nil {
 		return err
@@ -171,8 +161,6 @@ PRAGMA user_version = 2;`); err != nil {
 			return err
 		}
 	}
-	// Rebuildable indexes are optimizations, not a requirement to read existing
-	// history. Each statement rolls back independently on SQLITE_FULL (13).
 	for _, statement := range []string{
 		`CREATE INDEX IF NOT EXISTS tools_provider_call ON tool_calls(task_id,json_extract(CAST(record AS TEXT),'$.provider_call_id'),planned,id)`,
 		`CREATE INDEX IF NOT EXISTS tools_recovery ON tool_calls(task_id,status,id)`,
@@ -315,7 +303,6 @@ func rejectSymlinkAncestors(path string) error {
 			return err
 		}
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
-			// macOS exposes system-owned aliases for its private temp hierarchy.
 			if !(runtime.GOOS == "darwin" && (path == "/var" || path == "/tmp" || path == "/etc")) {
 				return fmt.Errorf("symlink in private storage path: %s", path)
 			}
@@ -346,7 +333,6 @@ func secureExistingFile(path string) error {
 	return nil
 }
 
-// WAL size is independent of the page limit; let SQLite recover its journal.
 func secureFile(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -361,8 +347,6 @@ func secureFile(path string) error {
 	return os.Chmod(path, 0600)
 }
 
-// privateRoot resolves external ancestors, never the private root itself.
-// All private descendants still pass the strict symlink checks.
 func privateRoot(path string) (string, error) {
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -433,8 +417,6 @@ func (s *Store) appendEvent(ctx context.Context, tx *sql.Tx, event task.Event) e
 	return err
 }
 
-// AppendEvent requires current execution ownership. Callers must not place
-// secrets or provider reasoning in event data.
 func (s *Store) AppendEvent(ctx context.Context, lease *Lease, event task.Event) error {
 	return s.owned(ctx, lease, event.TaskID, func(tx *sql.Tx) error { return s.appendEvent(ctx, tx, event) })
 }

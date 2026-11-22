@@ -35,8 +35,6 @@ func TestTaskSessionSaveFailureStopsBatchAndPreservesRecovery(t *testing.T) {
 					}
 					store := agent.store.(*SessionStore)
 					if stage == "before_replace" {
-						// A concurrent snapshot save must not be overwritten. This
-						// exercises a real save failure before atomic replacement.
 						external := *agent.session
 						external.Summary = "external update"
 						if err := store.Save(&external); err != nil {
@@ -101,8 +99,6 @@ func TestTaskSessionSaveFailureStopsBatchAndPreservesRecovery(t *testing.T) {
 					t.Fatalf("post-replacement failure did not preserve its snapshot evidence: %+v", snapshot)
 				}
 
-				// Reload through the actual recovery path. Known failures may resume;
-				// an uncertain replacement must block before another model request.
 				runtime, err := newChatRuntime(t.Context(), paths, Settings{Model: "fixture", BaseURL: defaultBaseURL}, ChatOptions{Resume: agent.session.ID}, func(root string, auto bool) (*Workspace, error) {
 					return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, auto)
 				}, nil, io.Discard)

@@ -20,8 +20,6 @@ const (
 
 var ErrOperationSuperseded = errors.New("operation superseded by user control; request a new operation")
 
-// RuntimePolicy serializes control changes with admission of new side effects.
-// It does not claim to interrupt or reverse an already admitted operation.
 type RuntimePolicy struct {
 	mu          sync.Mutex
 	mode        ExecutionMode
@@ -158,7 +156,6 @@ func admitOperation(ctx context.Context) error {
 
 func (w *Workspace) admitOperation(ctx context.Context) error { return admitOperation(ctx) }
 
-// SetMode is also available to headless embedders; models cannot call it.
 func (a *Agent) SetMode(mode ExecutionMode) error {
 	if !a.turnMu.TryLock() {
 		return ErrAgentBusy
@@ -171,7 +168,6 @@ func (w *Workspace) guardedDefinitions(definitions []ToolDefinition) []ToolDefin
 	for i := range definitions {
 		definition := definitions[i]
 		definitions[i].Function = func(ctx context.Context, input json.RawMessage) (string, error) {
-			// An Agent supplies a permit; MCP/direct registry callers need one too.
 			if _, ok := ctx.Value(operationPermitKey{}).(*operationPermit); !ok {
 				var err error
 				ctx, err = w.policy.invocation(ctx, definition.Name, input)

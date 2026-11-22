@@ -123,9 +123,6 @@ func (w *Workspace) prepareUnifiedPatch(patch string) ([]fileChange, error) {
 	return changes, nil
 }
 
-// preparePatchRename expands a rename into a delete of the old path and a
-// create of the new path. Both are ordinary prepared changes, so the approval
-// diff, rollback, and undo stack see the move as two verifiable file effects.
 func (w *Workspace) preparePatchRename(file filePatch, seen map[string]bool, budget *changeBudget) ([]fileChange, error) {
 	oldResolved, err := w.resolve(file.oldPath, true)
 	if err != nil {
@@ -284,8 +281,6 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 	} else if permissionProfile == PermissionWorkspaceEdit && request.Kind == ApprovalChanges {
 		request.Source = "workspace-edit-policy"
 	}
-	// Arbitrary commands and remote operations have no reliable per-file write
-	// set. They still require the last presented root/active rules to be current.
 	checkProjectContext := func() error {
 		if request.Kind == ApprovalChanges || w.projectContext == nil {
 			return nil
@@ -347,7 +342,6 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 			}
 		}
 	}()
-	// Approval data can include workspace content and command arguments.
 	request.Title = sanitizeTerminalText(request.Title)
 	request.Detail = sanitizeTerminalText(request.Detail)
 	request.Prompt = sanitizeTerminalText(request.Prompt)
@@ -449,8 +443,6 @@ func (w *Workspace) writeChanges(changes []fileChange, reverse bool) error {
 			}
 			return combineRollbackError(fmt.Errorf("target path changed during write"), rollbackErr)
 		}
-		// Validation and path checks above have not changed the workspace.
-		// Only classify later failures as uncertain after entering mutation.
 		tool.Observe(w.ctx, func(o *tool.Observation) { o.Started = true })
 		if exists {
 			if !reverse {
@@ -552,9 +544,6 @@ func (w *Workspace) rollback(done []fileChange, reverse bool, createdDirs []stri
 	return nil
 }
 
-// removeCreatedDirectories removes only directories created by this change.
-// os.Remove refuses non-empty directories, so cleanup never deletes a file
-// created concurrently or by the user.
 func (w *Workspace) removeCreatedDirectories(directories []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(directories))
 	removed := make([]string, 0, len(directories))
@@ -585,8 +574,6 @@ func (w *Workspace) removeCreatedDirectories(directories []string) ([]string, er
 
 func (w *Workspace) restoreCreatedDirectories(directories []string) error {
 	var restoreErrors []string
-	// removeCreatedDirectories records paths from deepest to shallowest, so
-	// recreate them in the opposite order before restoring any files.
 	for index := len(directories) - 1; index >= 0; index-- {
 		directory := directories[index]
 		if err := os.Mkdir(directory, 0o755); err != nil && !os.IsExist(err) {

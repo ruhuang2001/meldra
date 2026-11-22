@@ -15,11 +15,9 @@ import (
 )
 
 const (
-	maxReadLines  = 1000
-	maxSearchHits = 500
-	maxToolOutput = 256 << 10
-	// maxUndoSteps bounds the undo stack; maxUndoEntryBytes keeps a single large
-	// change set from pinning memory for the whole session.
+	maxReadLines            = 1000
+	maxSearchHits           = 500
+	maxToolOutput           = 256 << 10
 	maxUndoSteps            = 10
 	maxUndoEntryBytes       = 8 << 20
 	maxLineBytes            = 1 << 20
@@ -40,13 +38,10 @@ var errWalkBounded = errors.New("workspace walk bounded")
 
 var ErrWorkspaceBusy = errors.New("workspace already has an active tool call")
 
-// changeBudget bounds the complete before/after state retained for one
-// operation. The full state is needed for the approval preview and rollback.
 type changeBudget struct {
 	total int64
 }
 
-// Workspace owns the safe, workspace-scoped tool runtime and its in-memory undo state.
 type Workspace struct {
 	web                webRuntime
 	mcpBindings        map[string]string
@@ -71,12 +66,9 @@ type Workspace struct {
 	approvalGrant      func() bool
 	present            ApprovalPresenter
 	ctx                context.Context
-	// undoHistory keeps a bounded stack of applied change sets, newest last, so
-	// several edits can be reverted in order. Each entry is capped by total
-	// content so a long session cannot grow memory without limit.
-	undoHistory [][]fileChange
-	protected   []string
-	syncDir     func(string) error
+	undoHistory        [][]fileChange
+	protected          []string
+	syncDir            func(string) error
 }
 
 func (w *Workspace) SetContext(ctx context.Context) {
@@ -86,14 +78,10 @@ func (w *Workspace) SetContext(ctx context.Context) {
 	w.ctx = ctx
 }
 
-// SetApprovalFunc replaces line-based confirmation with an interaction owned by
-// the caller. A nil approval function preserves the line-based terminal prompt.
 func (w *Workspace) SetApprovalFunc(approve ApprovalFunc) {
 	w.approve = approve
 }
 
-// SetApprovalPresenter shows automatically approved operations without
-// changing their approval decision.
 func (w *Workspace) SetApprovalPresenter(present ApprovalPresenter) {
 	w.present = present
 }
@@ -249,7 +237,6 @@ func capText(s string) string {
 	return truncateUTF8Text(s, maxToolOutput, false)
 }
 
-// capTextWithFlag reports whether truncation actually dropped content.
 func capTextWithFlag(s string) (string, bool) {
 	capped := truncateUTF8Text(s, maxToolOutput, false)
 	return capped, len(capped) < len(s)
@@ -257,8 +244,6 @@ func capTextWithFlag(s string) (string, bool) {
 
 const outputTruncationSuffix = "\n[output truncated]"
 
-// truncateUTF8Text keeps terminal and JSON-facing output valid UTF-8. When a
-// suffix is required, it is included in the stated byte budget.
 func truncateUTF8Text(text string, limit int, forceSuffix bool) string {
 	if limit <= 0 {
 		return ""
@@ -277,9 +262,6 @@ func truncateUTF8Text(text string, limit int, forceSuffix bool) string {
 	return truncateUTF8WithSuffix(text, limit, suffix)
 }
 
-// bindTool serializes access to a workspace's mutable edit/undo state and
-// installs only the current invocation's context. Direct helpers remain useful
-// inside the workspace; callers execute registered tools through this boundary.
 func (w *Workspace) bindTool(handler func(json.RawMessage) (string, error)) func(context.Context, json.RawMessage) (string, error) {
 	return func(ctx context.Context, input json.RawMessage) (string, error) {
 		if !w.toolMu.TryLock() {

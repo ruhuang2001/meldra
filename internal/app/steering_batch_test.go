@@ -15,8 +15,6 @@ import (
 	"meldra/internal/tool"
 )
 
-// Decode fixtures through the public provider boundary so full replay receives
-// the original provider items rather than dispatcher-only OutputItem literals.
 func steeringBatchResponse(t *testing.T, id string, calls ...map[string]any) *provider.Response {
 	t.Helper()
 	var output []provider.OutputItem
@@ -90,8 +88,6 @@ func TestSteeringAfterFirstPersistedWriteInvalidatesRemainingBatch(t *testing.T)
 					if request.PreviousResponseID != "" {
 						t.Fatalf("steering retained superseded continuation %q", request.PreviousResponseID)
 					}
-					// Input deliberately hides SDK types. Its diagnostic value exposes
-					// the actual supplied text without accessing provider-private fields.
 					input := fmt.Sprintf("%+v", request.Input)
 					for _, evidence := range []string{goal, correction, "edit_file: succeeded", "FIRST_PERSISTED_EFFECT"} {
 						if !strings.Contains(input, evidence) {

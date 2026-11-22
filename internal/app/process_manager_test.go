@@ -255,10 +255,6 @@ func TestManagedProcessTimeoutAndBoundedOutput(t *testing.T) {
 		p.log.mu.Unlock()
 		wantTotal := int64(300 * (64 << 10))
 		if testing.CoverMode() != "" {
-			// The child is this coverage-instrumented test binary. The production
-			// environment deliberately excludes GOCOVERDIR; Go emits this exact
-			// startup diagnostic before the fixture writes its payload. Count it
-			// explicitly rather than loosening the complete-drain assertion.
 			const diagnostic = "warning: GOCOVERDIR not set, no coverage data emitted\n"
 			wantTotal += int64(len(diagnostic))
 

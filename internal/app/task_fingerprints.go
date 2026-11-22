@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-// Fingerprints record evidence about files, not their contents. Recovery only
-// recognizes a complete before/after state; mixed results require human review.
 type fileFingerprint struct {
 	Path             string                 `json:"path"`
 	BeforeExists     bool                   `json:"before_exists"`
@@ -77,7 +75,6 @@ func (w *Workspace) reconcileFiles(raw json.RawMessage) (string, error) {
 	before, after := true, true
 	checkedParents := make(map[string]bool)
 	for _, record := range records {
-		// Older evidence cannot prove that auxiliary effects are absent.
 		if record.AuxiliaryVersion != 1 {
 			return "changed", nil
 		}
@@ -108,8 +105,6 @@ func (w *Workspace) reconcileFiles(raw json.RawMessage) (string, error) {
 			before = before && present == directory.BeforeExists
 			after = after && present == directory.AfterExists
 		}
-		// Unowned leftovers are evidence of uncertainty, never permission to
-		// delete workspace files. Scan in bounded batches, including legacy temps.
 		parent := filepath.Dir(path)
 		if !checkedParents[parent] {
 			leftover, err := hasWriteTemporary(parent)

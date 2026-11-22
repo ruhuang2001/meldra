@@ -156,7 +156,6 @@ func TestBoundCustomTurnInputEmptyAndNonshrinkingOutputs(t *testing.T) {
 	if err != nil || !compacted || size != len(encoded) || !bytes.Equal(mustMarshalConversation(t, got), encoded) {
 		t.Fatalf("oldest-first policy changed for a short output: size %d, compacted %t, error %v", size, compacted, err)
 	}
-	// Rechecking a previously compacted context must be stable.
 	again, size, compacted, err := boundCustomTurnInput(got, size)
 	if err != nil || compacted || !bytes.Equal(mustMarshalConversation(t, again), encoded) {
 		t.Fatalf("compacted context is not stable: %v", err)
@@ -235,8 +234,6 @@ func FuzzBoundCustomTurnInput(f *testing.F) {
 		}
 		original := mustMarshalConversation(t, input)
 		limit := int(budget) % (len(original) + 1)
-		// The intentionally slow oracle encodes the entire context after each
-		// replacement and checks the first oldest-first prefix that fits.
 		want := slices.Clone(input)
 		encoded := original
 		wantCompacted := false

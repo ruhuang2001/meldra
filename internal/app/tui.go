@@ -29,24 +29,18 @@ const (
 )
 
 var (
-	tuiBrandStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	tuiDimStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
-	tuiUserStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	tuiAgentStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221"))
-	tuiToolStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("44"))
-	tuiErrorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	tuiWarnStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	tuiInputStyle = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
-	// Mode badges sit in the composer's top border, so they use the terminal's
-	// own background and never paint over the user's theme.
+	tuiBrandStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	tuiDimStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
+	tuiUserStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
+	tuiAgentStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("221"))
+	tuiToolStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("44"))
+	tuiErrorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	tuiWarnStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	tuiInputStyle     = lipgloss.NewStyle().Border(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
 	tuiPlanModeStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
 	tuiBuildModeStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("44"))
 )
 
-// tuiInputStyles keeps the composer background transparent so text always
-// remains legible against the user's terminal theme. Once Bubble Tea reports
-// the terminal background, use its contrast-aware palette; until then, leave
-// text at the terminal's default foreground.
 func tuiInputStyles(darkBackground *bool) textarea.Styles {
 	text := lipgloss.NewStyle()
 	placeholder := tuiDimStyle
@@ -82,9 +76,6 @@ func tuiInputStyles(darkBackground *bool) textarea.Styles {
 	}
 }
 
-// tuiController is the concurrency boundary between the synchronous agent and
-// Bubble Tea's event loop. Agent and workspace goroutines never mutate the UI
-// model directly.
 type tuiController struct {
 	messages       chan string
 	submitControl  func(string, string) error
@@ -135,9 +126,6 @@ type tuiModeRequestResultMsg struct {
 	err error
 }
 
-// The UI can still be showing the last turn while the agent has already closed
-// its control journal. Route late input through the ordinary input owner instead
-// of requiring the user to retype it; this is not a durable control acknowledgment.
 func (t *tuiController) submitUserControl(kind, value, original string) tuiControlResultMsg {
 	err := t.submitControl(kind, value)
 	if errors.Is(err, ErrNoActiveTurn) {
@@ -164,9 +152,6 @@ type tuiInitialState struct {
 	notices     []string
 }
 
-// tuiUserMessageSource supplies --prompt before waiting for interactive TUI
-// input. Agent.Run calls its message source serially, so the closure does not
-// need additional synchronization.
 func tuiUserMessageSource(initialPrompt string, next func() (string, bool)) func() (string, bool) {
 	return func() (string, bool) {
 		if initialPrompt != "" {
@@ -258,8 +243,6 @@ func (t *tuiController) queueAssistantDelta(delta string) {
 	if !t.deltaActive {
 		t.deltaActive = true
 		t.deltaMu.Unlock()
-		// Render the first token immediately. This makes short replies visibly
-		// stream even when all later deltas arrive within one frame.
 		t.sendRaw(tuiEventMsg{event: UIEvent{Kind: UIEventAssistantDelta, Text: delta}})
 		return
 	}
@@ -348,9 +331,6 @@ func (t *tuiController) presentApproval(request ApprovalRequest) {
 }
 
 func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writer, initial tuiInitialState, startAgent func()) (runErr error) {
-	// Keep terminal output alive through Bubble Tea's shutdown: cancellation
-	// must not suppress the escape sequences that restore keyboard and cursor
-	// modes. Each write still has the synchronized writer's one-second deadline.
 	boundedOutput, closeOutput, err := newSynchronizedWriter(context.WithoutCancel(ctx), output)
 	if err != nil {
 		return err
@@ -370,7 +350,6 @@ func (t *tuiController) run(ctx context.Context, input io.Reader, output io.Writ
 		tea.WithContext(context.WithoutCancel(ctx)),
 		tea.WithoutSignalHandler(),
 	)
-	// Graceful quit joins the input reader before closing its cancellation pipe.
 	stopQuit := context.AfterFunc(ctx, t.program.Quit)
 	defer stopQuit()
 
@@ -471,8 +450,6 @@ type tuiModel struct {
 	busy              bool
 	modeChangePending bool
 	modeChangeTarget  string
-	// submissionPending prevents a Ready event from an earlier agent turn
-	// from reopening the composer after Enter has already submitted input.
 	submissionPending bool
 	stopped           bool
 	pending           *tuiApprovalMsg
@@ -494,9 +471,6 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	input.Prompt = "> "
 	input.Placeholder = "Describe the change you want"
 	input.SetStyles(tuiInputStyles(nil))
-	// Let the terminal know the actual insertion point. The default virtual
-	// cursor is visually correct, but macOS IME candidate windows use the real
-	// terminal cursor position and otherwise appear at a stale screen location.
 	input.SetVirtualCursor(false)
 	input.ShowLineNumbers = false
 	input.DynamicHeight = true
@@ -504,9 +478,6 @@ func newTUIModel(controller *tuiController, initial tuiInitialState) *tuiModel {
 	input.SetHeight(1)
 
 	activity := viewport.New()
-	// Pre-wrap content before it reaches the viewport. Its SoftWrap path
-	// repeatedly truncates a whole long line while scrolling to the bottom,
-	// which becomes quadratic for a large streamed response.
 	activity.SoftWrap = false
 	activity.MouseWheelEnabled = true
 
@@ -697,11 +668,6 @@ func (m *tuiModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, command
 }
 
-// toggleMode switches between Plan and Build without leaving the composer.
-// While a turn is active the request goes through turn control so it is
-// journaled and acknowledged; while idle it is submitted as the same slash
-// control the user could type, so both paths share one mode-change owner.
-// The badge only moves when the agent reports the new mode.
 func (m *tuiModel) toggleMode() tea.Cmd {
 	if m.modeChangePending {
 		return nil
@@ -891,9 +857,6 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 			m.clearModeChangePending()
 		}
 		if event.Text == "Ready" && m.submissionPending {
-			// The initial Ready can race with the Enter key because both are
-			// delivered to Bubble Tea from different goroutines. Keep the
-			// submitted turn busy until its Thinking event arrives.
 			return nil
 		}
 		if event.Text != "Ready" {
@@ -960,9 +923,6 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 		}
 		m.activeTool = -1
 		m.invalidateCompletedPrefix()
-		// The tool result is now being sent back to the model. Gateways do not
-		// always emit a new response.in_progress event for that follow-up, so
-		// update the visible state here.
 		m.status = "Thinking"
 		m.busy = true
 		_ = m.input.Focus()
@@ -1144,8 +1104,6 @@ func (m *tuiModel) renderPending() string {
 	return output.String()
 }
 
-// modeBadge is the read-out shown in the composer's top border. It is derived
-// from the execution mode reported by the agent, never from a local guess.
 func (m *tuiModel) modeBadge() (string, lipgloss.Style) {
 	switch m.executionMode {
 	case string(ModePlan):
@@ -1156,9 +1114,6 @@ func (m *tuiModel) modeBadge() (string, lipgloss.Style) {
 	return "", tuiDimStyle
 }
 
-// usageText summarizes the current turn's token usage and, when the window is
-// configured and calibrated, how full the context is. It returns an empty
-// string before the first response reports usage.
 func (m *tuiModel) usageText() string {
 	metrics := m.metrics
 	if metrics.InputTokens <= 0 && metrics.OutputTokens <= 0 {
@@ -1172,8 +1127,6 @@ func (m *tuiModel) usageText() string {
 	return usage
 }
 
-// shortTokens renders a token count as 999, 1.0k, or 12.3k, rounding half up so
-// 11999 does not read as 11.9k.
 func shortTokens(tokens int64) string {
 	if tokens < 1000 {
 		return fmt.Sprint(tokens)
@@ -1181,9 +1134,6 @@ func shortTokens(tokens int64) string {
 	return fmt.Sprintf("%d.%dk", (tokens+50)/1000, (tokens+50)/100%10)
 }
 
-// composerBox renders the framed input. When there is room, the mode badge
-// replaces border cells in the top-right corner so the layout height is fixed
-// and the cursor offset used for IME positioning stays correct.
 func (m *tuiModel) composerBox() string {
 	box := tuiInputStyle.Width(max(12, m.width-2)).Render(m.input.View())
 	label, style := m.modeBadge()
@@ -1248,8 +1198,6 @@ func (m *tuiModel) View() tea.View {
 		}
 	}
 	view.AltScreen = true
-	// Leave mouse tracking disabled so the terminal can natively select and
-	// copy rendered output. Keyboard PgUp/PgDn remains available for scroll.
 	view.MouseMode = tea.MouseModeNone
 	return view
 }
@@ -1281,8 +1229,6 @@ func terminalIsDumb() bool {
 }
 
 func newTUIWorkspace(root string, autoApprove bool) (*Workspace, error) {
-	// TUI confirmations are routed through controller.approve. Keep a non-nil
-	// fallback reader so an unexpected fallback fails closed at EOF.
 	return NewWorkspace(root, bufio.NewReader(strings.NewReader("")), io.Discard, autoApprove)
 }
 

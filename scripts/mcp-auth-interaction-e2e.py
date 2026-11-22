@@ -385,7 +385,6 @@ def oauth_case(binary, output):
         server.bad_pkce = True
         assert login(binary, env, server, directory, suffix='-bad-pkce') != 0
         assert not path.exists(), 'missing S256 accepted'
-        # Keep replayable metadata without persisting authorization codes or tokens.
         write(directory / 'oauth-evidence.json', {'grants': [r['grant_type'][0] for r in server.token_requests], 'bearer_requests': sum(bool(h) for h in server.auth_headers), 'state_rejected_then_login_succeeded': True, 'refresh_rotated': True, 'issuer_rejected': True, 'pkce_rejected': True})
         return {'name': 'oauth-login-refresh-reject-logout', 'passed': True}
     finally:

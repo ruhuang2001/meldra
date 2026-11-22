@@ -190,7 +190,7 @@ func TestForkContinuesSessionControlsAndCompaction(t *testing.T) {
 			if err := a.RunTurn(t.Context(), "grandchild intent"); err != nil {
 				t.Fatal(err)
 			}
-			a.compactKeepMessages = 3 // The retained tail starts with an inherited assistant.
+			a.compactKeepMessages = 3
 			if err := a.handleCompactCommand(t.Context(), ""); err != nil {
 				t.Fatal(err)
 			}

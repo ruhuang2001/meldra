@@ -30,7 +30,6 @@ func cliExitCode(err error) int {
 	return 1
 }
 
-// The wire contract is intentionally independent of UIEvent and ledger schemas.
 type streamEnvelope struct {
 	SchemaVersion int       `json:"schema_version"`
 	Sequence      uint64    `json:"seq"`

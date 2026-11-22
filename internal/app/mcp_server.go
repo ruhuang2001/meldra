@@ -22,7 +22,6 @@ import (
 	"meldra/internal/tool"
 )
 
-// The protocol owns stdin/stdout; confirmations travel through the MCP client.
 func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.Writer) error {
 	var root string
 	autoApprove := false
@@ -80,8 +79,6 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		return err
 	}
 	workspace.policy = policy
-	// Existing MCP users need no config files. Validate the private directory
-	// before reading any file, but preserve startup with an empty state root.
 	var settings Settings
 	_, configErr := os.Lstat(paths.ConfigFile)
 	_, credentialsErr := os.Lstat(paths.CredentialsFile)
@@ -105,7 +102,7 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		return err
 	}
 	var operation sync.Mutex
-	var undoGeneration uint64 // Protected by operation, including approval redemption.
+	var undoGeneration uint64
 	var approvalMu sync.Mutex
 	pending := map[string]struct {
 		fingerprint string
@@ -192,8 +189,6 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			if _, err := policy.invocation(ctx, definition.Name, req.Params.Arguments); err != nil {
 				return mcpServeResult(err.Error(), true), nil
 			}
-			// Keep state validation and execution under the same lock so another
-			// call cannot change the undo target between approval and invocation.
 			if !operation.TryLock() {
 				return mcpServeResult(ErrWorkspaceBusy.Error(), true), nil
 			}
@@ -204,8 +199,6 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			if !autoApprove && !policyGrantsEdit && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
 				instructionDigest, err := workspace.mcpApprovalContextDigest(definition.Name, req.Params.Arguments)
 				if err != nil {
-					// A failed redemption consumes its token even if instructions
-					// are later reverted to the previously approved bytes.
 					if req.Params.RequestState != "" {
 						approvalMu.Lock()
 						delete(pending, req.Params.RequestState)
@@ -288,7 +281,6 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 				}
 			} else {
 				approve = func(ctx context.Context, request ApprovalRequest) bool {
-					// Human approval does not consume the workspace command deadline.
 					ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 					defer cancel()
 					answer, err := req.Session.Elicit(ctx, mcpServeApproval(request.Title+"\n"+request.Detail))
