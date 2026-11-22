@@ -38,8 +38,6 @@ type tuiReferencesLoadedMsg struct {
 	err    error
 }
 
-// referenceFileLoader captures immutable workspace boundaries. It opens each
-// directory through an os.Root handle and never reads candidate file contents.
 func referenceFileLoader(ctx context.Context, w *Workspace) func() (referenceCandidateList, error) {
 	rootPath := w.root
 	protected := slices.Clone(w.protected)
@@ -180,8 +178,6 @@ func (m *tuiModel) referencePickerKey(key tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		selected := files[min(p.cursor, len(files)-1)]
-		// The selected structured path, not its sanitized UI label, determines
-		// the reference. Quoting protects spaces, punctuation and Unicode.
 		prefix := ""
 		if m.input.Value() != "" {
 			prefix = " "

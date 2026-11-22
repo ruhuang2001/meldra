@@ -1,8 +1,5 @@
 //go:build !race
 
-// The ~256MB single-goroutine fixture is ~15x slower under race instrumentation;
-// the non-race coverage run still executes it.
-
 package store
 
 import (
@@ -30,7 +27,6 @@ func TestIndexMigrationAtCapacityPreservesReopenability(t *testing.T) {
 	if _, err := db.Exec("PRAGMA journal_mode=DELETE; PRAGMA synchronous=OFF; DROP INDEX tools_recovery; DROP INDEX approvals_call;"); err != nil {
 		t.Fatal(err)
 	}
-	// Populate ordinary schema-1 records, then pad to just below the real cap.
 	_, err = db.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100000)
  INSERT INTO tool_calls(id,task_id,run_id,status,planned,record)
  SELECT printf('fixture-%08d',x),?,?,'succeeded','2026-10-08',

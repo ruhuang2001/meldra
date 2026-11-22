@@ -316,8 +316,6 @@ func TestVerificationFailureDoesNotMaskLaterUncertainProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	// The second process exits while a child retains stdout; WaitDelay reports
-	// an incomplete process outcome, and runCommandProcess kills its group.
 	script := "#!/bin/sh\nif [ \"$1\" = vet ]; then exit 7; fi\nsleep 30 &\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0700); err != nil {
 		t.Fatal(err)

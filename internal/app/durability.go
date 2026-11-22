@@ -10,9 +10,6 @@ import (
 	"syscall"
 )
 
-// syncDirectory makes a completed rename durable on filesystems that support
-// directory syncing. Windows does not provide this operation, and a few
-// virtual filesystems explicitly reject it after a successful rename.
 func syncDirectory(path string) error {
 	if runtime.GOOS == "windows" {
 		return nil
@@ -31,19 +28,11 @@ func syncDirectory(path string) error {
 	return nil
 }
 
-// makeDirectoryTreeDurable creates missing path components one at a time and
-// syncs each parent after its new directory entry is created. os.MkdirAll
-// cannot report which components it created, so it cannot make those entries
-// durable before a later atomic file replacement depends on them.
 func makeDirectoryTreeDurable(path string, mode fs.FileMode, syncParent func(string) error) error {
 	_, err := makeDirectoryTreeDurableTracked(path, mode, syncParent)
 	return err
 }
 
-// makeDirectoryTreeDurableTracked is the transaction-aware variant of
-// makeDirectoryTreeDurable. It returns only directories created by this call,
-// in creation order. A partial list is returned when a later create or sync
-// fails so a caller can undo the side effect.
 func makeDirectoryTreeDurableTracked(path string, mode fs.FileMode, syncParent func(string) error) ([]string, error) {
 	if syncParent == nil {
 		syncParent = syncDirectory

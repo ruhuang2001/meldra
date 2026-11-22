@@ -311,12 +311,8 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 	for i, request := range requests {
 		bySequence[request.Sequence] = i
 	}
-	// Older snapshots lack sequence IDs. Backward alignment uses content and
-	// control identity, never timestamps, preserving distinct repeated requests.
 	mapped := make([]int64, len(a.session.Messages))
 	cursor := len(requests) - 1
-	// An automatic compaction starts after the incoming request event exists,
-	// but before that request is appended to the snapshot being compacted.
 	for cursor >= 0 && a.execution.requestSequence != 0 && requests[cursor].Sequence >= a.execution.requestSequence {
 		cursor--
 	}
@@ -355,9 +351,6 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 			start--
 		}
 		if a.session.Messages[start].Role != "user" && !inherited[start] && len(requests) > 0 {
-			// A previous exact-tail compaction may have moved this assistant's
-			// user request into its artifact. Recover its turn from the ordered
-			// requests immediately before the next retained user request.
 			before := after + 1
 			if a.execution.requestSequence != 0 {
 				before = a.execution.requestSequence
@@ -437,8 +430,6 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 			continue
 		}
 		addRequest(request.compactionRequest)
-		// A tail beginning with an assistant keeps that turn's call evidence
-		// outside the fold, while its removed user request remains verbatim.
 		if fullyFolded {
 			foldedRuns[request.runID] = true
 		}
@@ -487,9 +478,6 @@ func (a *Agent) compactionHistory(ctx context.Context, keep int) (*compactionArt
 	return result, nil
 }
 
-// Pre-marker forks cleared parent request identities but did not label copied
-// messages. Recognize only a matching leading snapshot with a recorded fork;
-// never exempt arbitrary unmapped requests from the child's evidence checks.
 func (a *Agent) inheritedHistory(ctx context.Context, mapped []int64) ([]bool, error) {
 	inherited := make([]bool, len(a.session.Messages))
 	marked := false

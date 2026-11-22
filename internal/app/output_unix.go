@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// deadlineOutput never changes the flags of the caller's open file description.
-// Dup would share those flags, leaving the caller nonblocking after a crash.
 func deadlineOutput(output io.Writer) (*os.File, func() error, error) {
 	file, ok := output.(*os.File)
 	if !ok {
@@ -31,8 +29,6 @@ func deadlineOutput(output io.Writer) (*os.File, func() error, error) {
 	}
 	bounded, err := independentOutput(file, info)
 	if err != nil {
-		// A descriptor already in nonblocking mode can safely be duplicated
-		// without changing its status flags. Deadlines are Go-file-local.
 		bounded, err = duplicateNonblockingOutput(file)
 	}
 	if err == nil {
@@ -77,11 +73,6 @@ func duplicateNonblockingOutput(file *os.File) (*os.File, error) {
 	return os.NewFile(uintptr(fd), file.Name()+" (bounded output)"), nil
 }
 
-// Some systems cannot reopen an inherited pipe as an independent file
-// description. A relay keeps its blocking writes outside this Go process. The
-// separate liveness pipe terminates the entire private group even if the owner
-// exits abruptly while cat is blocked. No workspace executable or shell input
-// participates in this fixed transport protocol.
 func relayedOutput(output *os.File) (*os.File, func() error, error) {
 	input, bounded, err := os.Pipe()
 	if err != nil {
@@ -141,8 +132,6 @@ exit "$status"
 		}
 		return nil, nil, duplicateErr
 	}
-	// NewFile notices O_NONBLOCK without claiming ownership of that flag;
-	// unlike the caller's os.Pipe file, its Fd method will not clear it.
 	transport := os.NewFile(uintptr(fd), "output relay destination")
 	defer transport.Close()
 	command.Stdout = transport
@@ -165,8 +154,6 @@ exit "$status"
 		case err := <-done:
 			return err
 		case <-time.After(time.Second):
-			// Closing liveness also covers a delayed helper startup. Killing
-			// the group directly bounds shutdown if its watchdog was stopped.
 			_ = owner.Close()
 			_ = command.Process.Signal(syscall.SIGTERM)
 			select {

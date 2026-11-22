@@ -74,9 +74,6 @@ func (s *Store) GetToolCall(ctx context.Context, id string) (task.ToolCall, erro
 
 const providerLookupSQL = `SELECT record FROM tool_calls WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.provider_call_id')=? ORDER BY planned,id LIMIT 1`
 
-// GetToolCallByProviderID looks up a replay identity within one task. It loads
-// at most one bounded record even when a long task has thousands of calls.
-// Empty provider IDs are not identities and never match another empty ID.
 func (s *Store) GetToolCallByProviderID(ctx context.Context, taskID, providerID string) (task.ToolCall, error) {
 	return s.GetScopedToolCall(ctx, taskID, providerID, "")
 }
@@ -94,7 +91,6 @@ func (s *Store) GetScopedToolCall(ctx context.Context, taskID, providerID, scope
 	return getRecord[task.ToolCall](ctx, s.db, `SELECT record FROM tool_calls WHERE task_id=? AND json_extract(CAST(record AS TEXT),'$.provider_call_id')=? AND json_extract(CAST(record AS TEXT),'$.replay_scope')=? ORDER BY planned,id LIMIT 1`, taskID, providerID, scope)
 }
 
-// Recovery queries bound decoding independently of the complete task history.
 func (s *Store) LatestToolCalls(ctx context.Context, id string) ([]task.ToolCall, error) {
 	calls, err := queryRecords[task.ToolCall](ctx, s.db, "SELECT record FROM tool_calls WHERE task_id=? ORDER BY planned DESC,id DESC LIMIT 30", id)
 	slices.Reverse(calls)
@@ -131,7 +127,6 @@ func (s *Store) Approvals(ctx context.Context, id string) ([]task.Approval, erro
 	return queryRecords[task.Approval](ctx, s.db, "SELECT record FROM approvals WHERE task_id=? ORDER BY rowid", id)
 }
 
-// PendingApprovals bounds approval-resume work independently of task history.
 func (s *Store) PendingApprovals(ctx context.Context, id string) ([]task.Approval, error) {
 	return queryRecords[task.Approval](ctx, s.db, "SELECT record FROM approvals WHERE task_id=? AND decision='pending' ORDER BY rowid LIMIT 1000", id)
 }
@@ -145,8 +140,6 @@ func (s *Store) Events(ctx context.Context, id string, after int64, limit int) (
 	return queryRecords[task.Event](ctx, s.db, "SELECT record FROM events WHERE task_id=? AND seq>? ORDER BY seq LIMIT ?", id, after, limit)
 }
 
-// RequestEvents pages only durable user requests, avoiding full tool history
-// payloads while rebuilding a snapshot that lagged behind the execution log.
 func (s *Store) RequestEvents(ctx context.Context, id string, after int64, limit int) ([]task.Event, error) {
 	if after < 0 {
 		return nil, errors.New("request cursor must be nonnegative")
@@ -328,8 +321,6 @@ func (s *Store) finishRun(ctx context.Context, tx *sql.Tx, r task.Run, status ta
 	return s.appendEvent(ctx, tx, task.Event{TaskID: r.TaskID, RunID: r.ID, Kind: "run.finished", Status: string(status), Reason: reason})
 }
 
-// RecoverInterrupted requires explicit user recovery and newly acquired
-// ownership. In-flight side effects become unknown, never inferred successful.
 func (s *Store) RecoverInterrupted(ctx context.Context, l *Lease, id string) error {
 	return s.owned(ctx, l, id, func(tx *sql.Tx) error {
 		runs, err := queryRecords[task.Run](ctx, tx, "SELECT record FROM runs WHERE task_id=? AND status IN ('running','waiting_approval') ORDER BY started", id)
@@ -345,9 +336,6 @@ func (s *Store) RecoverInterrupted(ctx context.Context, l *Lease, id string) err
 	})
 }
 
-// ImportLegacy deduplicates each source ID and content hash atomically. The
-// caller retains and validates the original JSON; no historical tool success
-// is inferred from a conversation transcript.
 func (s *Store) ImportLegacy(ctx context.Context, t task.Task, sourceID, contentHash string) (task.Task, error) {
 	if t.SessionID == "" {
 		t.SessionID = t.ID

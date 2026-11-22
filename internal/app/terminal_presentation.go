@@ -5,8 +5,6 @@ import (
 	"unicode/utf8"
 )
 
-// sanitizeTerminalText removes terminal control instructions from untrusted
-// presentation text while preserving printable content and line boundaries.
 func sanitizeTerminalText(text string) string {
 	var output strings.Builder
 	output.Grow(len(text))
@@ -32,7 +30,6 @@ func sanitizeTerminalText(text string) string {
 
 		character, size := utf8.DecodeRuneInString(text[index:])
 		if character == utf8.RuneError && size == 1 {
-			// Replace invalid bytes so they cannot be interpreted as C1 controls.
 			output.WriteRune(utf8.RuneError)
 			index++
 			continue
@@ -92,6 +89,5 @@ func skipTerminalEscape(text string, start int) int {
 		}
 	}
 
-	// An incomplete escape is harmless once its ESC introducer is removed.
 	return start + 1
 }

@@ -7,14 +7,36 @@ CHECK_SCRIPT ?= scripts/mcp-check.py
 SCRIPT_TEST ?= scripts/check-scripts-test.py
 E2E_WORKERS ?= 3
 E2E_SLOW ?=
-# Local builds should identify the source they were built from just like
-# release artifacts do. VERSION may be overridden for reproducible builds.
+VERIFICATION_SCRIPTS := $(dir $(firstword $(MAKEFILE_LIST)))scripts
+COMMENT_ENV := .artifacts/comment-lint-venv
+COMMENT_PYTHON := $(COMMENT_ENV)/bin/python
+COMMENT_REQUIREMENTS := $(VERIFICATION_SCRIPTS)/source-comments-requirements.txt
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 VERSION_LDFLAGS := -X main.version=$(VERSION)
 
 .DEFAULT_GOAL := check
 
-.PHONY: fmt vet test test-race test-coverage build check check-fast check-staged check-local-ci release-check release-snapshot install-hooks clean
+.PHONY: fmt vet test test-race test-coverage build check check-fast check-staged check-local-ci release-check release-snapshot install-hooks clean comment-lint comment-lint-e2e comment-inventory
+
+$(COMMENT_ENV)/.ready: $(COMMENT_REQUIREMENTS)
+	python3 -m venv "$(COMMENT_ENV)"
+	"$(COMMENT_PYTHON)" -m pip install --disable-pip-version-check -r "$(COMMENT_REQUIREMENTS)" >&2
+	touch "$@"
+
+comment-lint: $(COMMENT_ENV)/.ready
+	"$(COMMENT_PYTHON)" "$(VERIFICATION_SCRIPTS)/source-comments.py" $(if $(COMMENT_BASE),--base-ref "$(COMMENT_BASE)")
+
+comment-inventory: $(COMMENT_ENV)/.ready
+	@"$(COMMENT_PYTHON)" "$(VERIFICATION_SCRIPTS)/source-comments.py" --inventory
+
+comment-lint-e2e: comment-lint
+	"$(COMMENT_PYTHON)" "$(VERIFICATION_SCRIPTS)/source-comments-e2e.py" --output "$(CHECK_DIR)/comment-lint.json"
+
+ifeq ($(abspath $(firstword $(MAKEFILE_LIST))),$(abspath Makefile))
+check check-fast: comment-lint-e2e
+else ifneq ($(wildcard scripts/source-comments-baseline.json),)
+check check-fast: comment-lint-e2e
+endif
 
 fmt:
 	gofmt -w $$(go list -f '{{.Dir}}' ./...)

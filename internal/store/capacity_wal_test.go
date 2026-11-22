@@ -10,9 +10,6 @@ import (
 	"testing"
 )
 
-// These tests build ~256MB single-goroutine fixtures that race instrumentation
-// makes ~15x slower; the non-race coverage run still executes them.
-
 func TestLargeWALWriterHelper(t *testing.T) {
 	path := os.Getenv("MELDRA_TEST_LARGE_WAL")
 	if path == "" {
@@ -36,7 +33,7 @@ func TestLargeWALWriterHelper(t *testing.T) {
 		}
 		if info.Size() > MaxDatabaseBytes {
 			os.Exit(0)
-		} // Leave the committed WAL without closing/checkpointing.
+		}
 	}
 	t.Fatal("fixture did not create an oversized WAL")
 }

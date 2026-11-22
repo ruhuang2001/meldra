@@ -9,7 +9,6 @@ import (
 	"meldra/internal/tool"
 )
 
-// Catalog operations stay on demand so newly added resources and prompts are discoverable.
 func mcpCatalogTools(session *mcp.ClientSession, server string, config mcpServerConfig, w *Workspace) []ToolDefinition {
 	caps := session.InitializeResult().Capabilities
 	if caps == nil {

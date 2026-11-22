@@ -123,8 +123,6 @@ func mcpOAuthHTTPClient(config mcpServerConfig) *http.Client {
 	return &http.Client{Transport: mcpOAuthTransport{allowLoopback: endpoint.Scheme == "http"}, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("OAuth redirects are disabled") }}
 }
 
-// The SDK asks for tokens with its detached connection context. Defer token
-// lookup to RoundTrip, where the actual request deadline includes cancellation.
 type mcpOAuthSDKHandler struct{ auth.OAuthHandler }
 
 func (mcpOAuthSDKHandler) TokenSource(context.Context) (oauth2.TokenSource, error) {
@@ -158,7 +156,7 @@ func (t mcpOAuthBearerTransport) RoundTrip(request *http.Request) (*http.Respons
 
 func mcpOAuthMCPClient(config mcpServerConfig, handler auth.OAuthHandler) *http.Client {
 	client := mcpOAuthHTTPClient(config)
-	client.Timeout = 0 // Startup and tool contexts have different deadlines; token requests keep their own limit.
+	client.Timeout = 0
 	client.Transport = mcpOAuthBearerTransport{RoundTripper: client.Transport, handler: handler}
 	return client
 }
@@ -172,7 +170,7 @@ type mcpOAuthHandler struct {
 	path       string
 	generation string
 	login      bool
-	pending    *mcpOAuthSession // Kept in memory until the MCP connection succeeds.
+	pending    *mcpOAuthSession
 }
 
 func (h *mcpOAuthHandler) Authorize(ctx context.Context, req *http.Request, resp *http.Response) error {
@@ -183,9 +181,6 @@ func (h *mcpOAuthHandler) Authorize(ctx context.Context, req *http.Request, resp
 	return h.base.Authorize(ctx, req, resp)
 }
 
-// TokenSource reads the latest cache while holding the cross-process lock. This
-// makes logout/relogin and refresh rotation serialize across Meldra processes;
-// the request context also bounds a refresh HTTP call.
 func (h *mcpOAuthHandler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
 	if h.login {
 		source, err := h.base.TokenSource(ctx)
@@ -232,7 +227,7 @@ func (h *mcpOAuthHandler) commit(ctx context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.pending == nil {
-		return nil // A public endpoint did not require new credentials.
+		return nil
 	}
 	source, err := saveMCPToken(ctx, h.paths, h.name, h.generation, h.config, h.pending.Config, &h.pending.Token)
 	if err != nil {
@@ -267,8 +262,6 @@ func checkMCPOAuthGeneration(paths ConfigPaths, name, generation string, config 
 	return checkMCPOAuthBaseline(paths, name, generation, config)
 }
 
-// An empty baseline permits the first login only while no generation exists.
-// Logout or another successful login invalidates every in-flight attempt.
 func checkMCPOAuthBaseline(paths ConfigPaths, name, generation string, config mcpServerConfig) error {
 	data, found, err := readMCPOAuthFile(mcpOAuthPath(paths, name) + ".generation")
 	if err != nil {
@@ -519,7 +512,6 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 			})
 			server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 			defer func() {
-				// Finish the callback response before closing active connections.
 				shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer cancel()
 				if err := server.Shutdown(shutdownCtx); err != nil {

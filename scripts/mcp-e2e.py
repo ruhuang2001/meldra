@@ -21,7 +21,6 @@ import traceback
 if not __debug__:
     raise SystemExit('Verification requires assertions; unset PYTHONOPTIMIZE and do not use -O.')
 
-# Scenarios that deliberately wait past real deadlines; opt in with --slow.
 SLOW_SCENARIOS = ('serve-approval-budget',)
 
 
@@ -401,7 +400,6 @@ def run_case(binary, output, name, mode='ok', approval='auto', two=False, transp
                         raise AssertionError('fixture process leaked: ' + str(message['started_pid']))
         return {'name': name, 'passed': True, 'exit_code': result.returncode, 'task_id': task_id, 'wire_calls': len(calls_on_wire), 'status': status}
     finally:
-        # Clean fixture leaks only after the assertion has recorded the failure.
         for log in directory.glob('*.jsonl'):
             for message in messages(log):
                 if message.get('descendant'):

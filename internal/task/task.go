@@ -1,5 +1,3 @@
-// Package task defines durable foreground execution records. It depends on
-// neither model SDKs nor terminal/UI packages and never executes side effects.
 package task
 
 import (
@@ -11,7 +9,6 @@ import (
 
 const SchemaVersion = 1
 
-// DatabaseSchemaVersion advances independently of the stable event envelope.
 const DatabaseSchemaVersion = 2
 
 type Status string
@@ -76,8 +73,6 @@ type Task struct {
 	LegacyHistoryMissing bool      `json:"legacy_history_missing,omitzero"`
 }
 
-// Config records reproducible non-secret configuration only. Provider is an
-// identifier, never a URL carrying credentials or a serialized SDK client.
 type Config struct {
 	Model              string `json:"model"`
 	Provider           string `json:"provider"`

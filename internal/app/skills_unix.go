@@ -8,8 +8,6 @@ import (
 	"syscall"
 )
 
-// Reject a final-component symlink swap, and never block if a regular file is
-// replaced with a FIFO between Lstat and OpenFile. Stat still checks identity.
 const skillReadFlags = os.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 
 func checkSkillLinkCount(info os.FileInfo) error {

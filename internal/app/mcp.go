@@ -128,7 +128,6 @@ func mcpTimeout(value *int, fallback int) time.Duration {
 	return time.Duration(fallback) * time.Second
 }
 
-// Count the encoded provider definition, including JSON escaping and metadata.
 func mcpDefinitionSize(definition ToolDefinition) (int, error) {
 	data, err := json.Marshal(struct {
 		Type        string         `json:"type"`
@@ -153,7 +152,7 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		return nil, err
 	}
 	connections := &mcpConnections{}
-	catalogBytes := 2 // Array brackets; each entry also reserves its separator.
+	catalogBytes := 2
 	names := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
 		if selected != "" && name != selected {
@@ -169,7 +168,6 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		}
 		session, definitions, err := connectMCPServer(ctx, paths, name, server, workspace)
 		candidateBytes := catalogBytes
-		// Leave room for the built-in tools in providers with a 128-tool limit.
 		if err == nil && len(connections.tools)+len(definitions) > limit {
 			err = fmt.Errorf("combined MCP catalog exceeds %d tools", limit)
 		}
@@ -248,9 +246,6 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 	client := mcp.NewClient(&mcp.Implementation{Name: "meldra", Version: version}, mcpClientOptions(workspace, name, config))
 	session, err := client.Connect(startupCtx, transport, nil)
 	if err != nil && config.Command != "" && startupCtx.Err() == nil && errors.Is(err, mcp.ErrConnectionClosed) {
-		// Some deployed MCP servers only implement initialize and exit when they
-		// receive the modern discovery probe. Restart the stdio process before the
-		// legacy handshake; a consumed process cannot be safely reused.
 		legacy := mcpCommandTransport{command: newMCPCommand(config, workspace)}
 		session, err = client.Connect(startupCtx, legacy, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	}
@@ -289,7 +284,7 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			if json.Unmarshal(data, &schema) != nil {
 				return fail(fmt.Errorf("unsupported tool schema"))
 			}
-			resolved, err := schema.Resolve(nil) // Remote $ref fetching is intentionally disabled.
+			resolved, err := schema.Resolve(nil)
 			if err != nil {
 				return fail(fmt.Errorf("tool schema has invalid or external references"))
 			}
@@ -315,7 +310,6 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 }
 
 func newMCPCommand(config mcpServerConfig, workspace *Workspace) *exec.Cmd {
-	// The user-owned config grants startup trust. No shell or project config is loaded.
 	command := exec.Command(config.Command, config.Args...)
 	command.Dir = workspace.root
 	command.WaitDelay = time.Second
@@ -339,7 +333,6 @@ func mcpToolName(server, name string) string {
 	if len(combined) <= 64 && mcpNamePart.MatchString(name) {
 		return combined
 	}
-	// Preserve readable names when possible; a digest avoids lossy sanitization collisions.
 	return "mcp__" + server[:min(len(server), 20)] + "__" + digest([]byte(combined))[:32]
 }
 
@@ -395,7 +388,6 @@ func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, tim
 	return output, nil
 }
 
-// Transport diagnostics may contain credentials, URLs, or server-controlled text.
 func mcpErrorKind(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return "deadline exceeded"
@@ -416,8 +408,6 @@ var errMCPAuth = errors.New("authentication rejected; configure bearer_token_env
 
 type mcpHTTPTransport struct{ token string }
 
-// Close must stop descendants before waiting for protocol readers: a child can
-// inherit stdout and keep the SDK reader alive after its launcher exits.
 type mcpCommandTransport struct{ command *exec.Cmd }
 
 func (t mcpCommandTransport) Connect(ctx context.Context) (mcp.Connection, error) {
@@ -461,7 +451,6 @@ func (t mcpHTTPTransport) RoundTrip(request *http.Request) (*http.Response, erro
 	return response, nil
 }
 
-// Reject numeric tokens whose value would change during schema validation.
 func decodeMCPArguments(input json.RawMessage) (map[string]any, error) {
 	if len(input) > maxApprovalPreviewBytes {
 		return nil, fmt.Errorf("arguments exceed 1 MiB")

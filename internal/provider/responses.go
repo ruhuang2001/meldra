@@ -28,7 +28,6 @@ const (
 	defaultProviderResponsePrefixBytes int64 = 64 << 10
 )
 
-// Stream is the minimal Responses stream consumed by the transport.
 type Stream interface {
 	Next() bool
 	Current() responses.ResponseStreamEventUnion
@@ -37,7 +36,6 @@ type Stream interface {
 }
 type responseStream = Stream
 
-// wireResult preserves partial output even when streaming fails.
 type wireResult struct {
 	Response          *responses.Response
 	StreamedText      string
@@ -46,7 +44,6 @@ type wireResult struct {
 	StreamHadEvent    bool
 }
 
-// Result preserves partial output when inference fails.
 type Result struct {
 	Response          *Response
 	StreamedText      string
@@ -55,8 +52,6 @@ type Result struct {
 	StreamHadEvent    bool
 }
 
-// Inference is the serial model boundary used by the application. Implementations
-// own protocol conversion, transport compatibility and continuation data.
 type Inference interface {
 	Infer(context.Context, Request, Options, Observer) (Result, error)
 }
@@ -75,24 +70,18 @@ type Request struct {
 	Tools              []Tool
 }
 
-// Options are per request; fallback capability is remembered by Client.
 type Options struct {
 	CustomProvider   bool
 	IdleTimeout      time.Duration
 	MaxResponseBytes int64
 }
 
-// Observer is synchronous and must not call Client recursively.
-// FilterText only affects presentation, never the recorded provider output.
 type Observer struct {
 	Status     func(string)
 	Text       func(string, bool)
 	FilterText func(string) string
 }
 
-// Client owns transport state for one serial conversation. It does not own
-// sessions, tools, terminal output, or the application lifecycle.
-// CreateResponse/CreateStream allow deterministic transports in tests.
 type Client struct {
 	sdk               *openai.Client
 	CreateResponse    func(context.Context, responses.ResponseNewParams) (*responses.Response, error)
@@ -100,8 +89,6 @@ type Client struct {
 	streamUnsupported bool
 }
 
-// Connection contains connection settings supplied by the composition root.
-// Credentials are never included in requests, results or observer events.
 type Connection struct {
 	APIKey  string
 	BaseURL string
@@ -184,8 +171,6 @@ func (e *IdleTimeoutError) Error() string {
 	return fmt.Sprintf("response stream was idle for %s without a terminal event; the API gateway did not finish the response. Retry, or use a gateway with Responses streaming support", e.Timeout)
 }
 
-// responseStreamCloser makes it safe for a watchdog to request closure before
-// the synchronous SDK call has returned a stream object.
 type responseStreamCloser struct {
 	mu             sync.Mutex
 	stream         responseStream
@@ -216,9 +201,6 @@ func (c *responseStreamCloser) close() {
 	}
 }
 
-// responseStreamIdleWatchdog tracks gaps between decoded SSE events. It is not
-// a total request deadline: every event gives the provider a fresh interval to
-// continue the response. The callback must unblock a pending Stream.Next call.
 type responseStreamIdleWatchdog struct {
 	timeout   time.Duration
 	onTimeout func()
@@ -242,8 +224,6 @@ func newResponseStreamIdleWatchdog(timeout time.Duration, onTimeout func()) *res
 	return watchdog
 }
 
-// noteEvent resets the timeout after a complete, successfully decoded SSE
-// event. It returns false when the watchdog has already expired.
 func (w *responseStreamIdleWatchdog) noteEvent() bool {
 	if w == nil {
 		return true
@@ -332,9 +312,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 	defer cancelStream()
 	streamCloser := &responseStreamCloser{}
 	idleWatchdog := newResponseStreamIdleWatchdog(idleTimeout, func() {
-		// Canceling the request context is the normal SDK path; Close is also
-		// needed for compatible stream implementations that are already blocked
-		// in a body read and do not observe context cancellation.
 		cancelStream()
 		streamCloser.close()
 	})
@@ -352,8 +329,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 
 	var result wireResult
 	textBytes := 0
-	// Done events describe one content part, not the entire response. Keep
-	// those boundaries so completing a prefix cannot erase other text parts.
 	parts := make(map[[2]int64]*strings.Builder)
 	var partOrder [][2]int64
 	partFor := func(event responses.ResponseStreamEventUnion) *strings.Builder {
@@ -407,8 +382,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 				a.status("Preparing " + event.Item.Name)
 			}
 		case "response.output_text.done":
-			// A compatible gateway may omit some deltas. Reconcile the complete
-			// content part and emit only its missing suffix when possible.
 			if event.Text != "" {
 				part := partFor(event)
 				previous := part.String()
@@ -433,9 +406,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 				}
 			}
 		case "response.output_item.done":
-			// The official terminal event includes the full output array. A few
-			// compatible gateways leave that array empty, even though they emitted
-			// complete output items earlier in the SSE stream.
 			if event.Item.Type != "" {
 				completedOutput = append(completedOutput, event.Item)
 				completedIndices = append(completedIndices, event.OutputIndex)
@@ -448,8 +418,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 				return result, err
 			}
 			response.Output = merged
-			// Some compatible gateways only deliver assistant text as stream events.
-			// Preserve it in the response used for custom-provider replay as well.
 			if OutputText(&response) == "" && textBytes > 0 {
 				raw, _ := json.Marshal(map[string]any{"type": "message", "role": "assistant", "status": "completed", "content": []map[string]any{{"type": "output_text", "text": currentText(), "annotations": []any{}}}})
 				var message responses.ResponseOutputItemUnion
@@ -484,9 +452,6 @@ func (a *invocation) run(ctx context.Context, params responses.ResponseNewParams
 	return result, err
 }
 
-// mergeCompletedStreamOutput fills in output items which some compatible
-// gateways omit from their terminal response. A matching streamed item is more
-// complete than its terminal counterpart, while terminal-only items are kept.
 func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItemUnion, positions ...[]int64) ([]responses.ResponseOutputItemUnion, error) {
 	if len(completed) == 0 {
 		return output, nil
@@ -508,8 +473,6 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 				break
 			}
 		}
-		// A tool at the same terminal output slot must not become a second
-		// side effect merely because a gateway changed both of its IDs.
 		if match < 0 && completedItem.Type == "function_call" && len(positions) > 0 && completedIndex < len(positions[0]) {
 			position := positions[0][completedIndex]
 			if position >= 0 && position < int64(len(output)) && output[position].Type == "function_call" {
@@ -537,8 +500,6 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 			merged[match] = completedItem
 			continue
 		}
-		// Without stable identities, suppress only an exact text duplicate.
-		// Distinct streamed messages must remain in the persisted response.
 		if completedItem.Type == "message" {
 			text := OutputText(&responses.Response{Output: []responses.ResponseOutputItemUnion{completedItem}})
 			duplicate := false
@@ -564,8 +525,6 @@ func mergeCompletedStreamOutput(output, completed []responses.ResponseOutputItem
 	return merged, nil
 }
 
-// Identity must agree when present. Missing streamed fields never erase valid
-// terminal fields; re-decode the combined JSON so SDK union accessors agree.
 func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (responses.ResponseOutputItemUnion, error) {
 	for _, pair := range [][2]string{{terminal.ID, streamed.ID}, {terminal.CallID, streamed.CallID}, {terminal.Name, streamed.Name}} {
 		if pair[0] != "" && pair[1] != "" && pair[0] != pair[1] {
@@ -598,8 +557,6 @@ func mergeFunctionCall(terminal, streamed responses.ResponseOutputItemUnion) (re
 	if terminalValid && streamedValid && !reflect.DeepEqual(terminalArgs, streamedArgs) {
 		return terminal, errors.New("conflicting streamed and terminal tool arguments")
 	}
-	// The terminal value is authoritative when complete. A progressive gateway
-	// may have emitted an incomplete prefix; never replay it over valid JSON.
 	if terminalValid {
 		right["arguments"] = left["arguments"]
 	}
@@ -644,7 +601,6 @@ func normalizeJSONNumbers(value any) any {
 				return v
 			}
 		}
-		// Preserve integers beyond float64 precision, including nested values.
 		if number, ok := new(big.Rat).SetString(string(v)); ok {
 			return exactJSONNumber{number.RatString()}
 		}
@@ -661,9 +617,6 @@ func normalizeJSONNumbers(value any) any {
 	return value
 }
 
-// fallbackFromUnsupportedStream only retries compatible providers before text
-// reaches the user. Tool execution happens after runInference returns, so this
-// cannot repeat a local tool call.
 func (a *invocation) fallbackFromUnsupportedStream(ctx context.Context, params responses.ResponseNewParams, result wireResult, streamErr error) (wireResult, error) {
 	if !a.customProvider || result.StreamedTextShown || a.createResponse == nil {
 		return result, streamErr
@@ -718,10 +671,6 @@ func exceedsProviderResponseLimit(current, additional int, limit int64) bool {
 	return int64(current) > limit || int64(additional) > limit-int64(current)
 }
 
-// limitProviderResponse bounds the raw response body before the SDK
-// parses SSE. This covers output items and tool arguments in addition to the
-// assistant text accumulated by Agent.runInference.
-
 func limitProviderResponseWithLimit(limit int64) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 		response, err := next(request)
@@ -767,11 +716,6 @@ func (r *providerResponseLimitReadCloser) Read(buffer []byte) (int, error) {
 	return count, err
 }
 
-// normalizeNonSSEStreamingResponse preserves the result when a compatible
-// provider accepts stream=true but replies with a complete Responses JSON body.
-// It turns that body into one terminal SSE event instead of issuing the prompt a
-// second time through the non-streaming API.
-
 func normalizeNonSSEStreamingResponseWithLimit(limit int64) option.Middleware {
 	return func(request *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 		return normalizeNonSSEStreamingResponseForLimit(request, next, limit)
@@ -788,11 +732,6 @@ func normalizeNonSSEStreamingResponseForLimit(request *http.Request, next option
 		return response, &ResponseLimitError{Limit: limit}
 	}
 
-	// Some compatible gateways stream valid SSE but omit or mislabel the
-	// Content-Type header. Do not read such a response to EOF before giving it
-	// to the SDK: the read would hold every delta until the model finishes. A
-	// small prefix is enough to distinguish a complete JSON response from SSE,
-	// and is replayed so the SDK still sees the entire stream.
 	prefixLimit := int64(defaultProviderResponsePrefixBytes)
 	if limit < prefixLimit {
 		prefixLimit = limit
@@ -816,22 +755,11 @@ func normalizeNonSSEStreamingResponseForLimit(request *http.Request, next option
 		return response, closeErr
 	}
 
-	// Validate without unmarshalling into the SDK response type. Unmarshalling
-	// a near-limit body would retain a second, decoded copy of every output
-	// item and tool argument before the SDK parses the synthetic SSE event.
-	// Keep the original body for non-Responses JSON so the SDK can report its
-	// normal decoding error.
 	trimmed := bytes.TrimSpace(responseBody)
 	if len(trimmed) == 0 || trimmed[0] != '{' || !json.Valid(trimmed) {
 		response.Body = io.NopCloser(bytes.NewReader(responseBody))
 		return response, nil
 	}
-	// Do not marshal the response into another byte slice. Besides escaping
-	// characters such as '<' and '>', that would temporarily hold the raw body,
-	// decoded response, marshaled payload, and converted string at once. The
-	// SDK only needs a valid SSE envelope, so compact the bounded raw JSON while
-	// streaming it between a small prefix and suffix. This keeps pretty-printed
-	// JSON in one SSE data line without expanding a newline-heavy response.
 	response.Body = io.NopCloser(io.MultiReader(
 		strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":"),
 		&jsonCompactReader{source: bytes.NewReader(trimmed)},
@@ -852,10 +780,6 @@ func readProviderResponse(body io.Reader, limit int64) ([]byte, error) {
 	}
 	return responseBody, nil
 }
-
-// responseBodyStartsWithJSON returns a reader which still includes every byte
-// consumed while checking the prefix. JSON permits leading whitespace, while
-// SSE normally begins with "event:", "data:", or a comment.
 
 func responseBodyStartsWithJSONWithLimit(body io.ReadCloser, limit int64) (bool, io.ReadCloser, error) {
 	reader := bufio.NewReader(body)
@@ -889,9 +813,6 @@ type prefixedReadCloser struct {
 	io.Closer
 }
 
-// jsonCompactReader removes JSON formatting whitespace without allocating a
-// second complete response body. The normalized response is sent as one SSE
-// data line, so physical newlines cannot terminate its event.
 type jsonCompactReader struct {
 	source      io.Reader
 	buffer      [32 << 10]byte

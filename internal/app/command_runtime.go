@@ -29,8 +29,6 @@ type commandSpec struct {
 	DisplayCommand    string            `json:"-"`
 }
 
-// CommandOutput is a coalesced, sanitized presentation update. Receivers must
-// enqueue without blocking; output retention never relies on UI delivery.
 type CommandOutput struct {
 	ProcessID string
 	Text      string
@@ -48,8 +46,6 @@ func (w *Workspace) SetCommandTimeout(seconds int) error {
 
 func (w *Workspace) SetCommandOutput(output func(CommandOutput)) { w.commandOutput = output }
 
-// SetCommandExecutables permits explicit host executable identities. These
-// extensions still require approval and do not weaken built-in Git restrictions.
 func (w *Workspace) SetCommandExecutables(paths []string) error {
 	configured := make(map[string]string, len(paths))
 	for _, path := range paths {
@@ -186,9 +182,6 @@ func (w *Workspace) executePreparedCommand(spec commandSpec, requestApproval boo
 
 const commandLogLimit = 16 << 20
 
-// commandLog drains all bytes, retains a bounded tail for cursor reads and a
-// bounded private spool for the final artifact. Neither allocation nor disk use
-// grows with command duration. Log write failures do not stop pipe drainage.
 type commandLog struct {
 	mu         sync.Mutex
 	file       *os.File
@@ -273,9 +266,6 @@ func (l *commandLog) read(cursor int64) (string, int64, bool, error) {
 	return text, next, truncated, nil
 }
 
-// Replay the retained prefix from its bounded decoder checkpoint. This keeps
-// independently polled raw-byte cursors meaningful even inside escape sequences,
-// and avoids exposing their payload when the retained tail starts mid-sequence.
 func (l *commandLog) readLocked(cursor, end int64) (string, int64) {
 	if cursor == l.total {
 		return "", cursor
@@ -287,15 +277,11 @@ func (l *commandLog) readLocked(cursor, end int64) (string, int64) {
 	final := l.finished && end == l.total
 	decoder.append(l.tail[cursor-start:end-start], final, &output)
 	if !final {
-		// Return a cursor before an incomplete rune so the next observation can
-		// emit it exactly once after its remaining bytes arrive.
 		end = max(cursor, end-int64(decoder.pendingLen))
 	}
 	return output.String(), end
 }
 
-// Callbacks must enqueue promptly. Serialize them with close so no callback can
-// outlive log ownership, including a timer that has already started firing.
 func (l *commandLog) flushLocked() {
 	if l.callback == nil || l.emitCursor == l.total {
 		return

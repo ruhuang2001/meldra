@@ -152,7 +152,6 @@ def calls(case):
     return [call for record in records for call in record['tool_calls']], records
 
 def assert_fixture(binary, output, kind):
-    # --version is harmless if the overlay is absent. Probe before any request.
     home = output / ('probe-' + kind + '-home')
     home.mkdir(mode=0o700, exist_ok=True)
     env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(home),
@@ -168,7 +167,6 @@ def assert_fixture(binary, output, kind):
 
 
 def build_fixture(output, overlay, binary, kind):
-    # Go honors a same-directory PWD alias; overlay keys use canonical paths.
     env = dict(os.environ, PWD=str(ROOT))
     dump(output / ('fixture-build-path-' + kind + '.json'),
          {'inherited_pwd': os.environ.get('PWD'), 'build_pwd': env['PWD'], 'cwd': str(ROOT)})
@@ -368,7 +366,6 @@ def config(binary, output, origin):
         origin.attach(case, True)
         del case.env['DEEPSEEK_API_KEY']
         write(case.state / 'credentials.env', 'DEEPSEEK_API_KEY="' + KEY + '"\n').chmod(0o600)
-        # Exercise the [web] section, independently from dotted top-level keys.
         config_path = case.state / 'config.toml'
         config_path.write_text(config_path.read_text().replace('web.fetch_backend=', '[web]\nfetch_backend=').replace('web.search_backend=', 'search_backend='))
         case.chat(flags=['--auto-approve'])

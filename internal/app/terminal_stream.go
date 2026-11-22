@@ -5,8 +5,6 @@ import (
 	"unicode/utf8"
 )
 
-// terminalStream has a constant-size checkpoint, even for unterminated control
-// strings. Raw logs stay intact; only presentation uses this incremental decoder.
 type terminalStream struct {
 	state      uint8
 	pending    [utf8.UTFMax]byte

@@ -50,8 +50,6 @@ var builtinSlashCommands = []slashCommand{
 	{Name: "fork", Description: "Branch the saved conversation while idle"},
 }
 
-// Commands and bodies form an immutable startup snapshot. Expanding a command
-// creates ordinary user text; it never dispatches a tool or reparses controls.
 func discoverCommands(ctx context.Context, workspace *Workspace, paths ConfigPaths) (*commandCatalog, error) {
 	catalog := &commandCatalog{Commands: []slashCommand{}, Warnings: []string{}}
 	warn := func(path string, err error) {
@@ -251,7 +249,6 @@ func (c *commandCatalog) expand(text string) (string, error) {
 	return expanded.String(), nil
 }
 
-// emitCommandWarnings is called only by the serial conversation owner.
 func (a *Agent) emitCommandWarnings() {
 	if a.commandWarningsShown {
 		return

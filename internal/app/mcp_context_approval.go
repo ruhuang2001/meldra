@@ -6,9 +6,6 @@ import (
 	"strings"
 )
 
-// mcpApprovalContextDigest runs under the server's operation lock. Resolve
-// every actual edit target before minting or redeeming a multi-request approval.
-// Programs have no known write set, but still bind root/active instructions.
 func (w *Workspace) mcpApprovalContextDigest(name string, raw json.RawMessage) (string, error) {
 	if w.projectContext == nil {
 		return "", nil

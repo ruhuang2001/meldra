@@ -153,7 +153,6 @@ func TestSelectedQueueCrashBeforeSnapshotRestoresIdentityAndReferences(t *testin
 	if err := a.execution.begin(t.Context(), selected.Text); err != nil {
 		t.Fatal(err)
 	}
-	// No message or applied event is saved: this is the crash-start window.
 	if err := a.execution.close(); err != nil {
 		t.Fatal(err)
 	}

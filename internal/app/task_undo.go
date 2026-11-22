@@ -11,8 +11,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Undo evidence uses the same file/count/content limits as a prepared edit.
-// Contents live in a private, digest-checked artifact, never in the approval UI.
 type undoChange struct {
 	Path        string      `json:"path"`
 	Before      []byte      `json:"before"`
@@ -90,9 +88,6 @@ func (e *taskExecution) restoreUndoApproval(ctx context.Context, approval task.A
 	if err := e.workspace.contextBeforeChanges(changes); err != nil {
 		return err
 	}
-	// The interactive apply already pushed this change set before the approval
-	// was recorded. Replacing an identical top entry keeps the stack free of a
-	// duplicate step that would make the next undo a no-op.
 	if top, ok := e.workspace.pendingUndo(); ok && bytes.Equal(changeFingerprints(top, true), approval.WorkspaceState) {
 		e.workspace.replaceTopUndo(changes)
 	} else {

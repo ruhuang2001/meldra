@@ -100,9 +100,6 @@ func (w *Workspace) readFile(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	defer file.Close()
-	// Do not feed binary or invalidly encoded bytes through Scanner: converting
-	// them to strings would produce replacement characters (�) in the TUI and
-	// make the result misleading. Return a compact, useful description instead.
 	var probe [8192]byte
 	probeN, probeErr := file.Read(probe[:])
 	if probeErr != nil && !errors.Is(probeErr, io.EOF) {
@@ -181,9 +178,6 @@ func binarySample(sample []byte) bool {
 	if utf8.Valid(sample) {
 		return false
 	}
-	// A bounded probe can end in the middle of a valid UTF-8 sequence. Ignore
-	// only that incomplete suffix; invalid bytes elsewhere still identify a
-	// binary file, and the full scanner pass validates subsequent lines.
 	lastRune := len(sample) - 1
 	for lastRune >= 0 && !utf8.RuneStart(sample[lastRune]) {
 		lastRune--
@@ -350,7 +344,6 @@ func (w *Workspace) searchFiles(raw json.RawMessage) (string, error) {
 	filesScanned := 0
 	bytesScanned := int64(0)
 	query := []byte(in.Query)
-	// Files are scanned serially; reuse scratch space without retaining lines.
 	scanBuffer := make([]byte, 64<<10)
 	bounded := false
 	errStop := errors.New("bounded")

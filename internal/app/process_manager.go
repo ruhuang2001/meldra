@@ -15,28 +15,23 @@ import (
 	"meldra/internal/tool"
 )
 
-// processManager is owned by one Run, not by a tool invocation. Workers retain
-// immutable store identities and their own contexts, never Workspace.ctx, a
-// taskExecution.current pointer, or a synchronous tool Observation.
 type processManager struct {
-	mu     sync.Mutex
-	ctx    context.Context
-	cancel context.CancelFunc
-	closed bool
-	epoch  string
-	taskID string
-	runID  string
-	db     *taskstore.Store
-	lease  *taskstore.Lease
-	// Bound once before launch; separates lifecycle persistence from process
-	// ownership and permits deterministic persistence-fault validation.
+	mu             sync.Mutex
+	ctx            context.Context
+	cancel         context.CancelFunc
+	closed         bool
+	epoch          string
+	taskID         string
+	runID          string
+	db             *taskstore.Store
+	lease          *taskstore.Lease
 	persistProcess func(context.Context, *taskstore.Lease, task.Process) error
 	processes      map[string]*managedProcess
 	err            error
 }
 
 type managedProcess struct {
-	record task.Process // protected by manager.mu
+	record task.Process
 	log    *commandLog
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -118,8 +113,6 @@ func (w *Workspace) processWriteConflict(name string, raw json.RawMessage) error
 	return nil
 }
 
-// ProcessToolDefinitions are deliberately separate from ToolDefinitions:
-// stateless MCP server requests cannot own handles beyond their request Run.
 func (w *Workspace) ProcessToolDefinitions() []ToolDefinition {
 	str := func(description string) map[string]any {
 		return map[string]any{"type": "string", "description": description}

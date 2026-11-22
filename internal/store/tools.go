@@ -151,8 +151,6 @@ func (s *Store) finishTool(ctx context.Context, tx *sql.Tx, c task.ToolCall, res
 	return s.appendEvent(ctx, tx, task.Event{TaskID: c.TaskID, RunID: c.RunID, ToolCallID: c.ID, Kind: kind, Status: string(c.Status), Reason: reason})
 }
 
-// ResolveTool records an explicit reconciliation decision without running the
-// tool again. An old Run remains interrupted/failed/cancelled permanently.
 func (s *Store) ResolveTool(ctx context.Context, l *Lease, id string, result task.Result, reason string) error {
 	if result.Status != task.ToolSucceeded && result.Status != task.ToolFailed && result.Status != task.ToolDeclined && result.Status != task.ToolCancelled || reason == "" {
 		return errors.New("reconciliation requires a terminal outcome and an evidence reason")

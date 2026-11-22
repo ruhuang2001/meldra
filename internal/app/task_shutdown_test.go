@@ -24,8 +24,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Running Main in a subprocess tests actual signal registration and os.Exit,
-// rather than treating context cancellation in an in-process unit test as proof.
 func TestTaskShutdownHelperProcess(t *testing.T) {
 	if os.Getenv("MELDRA_SHUTDOWN_HELPER") != "1" {
 		return
@@ -258,7 +256,6 @@ time.sleep(90)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	// These PIDs belong to this fixture; cleanup is bounded even after a failed assertion.
 	t.Cleanup(func() {
 		for _, pid := range pids {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
@@ -291,7 +288,6 @@ func assertProcessStopped(t *testing.T, pid int) {
 		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
 			return
 		}
-		// A reparented zombie cannot execute. Linux CI's init may reap it later.
 		status, _ := exec.CommandContext(t.Context(), "ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
 		if state := strings.TrimSpace(string(status)); state == "" || strings.HasPrefix(state, "Z") {
 			return
@@ -354,8 +350,6 @@ func TestTaskPromptEOFCompletesWithoutFalseHangup(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	paths := shutdownPaths(t, server.URL)
-	// The subprocess gets /dev/null for stdin. EOF after --prompt is normal input
-	// completion, even though closing an actual controlling terminal cancels work.
 	process, _ := startShutdownProcess(t, paths, []string{"--workspace", t.TempDir(), "--prompt", "complete this prompt"}, false)
 	process.wait(t)
 	if process.err != nil {
@@ -443,9 +437,6 @@ func TestTaskResumeUsesRealTerminalTUI(t *testing.T) {
 	}
 }
 
-// Python's standard library provides a real controlling terminal on both target
-// operating systems. Closing the master delivers the OS terminal-hangup event;
-// the controller never sends SIGHUP itself and never uses a paid model endpoint.
 const shutdownPTYController = `
 import fcntl, json, os, pty, select, signal, struct, subprocess, sys, termios
 master, slave = pty.openpty()

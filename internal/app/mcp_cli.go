@@ -1,8 +1,5 @@
 package app
 
-// runMCPCatalogCLI(ctx, args, input, output) accepts args starting with
-// resources, templates, read, prompts or prompt; the main CLI owns dispatch.
-
 import (
 	"bytes"
 	"context"
@@ -137,7 +134,6 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 		return err
 	}
 	defer cleanup()
-	// The explicit CLI invocation authorizes this catalog access, not execution of its prompt.
 	workspace, err := NewWorkspace(options.Workspace, reader.Reader, io.Discard, true)
 	if err != nil {
 		return err
@@ -152,8 +148,6 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 		if err := json.Indent(&pretty, data, "", "  "); err != nil {
 			return err
 		}
-		// Preserve valid, round-trippable JSON while escaping Unicode C1 controls
-		// that encoding/json leaves literal and terminals may interpret.
 		var safe strings.Builder
 		for _, character := range pretty.String() {
 			if terminalControlRune(character) && character != '\n' && character != '\t' {

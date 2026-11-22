@@ -64,7 +64,6 @@ class VerificationScriptsTest(unittest.TestCase):
                 for key in ('MAKEFLAGS', 'MFLAGS', 'CHECK_DIR', 'COVERAGE_FILE'):
                     env.pop(key, None)
                 subprocess.run(['git', 'init', '-q', str(root)], check=True, env=env)
-                # Real Git and make, but no compiler, credentials or shared state.
                 commands = ['mkdir -p "$(CHECK_DIR)"',
                             'pwd > "$(CHECK_DIR)/source.txt"',
                             'printf staged-evidence > "$(CHECK_DIR)/failure.log"',

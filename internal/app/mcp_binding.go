@@ -14,8 +14,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Only this digest is persisted. Literal environment values, authentication
-// secrets and command arguments never become durable connection metadata.
 func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, config mcpServerConfig, workspace *Workspace) (string, error) {
 	var executable, executableDigest string
 	var oauthGeneration string
@@ -26,8 +24,6 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 			return "", fmt.Errorf("MCP executable cannot be resolved")
 		}
 		path := command.Path
-		// exec.Cmd resolves a relative executable after changing to Cmd.Dir.
-		// Use the same base, including PATH lookups that retain a relative path.
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(command.Dir, path)
 		}
@@ -101,8 +97,6 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 	return digest(raw), nil
 }
 
-// Validate before connecting any MCP transport: a changed stdio command can
-// perform effects at startup even if the eventual tools/call is rejected.
 func checkApprovalConnections(ctx context.Context, paths ConfigPaths, options ChatOptions, workspace *Workspace) error {
 	if options.ApproveDetailHash == "" {
 		return nil
@@ -163,7 +157,6 @@ func checkApprovalConnections(ctx context.Context, paths ConfigPaths, options Ch
 }
 
 func mcpApprovalArguments(input json.RawMessage) string {
-	// Match RawMessage's persisted representation, including HTML escaping.
 	compact, err := json.Marshal(input)
 	if err != nil {
 		return "invalid JSON"

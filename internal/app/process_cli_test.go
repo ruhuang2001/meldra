@@ -30,8 +30,6 @@ func TestTaskProcessInspectionAndExplicitResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Deliberately retain our own PID in historical evidence. Inspection and
-	// reconciliation must never signal it or reinterpret it as live ownership.
 	p.State, p.PID = task.ProcessRunning, os.Getpid()
 	if err := e.db.SaveProcess(t.Context(), e.lease, p); err != nil {
 		t.Fatal(err)

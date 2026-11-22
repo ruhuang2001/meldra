@@ -33,7 +33,6 @@ func TestFailedArtifactTransactionCleansOnlyUnreferencedContent(t *testing.T) {
 		t.Fatalf("rollback orphan retained: %v", err)
 	}
 	f.s.beforeCommit = nil
-	// Crash leftovers without metadata are reclaimed when capacity is needed.
 	dir := filepath.Join(f.s.dir, "artifacts")
 	orphan := filepath.Join(dir, strings.Repeat("a", 64))
 	file, err := os.Create(orphan)
@@ -94,7 +93,6 @@ func TestLegacyLocksStillExcludeNewBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Emulate the older implementation, which only holds the cache namespace.
 	f.s.lockDir = dirs[1]
 	old, err := f.s.Acquire(t.Context(), f.task.ID, f.workspace)
 	if err != nil {
@@ -150,7 +148,6 @@ func TestRecoveryQueriesOnlyDecodeRelevantHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// Corrupt an irrelevant old terminal record to prove recovery doesn't decode it.
 	if _, err := f.s.db.Exec("UPDATE tool_calls SET record=? WHERE id=(SELECT id FROM tool_calls WHERE status='succeeded' ORDER BY planned LIMIT 1)", `{"unused":true}`); err != nil {
 		t.Fatal(err)
 	}

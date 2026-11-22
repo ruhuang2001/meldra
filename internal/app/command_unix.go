@@ -10,7 +10,6 @@ import (
 )
 
 func runCommandProcess(ctx context.Context, command *exec.Cmd, onStart ...func()) error {
-	// Bound pipe cleanup even when a child detaches and retains output descriptors.
 	prepareCommandProcess(command)
 	if err := command.Start(); err != nil {
 		return err
@@ -31,8 +30,6 @@ func runCommandProcess(ctx context.Context, command *exec.Cmd, onStart ...func()
 func prepareCommandProcess(command *exec.Cmd) {
 	command.WaitDelay = 2 * time.Second
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// CommandContext's default cancellation kills only the direct child. Keep
-	// cancellation and process-group escalation in our bounded owner below.
 	command.Cancel = nil
 }
 

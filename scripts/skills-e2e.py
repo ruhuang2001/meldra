@@ -348,7 +348,6 @@ class Harness:
             names = {s['name'] for s in value['skills']}
             self.check(label + ' CLI catalog protection', ('demo' in names) == (label != 'cache-source'), names == {'demo', 'native-demo'} if label == 'nested-state' else sorted(names))
             if label == 'cache-source':
-                # The entire workspace is protected, so chat must fail before inference.
                 start = len(self.requests)
                 self.command(label + '-chat', ['--workspace', str(workspace), '--prompt', 'Inspect the available skill using read_skill.'], env=env, success=False)
                 stderr = (self.output / (label + '-chat.stderr.txt')).read_text()

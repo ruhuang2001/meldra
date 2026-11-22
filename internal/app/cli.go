@@ -21,17 +21,12 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// version is supplied by the binary entry point, which owns link-time metadata.
 var version = "dev"
 
-// Main owns process signals and delegates to the application.
 func Main(buildVersion string) {
 	version = buildVersion
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	// Bubble Tea restores raw terminal state during shutdown. Closing its input
-	// descriptor on a signal can make that restoration fail, so only interrupt
-	// the blocking line-based reader.
 	if !shouldUseTUI(os.Stdin, os.Stdout) {
 		go func() {
 			<-ctx.Done()
@@ -131,8 +126,6 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 					}
 					options.Resume = selected
 				} else {
-					// Keep a single buffered reader for the line-based picker and
-					// chat so a piped follow-up prompt cannot be consumed by the picker.
 					input, cleanup, err := newMCPCLIInput(stdin)
 					if err != nil {
 						return err
@@ -240,7 +233,7 @@ type ChatOptions struct {
 	CommandTimeout     int
 	AllowedExecutables []string
 	RemotePrompt       bool
-	MCPServer          string // Limit a user-selected prompt to its own MCP server.
+	MCPServer          string
 	Workspace          string
 	Resume             string
 	Prompt             string
@@ -766,7 +759,6 @@ func newChatRuntime(
 		session.ApprovedPlanDigest = digest(raw)
 	}
 	workspace.projectContext = NewProjectContext(workspace)
-	// Task-era snapshots never overwrite the imported 0.1.x JSON source.
 	if !session.taskSnapshot {
 		session.hasSavedRevision = false
 	}
@@ -865,8 +857,6 @@ func (runtime *chatRuntime) deleteEmptyNewSession() {
 	}
 }
 
-// preserveSession keeps an interrupted session available for explicit resume,
-// even when no user/assistant message was persisted before cancellation.
 func (runtime *chatRuntime) preserveSession() {
 	runtime.newSession = false
 }

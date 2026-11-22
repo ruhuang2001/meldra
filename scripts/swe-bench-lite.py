@@ -43,8 +43,6 @@ try:
 except ImportError:
     sys.exit("Error: install dependencies with: pip install swebench")
 
-# These datasets carry the prebuilt per-instance image names the local harness needs.
-# Maps --subset to (HF dataset, sb-cli subset name).
 SUBSETS = {
     "lite": ("SWE-bench/SWE-bench_Lite", "swe-bench_lite"),
     "verified": ("SWE-bench/SWE-bench_Verified", "swe-bench_verified"),
@@ -172,7 +170,6 @@ def load_predictions(path: Path) -> dict:
             print(f"Recovering unreadable predictions.jsonl line {number}", flush=True)
     normalized = "".join(json.dumps(record) + "\n" for record in records.values()).encode()
     if normalized != original:
-        # Preserve original evidence before repairing damaged or legacy failed rows.
         with tempfile.NamedTemporaryFile(dir=path.parent, prefix="predictions-recovery-",
                                          suffix=".jsonl", delete=False) as backup:
             backup.write(original)
@@ -226,7 +223,6 @@ def descendant_groups(pid: int) -> dict:
 
 
 def stop_agent(proc, grace: float):
-    # Meldra handles SIGTERM by cancelling its turn and reaping owned process groups.
     children = {}
     try:
         children = descendant_groups(proc.pid)
@@ -238,8 +234,6 @@ def stop_agent(proc, grace: float):
     except subprocess.TimeoutExpired:
         pass
     finally:
-        # A stalled parent cannot perform its normal cleanup. Only signal captured
-        # child groups whose member identity is still present, never our own group.
         for child, group in children.items():
             try:
                 if os.getpgid(child) == group and group != os.getpgrp():
@@ -255,8 +249,6 @@ def stop_agent(proc, grace: float):
 
 
 def build_prompt(task: dict) -> str:
-    # Fence the issue text so a problem statement that contains headings or
-    # unclosed code fences cannot absorb the instructions that follow.
     statement = task["problem_statement"]
     fence = "`" * max(3, max((len(run) for run in statement.split() if set(run) == {"`"}), default=0) + 1)
     return f"""Fix the following issue in the {task['repo']} repository.
@@ -309,7 +301,6 @@ def generate_patch(meldra: Path, task: dict, log_dir: Path,
                 "agent_error": f"checkout failed: {stderr}".strip(),
             }
 
-        # File-backed output cannot hang on a pipe inherited by a surviving child.
         with (log_dir / f"{task['instance_id']}.log").open("w", encoding="utf-8") as log:
             proc = subprocess.Popen(
                 [str(meldra), "--mode", "build", "--permissions", "workspace-edit",
@@ -328,9 +319,6 @@ def generate_patch(meldra: Path, task: dict, log_dir: Path,
             if proc.returncode != 0 and not error:
                 error = f"meldra exit {proc.returncode}"
 
-        # Stage everything so files created by the agent are part of the patch.
-        # Failed attempts retain their partial diff as evidence, but generate_patches
-        # excludes them from predictions. Successful empty patches are valid attempts.
         try:
             git(workspace, "add", "-A")
             patch = git(workspace, "diff", "--cached")
@@ -338,7 +326,6 @@ def generate_patch(meldra: Path, task: dict, log_dir: Path,
             patch = ""
             error = f"{error} (diff failed: {exc})".strip()
 
-        # Mark failed attempts with no changes explicitly for troubleshooting.
         if error and not patch.strip():
             patch = ""
             error = f"{error} (no changes)"
@@ -438,7 +425,6 @@ def main():
               f"--predictions_path {predictions_path} --run_id {args.run_id}")
         return
 
-    # The harness writes logs/ and its report into the current directory.
     subprocess.run(
         [
             sys.executable, "-m", "swebench.harness.run_evaluation",

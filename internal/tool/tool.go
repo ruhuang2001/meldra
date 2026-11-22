@@ -1,5 +1,3 @@
-// Package tool defines the execution contract shared by built-in and future
-// external tools. It has no dependency on a model SDK or user interface.
 package tool
 
 import (
@@ -9,18 +7,14 @@ import (
 	"time"
 )
 
-// Definition is immutable after registration. Context carries cancellation and
-// deadlines for this invocation rather than for the lifetime of a workspace.
 type Definition struct {
 	Name        string
 	Description string
 	Parameters  map[string]any
-	NonStrict   bool // External schemas retain their optional properties.
+	NonStrict   bool
 	Function    func(context.Context, json.RawMessage) (string, error)
 }
 
-// Registry validates tool identity once and dispatches calls by exact name.
-// It does not make handlers concurrent-safe or retry side effects.
 type Registry struct{ tools map[string]Definition }
 
 func New(definitions []Definition) (*Registry, error) {
@@ -51,8 +45,6 @@ func (r *Registry) Execute(ctx context.Context, name string, input json.RawMessa
 	return definition.Function(ctx, input)
 }
 
-// Invoke is the structured runtime contract. Execute remains the text adapter
-// for callers that do not need execution metadata.
 func (r *Registry) Invoke(ctx context.Context, name string, input json.RawMessage) (Result, error) {
 	started := time.Now()
 	observation := &Observation{}

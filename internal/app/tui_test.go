@@ -305,7 +305,6 @@ func TestTUIIgnoresStaleReadyAfterSubmit(t *testing.T) {
 		t.Fatalf("submitted state = busy %v, pending %v, status %q", model.busy, model.submissionPending, model.status)
 	}
 
-	// A Ready emitted during startup may be delivered after the Enter key.
 	model.applyEvent(UIEvent{Kind: UIEventStatus, Text: "Ready"})
 	if !model.busy || !model.submissionPending || model.status != "Sending" {
 		t.Fatalf("stale Ready reopened composer: busy %v, pending %v, status %q", model.busy, model.submissionPending, model.status)

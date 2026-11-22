@@ -52,7 +52,6 @@ func TestRunStopPreservesUnresolvedProcessCleanup(t *testing.T) {
 		return "stop owned work", reads == 1
 	}
 	a.backend = inferenceFunc(func(ctx context.Context, _ provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
-		// A reaped process with uncertain effects must still block continuation.
 		done := make(chan struct{})
 		close(done)
 		m := a.workspace.processes

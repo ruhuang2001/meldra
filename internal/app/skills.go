@@ -48,8 +48,6 @@ type skillCatalog struct {
 
 const skillWarningsFile = "skill-warnings.json"
 
-// Discovery is a process-lifetime snapshot. Bodies and resources are read only
-// when requested; restarting or resuming discovers newly installed skills.
 func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths) (*skillCatalog, error) {
 	catalog := &skillCatalog{Skills: []skill{}, Warnings: []string{}, workspace: workspace}
 	home, err := os.UserHomeDir()
@@ -105,7 +103,6 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 			catalog.warn(directory, readErr)
 			continue
 		}
-		// Refuse an overfull root instead of selecting a filesystem-order subset.
 		if len(children) > maxSkillEntries-entries {
 			catalog.warn(directory, fmt.Errorf("discovery limit of %d entries exceeded; this and later roots skipped", maxSkillEntries))
 			break
@@ -230,8 +227,6 @@ func skillDisplayLine(text string) string {
 	return strings.ReplaceAll(sanitizeTerminalText(text), "\n", " ")
 }
 
-// The sole state-directory exception is MELDRA_HOME/skills. Apply protections
-// to every source, even when a user package sits outside the workspace.
 func (c *skillCatalog) checkPath(path string) error {
 	nativeRoot := filepath.Join(c.meldraHome, "skills")
 	native := c.meldraHome != "" && within(nativeRoot, path)
@@ -239,8 +234,6 @@ func (c *skillCatalog) checkPath(path string) error {
 		if !withinFold(protected, path) {
 			continue
 		}
-		// A protection enclosing MELDRA_HOME may contain its native skills;
-		// protection nested inside that root still blocks the resource.
 		if native && withinFold(protected, nativeRoot) {
 			continue
 		}
@@ -249,7 +242,6 @@ func (c *skillCatalog) checkPath(path string) error {
 	return nil
 }
 
-// Only configured home prefixes may follow symlinks; package paths never do.
 func canonicalSkillHome(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -293,8 +285,6 @@ func parseSkill(contents []byte, path string) (skill, error) {
 	return skill{Name: name.Value, Description: description.Value, Path: path}, nil
 }
 
-// Open each component beneath an already-open parent. A swap cannot redirect
-// a skill root to a symlink target outside that parent.
 func openSkillDirectory(path string) (*os.Root, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

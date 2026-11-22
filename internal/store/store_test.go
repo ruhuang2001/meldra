@@ -570,7 +570,6 @@ func TestProcessLockContentionAndCrashRelease(t *testing.T) {
 		t.Fatalf("SIGKILL leaked lock: %v", err)
 	}
 	defer l.Close()
-	// Inspecting the stale run never mutates it; explicit recovery is required.
 	r, err := f.s.GetRun(t.Context(), f.run.ID)
 	if err != nil || r.Status != task.RunRunning {
 		t.Fatalf("read recovered automatically: %+v %v", r, err)

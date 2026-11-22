@@ -32,8 +32,6 @@ func (a *Agent) runInference(ctx context.Context, input provider.Input, previous
 		instructions += a.skills.instructions()
 	}
 	if a.session != nil && a.session.ContextCompaction != nil {
-		// Summary text is quoted historical data even though it is carried by
-		// the developer instruction field. It cannot override current intent.
 		instructions += compactedSummaryInstruction(a.session.Summary)
 	}
 	if a.projectContext != nil {

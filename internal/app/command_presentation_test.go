@@ -185,8 +185,6 @@ func TestUnreadLiveOutputDoesNotRetainRunLeaseAfterCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("process did not launch")
 	}
-	// The child produces more output than a pipe can retain. The reader stays
-	// open and deliberately unread, modeling a stalled consumer rather than EPIPE.
 	time.Sleep(100 * time.Millisecond)
 	begin := time.Now()
 	cancel()
@@ -441,8 +439,6 @@ func TestOutputRelayBoundsCleanupWithoutDrainingCallerPipe(t *testing.T) {
 	}
 	defer reader.Close()
 	defer output.Close()
-	// Inherited stdout is normally blocking. Fd makes that test condition
-	// explicit before the relay sees the descriptor.
 	fd := output.Fd()
 	before, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFL, 0)
 	if errno != 0 {

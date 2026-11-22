@@ -27,9 +27,6 @@ type recoveryCheckpoint struct {
 
 const recoveryEditArguments = `{"path":"evidence.txt","old_str":"before","new_str":"after"}`
 
-// This child deliberately never defers execution cleanup. Its parent kills it
-// after a durable marker so every case exercises real OS/process loss, rather
-// than treating an ordinary close as proof of crash recovery.
 func TestTaskRecoveryCrashProcessHelper(t *testing.T) {
 	stage := os.Getenv("MELDRA_RECOVERY_FAULT_STAGE")
 	if stage == "" {
@@ -304,8 +301,6 @@ func TestTaskRecoverySessionMutationRemainsUnknown(t *testing.T) {
 			if err := e.close(); err != nil {
 				t.Fatal(err)
 			}
-			// Metadata saved before tool-result commit is not sufficient evidence
-			// to claim that arbitrary prior session mutations all succeeded.
 			restored := recoveryExecution(t, paths, e.workspace.root, e.session.ID)
 			if err := restored.begin(t.Context(), "continue"); !errors.Is(err, task.ErrUnresolved) {
 				t.Fatalf("session outcome guessed: %v", err)

@@ -34,9 +34,6 @@ func toolFollowUpInput(output []responses.ResponseOutputItemUnion, toolResults r
 const compactedToolOutput = "[older tool output omitted to fit the custom-provider context budget]"
 
 func boundCustomTurnInput(input responses.ResponseInputParam, limit int) (responses.ResponseInputParam, int, bool, error) {
-	// A JSON array's size is the sum of its encoded items, separators and
-	// brackets. Measure each item once; repeatedly marshaling the entire array
-	// after replacing each old output makes a long conversation quadratic.
 	size := 2 + max(0, len(input)-1)
 	if input == nil {
 		size = len("null")
@@ -81,8 +78,6 @@ func boundCustomTurnInput(input responses.ResponseInputParam, limit int) (respon
 }
 
 func compactFunctionOutput(item responses.ResponseInputItemUnionParam) (responses.ResponseInputItemUnionParam, error) {
-	// Copy the output before changing its body: IDs, status and caller metadata
-	// are part of the replay protocol, and callers may still retain the input.
 	output := *item.OfFunctionCallOutput
 	output.Output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.String(compactedToolOutput)}
 	replacement := item
@@ -93,8 +88,6 @@ func compactFunctionOutput(item responses.ResponseInputItemUnionParam) (response
 		return replacement, nil
 	}
 
-	// SDK overrides/extra fields can take precedence over typed fields. Retain
-	// their actual wire representation while replacing only the output body.
 	encoded, err := json.Marshal(item)
 	if err != nil {
 		return replacement, err
@@ -111,15 +104,10 @@ func compactFunctionOutput(item responses.ResponseInputItemUnionParam) (response
 	if err != nil {
 		return replacement, err
 	}
-	// Override the copied output rather than the union: the SDK gives a present
-	// union variant precedence over the union's own override. Keeping the typed
-	// variant also lets later checks identify an already compacted output.
 	param.SetJSON(encoded, &output)
 	return replacement, nil
 }
 
-// Item carries opaque provider continuation data. The runner may retain and
-// concatenate items, but only the provider interprets their wire representation.
 type Item struct {
 	value responses.ResponseInputItemUnionParam
 }
@@ -141,15 +129,11 @@ func MessageItems(role, text string) Items {
 	return Items{{value: responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRole(role))}}
 }
 
-// ImageContent represents an image input for multimodal requests.
 type ImageContent struct {
-	URL    string // https://, http://, or a data: URL carrying base64 image data
-	Detail string // "low", "high", "auto", or "original"; empty selects "auto"
+	URL    string
+	Detail string
 }
 
-// UserItemsWithImages creates a user message containing text and images.
-// It fails locally for images without a URL and for messages with no content
-// instead of emitting a request the Responses API cannot interpret.
 func UserItemsWithImages(text string, images []ImageContent) (Items, error) {
 	content := make(responses.ResponseInputMessageContentListParam, 0, 1+len(images))
 	if text != "" {
@@ -173,8 +157,6 @@ func UserItemsWithImages(text string, images []ImageContent) (Items, error) {
 	return Items{{value: responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser)}}, nil
 }
 
-// imageDetail maps an optional detail level to the API-required enum, defaulting
-// to "auto" as documented by responses.ResponseInputImageParam.
 func imageDetail(detail string) (responses.ResponseInputImageDetail, error) {
 	switch responses.ResponseInputImageDetail(detail) {
 	case "":
@@ -219,8 +201,6 @@ func FollowUp(output []OutputItem, results Items) (Items, error) {
 	return domainItems(followUp), err
 }
 
-// OutputItem exposes only the fields the tool dispatcher needs. All provider
-// metadata needed for replay is retained privately without leaking SDK types.
 type OutputItem struct {
 	Type      string
 	CallID    string
@@ -242,7 +222,6 @@ func (item *OutputItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// Response is the completed model result consumed by the application.
 type Response struct {
 	ID               string
 	Status           string

@@ -11,8 +11,6 @@ import (
 	"meldra/internal/task"
 )
 
-// Device and inode identify the directory independently of case, symlink, or
-// mount-path spelling. Path hashes alone do not exclude aliases on APFS.
 func directoryIdentity(path string) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -29,7 +27,6 @@ func directoryIdentity(path string) (string, error) {
 }
 
 func lockFile(path string) (*os.File, error) {
-	// O_NOFOLLOW closes the final-component symlink race for lock inodes.
 	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return nil, err

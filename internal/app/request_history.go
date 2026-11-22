@@ -10,8 +10,6 @@ import (
 	"meldra/internal/task"
 )
 
-// recordedUserRequest keeps event previews bounded while preserving the full
-// original request in a digest-checked artifact when the snapshot would truncate it.
 type recordedUserRequest struct {
 	Request         string              `json:"request"`
 	ControlID       string              `json:"control_id"`

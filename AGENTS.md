@@ -25,6 +25,10 @@ Read affected code and tests before editing, and check the authoritative docs:
 
 Modify the existing owner of a behavior rather than adding parallel paths. Keep execution semantics consistent across CLI, TUI, and MCP.
 
+Keep ordinary comments out of source and configuration. Record non-obvious
+choices in `docs/adr/`. Use `/delete-comment` to repeat the audit and
+`make comment-lint` to check the [comment policy](docs/development.md#source-comments).
+
 ## Runtime Invariants
 
 - **Serial execution**: Never parallelize turns or tool calls across a shared `Agent` or `Workspace`.

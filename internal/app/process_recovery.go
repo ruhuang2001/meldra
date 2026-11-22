@@ -39,8 +39,6 @@ func (e *taskExecution) processRecoveryContext(ctx context.Context, taskID strin
 		}
 		for i, artifact := range p.Artifacts {
 			fmt.Fprintf(&item, "Log artifact name=%q sha256=%s bytes=%d\n", truncateUTF8(artifact.Name, 128, " [truncated]"), artifact.SHA256, artifact.Size)
-			// One verified artifact excerpt per process is enough for recovery;
-			// the full retained log remains available in the local artifact store.
 			if i == 0 {
 				data, readErr := e.db.ReadArtifact(ctx, artifact)
 				if readErr != nil {

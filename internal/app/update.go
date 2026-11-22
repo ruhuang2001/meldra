@@ -42,7 +42,6 @@ func numericVersionID(id string) bool {
 	return id != "" && strings.Trim(id, "0123456789") == ""
 }
 
-// compareSemver compares validated versions without integer overflow.
 func compareSemver(current, latest string) int {
 	a, b := parseUpdateVersion(current), parseUpdateVersion(latest)
 	for i := 1; i <= 3; i++ {
@@ -272,8 +271,6 @@ func unpackUpdate(archive []byte) ([]byte, error) {
 		return nil, err
 	}
 	defer gz.Close()
-	// Bound total expansion as well as the extracted binary. No archive path
-	// is ever used as a filesystem destination.
 	limited := &io.LimitedReader{R: gz, N: 2*updateLimit + 1}
 	tr := tar.NewReader(limited)
 	var binary []byte
@@ -296,7 +293,6 @@ func unpackUpdate(archive []byte) ([]byte, error) {
 			return nil, err
 		}
 	}
-	// Read the gzip trailer too: tar EOF alone does not validate gzip CRC.
 	if _, err := io.Copy(io.Discard, limited); err != nil {
 		return nil, err
 	}
@@ -346,8 +342,6 @@ type updateCheckState struct {
 	Latest    string    `json:"latest_version"`
 }
 
-// startUpdateCheck never waits for the network. Call only after interactive
-// output is ready, and cancel ctx before closing its event sink.
 func (u releaseUpdater) startUpdateCheck(ctx context.Context, paths ConfigPaths, current string, sink UIEventSink) {
 	if os.Getenv("MELDRA_DISABLE_UPDATE_CHECK") == "1" || parseUpdateVersion(current) == nil {
 		return

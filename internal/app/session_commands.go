@@ -21,7 +21,6 @@ func validModelName(model string) bool {
 	return len(model) <= 256 && utf8.ValidString(model) && strings.TrimSpace(model) != "" && !strings.ContainsFunc(model, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) })
 }
 
-// Idle metadata changes share execution leases, but never start or recover work.
 func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (err error) {
 	if !a.turnMu.TryLock() {
 		return ErrAgentBusy
@@ -53,7 +52,7 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		return nil
 	}
 	e := a.execution
-	e.requestSequence = 0 // Idle commands have no incoming turn to exclude.
+	e.requestSequence = 0
 	sourceID := a.session.ID
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
@@ -67,7 +66,6 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 	_, lookupErr := e.db.GetTask(ctx, sourceID)
 	var history *compactionArtifact
 	if lookupErr == nil {
-		// Use the same unresolved-evidence guard as compaction, without inference.
 		history, err = a.compactionHistory(ctx, len(a.session.Messages))
 		if err != nil {
 			if !errors.Is(err, errCompactionUnresolved) {
@@ -106,7 +104,6 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 			return nil
 		}
 		next.Model = value
-		// Never carry a different model's token calibration or window forward.
 		next.ModelContextWindow = 0
 		if errors.Is(lookupErr, task.ErrNotFound) {
 			if _, err := e.db.EnsureTask(ctx, task.Task{ID: sourceID, SessionID: sourceID, Workspace: next.Workspace, Goal: "Interactive session"}); err != nil {
@@ -139,7 +136,6 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 			next.Messages[i].RequestSequence = 0
 			next.Messages[i].ControlID = ""
 		}
-		// Retain summaries and attachment references, not the parent's ledger IDs.
 		next.ContextCompaction = nil
 		next.CompactedThroughSequence = 0
 		next.taskSnapshot = true
@@ -150,7 +146,7 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 	if err := a.store.Save(&next); err != nil {
 		return &persistenceError{err}
 	}
-	*a.session = next // Session tools and the CLI retain this pointer.
+	*a.session = next
 	a.previousResponseID = ""
 	a.observedInputTokens, a.observedContextBytes = 0, 0
 	if kind == "model" {
@@ -167,7 +163,6 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 		a.emitNotice(fmt.Sprintf("Forked session %s from %s. Workspace files are shared, not copied or rewound.", next.ID, next.ParentSessionID))
 	}
 	data, _ := json.Marshal(map[string]string{"model": a.modelName(), "session_id": next.ID})
-	// The old lease remains bound to the source task until this call returns.
 	if _, lookupErr := e.db.GetTask(ctx, sourceID); lookupErr == nil {
 		return e.db.AppendEvent(ctx, e.lease, task.Event{TaskID: sourceID, Kind: "session." + kind, Data: data})
 	} else if !errors.Is(lookupErr, task.ErrNotFound) {

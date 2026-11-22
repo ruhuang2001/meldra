@@ -119,7 +119,6 @@ func TestWorkspaceToolsUseInvocationContextWithoutLeakingIt(t *testing.T) {
 	}
 }
 
-// Keep SDK adaptation out of application logic as new features are added.
 func TestApplicationDoesNotImportProviderSDK(t *testing.T) {
 	entries, err := os.ReadDir(".")
 	if err != nil {

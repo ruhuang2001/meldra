@@ -16,6 +16,34 @@ make check-local-ci  # full make check in a temporary copy of the index
 
 The test suite must maintain at least 75% statement coverage.
 
+### Source comments
+
+**Unreleased:** Run `make comment-lint` to check first-party Go, Python, shell
+scripts and hooks, Make, Go modules, YAML workflows, TOML, JavaScript, HTML,
+CSS and Git ignore rules. The scanner includes tracked and non-ignored
+untracked sources. Markdown, Python docstrings and literal fixture data lie
+outside the count. Interpreter lines, Go build constraints and module
+dependency markers have toolchain meaning and are retained.
+
+The first run creates a virtual environment with pinned parsers under
+`.artifacts/comment-lint-venv` using Python 3.10 or newer. Use
+`make -s comment-inventory` for JSON with original line numbers and
+standalone line counts. Each legacy allowance in
+`scripts/source-comments-baseline.json` identifies one occurrence by file and
+exact comment text. Remove its entry when you delete the comment. The initial
+cleanup reached an empty baseline. PR checks compare it with the base commit
+and reject new allowances. Use `make comment-lint COMMENT_BASE=origin/main`
+to run that comparison locally.
+
+Run `/delete-comment [paths]` in Meldra to repeat the audit. The command loads
+the repository's `$delete-comment` skill. The original classifications and
+decision records are in the [comment audit](verification/comment-audit.md).
+`make comment-lint-e2e` verifies the rule with disposable repositories and
+writes `.artifacts/checks/comment-lint.json`. Both local check targets and CI
+run this gate.
+
+### Local Git hooks
+
 The Git hooks run quick staged checks before each commit and full local checks
 before pushing. The push check uses the exact committed revisions being pushed;
 the manual `make check-local-ci` command uses staged contents, so stage new or
