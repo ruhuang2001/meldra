@@ -19,6 +19,7 @@ Start expensive suites first within the selection for the current mode and sourc
 - For terminal teardown, verify enhanced input was enabled before accepting the reset sequence. The TUI exposes its mode in the composer badge. Line mode needs a transcript notice because it has no persistent badge.
 - Keep stdin open when reproducing cancellation or teardown so EOF cannot satisfy the test. Pass an explicit prompt when testing the unsupported-device guard. Check for leaked processes before fixture cleanup removes them.
 - OAuth cancellation tests keep the process alive long enough to detect an extra token refresh. Rotate the fixture’s token identity to simulate server-side revocation. Retain grant types and request counts as evidence while keeping credentials and authorization codes private.
+- Browser repair tests keep acceptance code outside the model’s workspace. Vary products and quantities to expose fixed totals, and capture the phone viewport at its CSS width to preserve clipping evidence. Retain failed and interrupted attempts even when a secondary audit fails. The visual fixture embeds its challenge in an image so the screenshot provides the answer. Live inference reads the configured key and keeps credentials and request headers out of logs.
 - Web tests probe the overlay with a harmless version request before sending traffic. Set the build working directory to its canonical spelling because Go can honor a PWD alias while overlay entries use canonical paths. Exercise both dotted TOML keys and the equivalent table form.
 
 ## Benchmark evidence

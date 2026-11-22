@@ -1,0 +1,36 @@
+:root { color-scheme: light; font-family: 'Avenir Next', Avenir, sans-serif; color: #173b46; background: #edf4f4; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header, main, footer { width: min(1100px, calc(100% - 48px)); margin: auto; }
+header { display: flex; justify-content: space-between; align-items: center; padding: 28px 0; border-bottom: 1px solid #b5cdcf; }
+.brand { color: inherit; font-size: 25px; font-weight: 750; text-decoration: none; letter-spacing: -1px; }
+.brand span { display: block; font-size: 9px; letter-spacing: 2px; margin-top: 3px; }
+.location, .eyebrow { font-size: 11px; font-weight: 650; letter-spacing: 1.4px; }
+main { padding: 38px 0 30px; }
+h1 { font-size: clamp(38px, 5vw, 58px); letter-spacing: -2.3px; line-height: 1.03; margin: 15px 0; }
+.intro { color: #42626b; margin-bottom: 32px; line-height: 1.6; max-width: 540px; }
+h2 { font-size: 24px; letter-spacing: -.6px; margin: 9px 0 16px; }
+.booking-layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 40px; min-width: 820px; align-items: start; }
+.workshop > p { line-height: 1.6; color: #42626b; }
+.illustration { background: #cadfdf; border: 1px solid #b5cdcf; height: 220px; position: relative; overflow: hidden; }
+.vase { position: absolute; width: 90px; height: 136px; border-radius: 30% 30% 16% 16%; background: #325e6d; top: 32px; left: 24%; box-shadow: inset -15px 0 #284f5c; }
+.bowl { position: absolute; width: 144px; height: 65px; border-radius: 8px 8px 80px 80px; background: #bd7152; top: 103px; left: 50%; box-shadow: inset 0 9px #d59270; }
+.illustration span { position: absolute; bottom: 14px; left: 20px; font-size: 12px; font-style: italic; }
+dl { margin: 24px 0; display: flex; gap: 34px; font-size: 13px; }
+dt { color: #42626b; margin-bottom: 6px; }
+dd { margin: 0; font-weight: 650; }
+.booking-card { padding: 28px; background: #fff; border: 1px solid #b5cdcf; box-shadow: 5px 5px 0 #dce9e9; }
+label { display: block; font-size: 12px; font-weight: 650; margin: 14px 0 7px; }
+input, select, button { font: inherit; width: 100%; }
+input, select { padding: 11px; border: 1px solid #b5cdcf; border-radius: 3px; background: white; color: #173b46; min-width: 0; }
+:focus-visible { outline: 3px solid #bb7552; outline-offset: 2px; }
+.fields { display: grid; grid-template-columns: 80px 1fr; gap: 14px; }
+.total { display: flex; justify-content: space-between; padding: 20px 0; font-size: 14px; }
+output { font-size: 22px; font-weight: 750; }
+button { display: flex; justify-content: space-between; border: 0; border-radius: 3px; padding: 15px; background: #1c5262; color: white; font-weight: 650; cursor: pointer; }
+button:hover { background: #123e4b; }
+button:disabled { opacity: .65; cursor: wait; }
+#status { font-size: 12px; line-height: 1.5; min-height: 36px; margin-bottom: 0; }
+#status[data-state="error"] { color: #a12c2c; }
+#status[data-state="success"] { color: #216147; }
+footer { border-top: 1px solid #b5cdcf; padding: 20px 0; font-size: 11px; color: #42626b; }

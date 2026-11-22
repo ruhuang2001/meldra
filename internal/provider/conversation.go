@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
+	"meldra/internal/tool"
 )
 
 func toolFollowUpInput(output []responses.ResponseOutputItemUnion, toolResults responses.ResponseInputParam) (responses.ResponseInputParam, error) {
@@ -171,6 +173,25 @@ func imageDetail(detail string) (responses.ResponseInputImageDetail, error) {
 func ToolOutput(callID, output string) Item {
 	return Item{value: functionCallOutput(callID, output)}
 }
+
+func ToolContent(callID string, content []tool.ContentPart) Item {
+	parts := make(responses.ResponseFunctionCallOutputItemListParam, 0, len(content))
+	for _, part := range content {
+		if part.Image != nil {
+			parts = append(parts, responses.ResponseFunctionCallOutputItemUnionParam{
+				OfInputImage: &responses.ResponseInputImageContentParam{
+					ImageURL: openai.String("data:" + part.Image.MIMEType + ";base64," + base64.StdEncoding.EncodeToString(part.Image.Data)),
+				},
+			})
+		} else {
+			parts = append(parts, responses.ResponseFunctionCallOutputItemParamOfInputText(part.Text))
+		}
+	}
+	item := functionCallOutput(callID, "")
+	item.OfFunctionCallOutput.Output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: parts}
+	return Item{value: item}
+}
+
 func ItemsInput(items Items) Input {
 	return Input{value: responses.ResponseNewParamsInputUnion{OfInputItemList: wireItems(items)}}
 }

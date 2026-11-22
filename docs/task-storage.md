@@ -59,6 +59,13 @@ having no effects. See [Web tools](web-tools.md) for backend disclosure and limi
 | Process | Run-owned command identity, lifecycle, effects, exit evidence and output artifacts |
 | ArtifactRef | Content digest, name and length of an immutable output blob |
 
+**Unreleased:** image-valued MCP results add an optional `content_manifest` field
+to the tool result JSON (no SQL schema change). It names the required image/text
+manifest artifact even if saving artifacts failed, so replay cannot silently
+mistake incomplete image evidence for a text-only result. Existing records with
+no manifest retain their text behavior. Older binaries do not support replaying
+these image results; use the producing version or newer when continuing them.
+
 Task status is `queued`, `running`, `waiting_approval`, `completed`, `failed`,
 `cancelled`, or `interrupted`. `completed` means the model finished its turn;
 it does not prove that a patch passes tests. Verification remains separate

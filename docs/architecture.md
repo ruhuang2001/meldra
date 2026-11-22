@@ -35,6 +35,11 @@ Production application code does not import the model SDK directly. Boundary
 checks and fake-provider tests protect this separation; HTTP/SSE integration
 tests exercise the actual provider adapter.
 
+**Unreleased:** `internal/tool` also defines ordered text/image result content
+without SDK types. The provider consumes this contract to encode Responses
+function outputs. The app validates MCP images and persists their binary
+artifacts before inference; the store still depends only on `internal/task`.
+
 ## Agent and application
 
 `Agent.Run` reads interactive requests. `Agent.RunTurn(ctx, input)` executes one
@@ -100,6 +105,14 @@ to Build connects configured MCP servers before continuing. Managed process tool
 remain private to agent Runs because an `mcp serve` invocation finishes its own
 Run. External tool capacity is derived from the actual built-in catalog under the
 provider's limit.
+
+**Unreleased:** a private per-server `allow_during_process` list permits exact
+advertised MCP tools during a managed command. The invocation permit carries
+this grant; process exclusion still blocks built-in writes and commands.
+Unknown effects, persistence failures, and stale policy generations remain
+blocking, including at post-approval dispatch. The list is part of the MCP
+connection fingerprint. This grants trusted external code overlapping access
+to the running app, not read-only semantics or parallel Agent/Workspace calls.
 
 ## Tools, approvals and execution records
 

@@ -41,7 +41,170 @@ retained for compatibility even though it is deprecated in the `2026-07-28` spec
 - Calls that disconnect, time out, or cancel after dispatch are recorded as
   `unknown` and are never retried automatically.
 - Complete result JSON is retained as an artifact up to 16 MiB; model-visible text
-  is capped at 256 KiB.
+  is capped at 256 KiB. Inline images use the separate artifacts described below.
+
+## Inline tool images (unreleased)
+
+External tool results can contain ordered text and inline PNG/JPEG images. Meldra
+validates actual image bytes and sends accepted images as `input_image` parts
+inside their original Responses `function_call_output`, preserving `call_id`.
+It does not fabricate a user message or send the image as a JSON/base64 text blob.
+The configured model and gateway must support image-valued function outputs;
+provider errors remain visible, without a text-only retry that pretends to see images.
+
+Each image is limited to 1 MiB and 16 million decoded pixels; one tool result
+allows at most 32 images and 2 MiB of image bytes. Unsupported, invalid, or
+oversized images become explicit omission notices and mark the result truncated.
+Text truncation does not discard valid images. A tool's `isError` remains an
+error even when its result contains an image. Text-only tool results keep their
+existing representation. Resource links and server-returned file paths are never
+opened automatically; this feature handles inline tool images, not binary resources
+or multimodal prompts/sampling.
+
+Images are saved as private, digest-checked binary task artifacts before the next
+inference. The text ledger and `mcp-result.json` contain artifact metadata rather
+than image base64; `mcp-content-v1.json` retains ordered text and image references.
+Duplicate provider call IDs restore that evidence without calling the server
+again. Missing or corrupt evidence stops execution, including when the original
+save exhausted storage. The known external tool outcome remains recorded.
+Screenshots may contain secrets: private file permissions are not encryption.
+
+Phase 1 does **not** restore a screenshot gallery into ordinary new turns or
+restart/resume prompts. Custom-provider context trimming may explicitly omit
+older image results while retaining their artifacts. Capture again when checking
+current page state. Terminal output and stream JSON do not render images.
+
+### Chrome DevTools MCP
+
+Use an existing browser server; Meldra has no browser engine or special browser
+approval bypass. A tested configuration uses Chrome DevTools MCP 1.13.0, Node.js
+and an installed Chrome. Add it to your private `mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "chrome": {
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@1.13.0", "--headless", "--isolated",
+               "--no-usage-statistics", "--no-performance-crux",
+               "--viewport=1280x1000", "--screenshot-format=png",
+               "--no-file-navigations"],
+      "allow_during_process": [
+        "list_pages", "new_page", "select_page", "navigate_page", "close_page",
+        "resize_page", "take_snapshot", "take_screenshot", "fill", "fill_form",
+        "click", "press_key", "type_text", "wait_for", "evaluate_script",
+        "list_console_messages", "get_console_message",
+        "list_network_requests", "get_network_request"
+      ],
+      "startup_timeout_sec": 60,
+      "tool_timeout_sec": 60
+    }
+  }
+}
+```
+
+This downloads and executes third-party code as your OS user. The isolated
+browser profile avoids reusing personal login state; it is not an OS sandbox.
+Use Build mode and review external calls normally. Plan restrictions remain
+unchanged. Request `take_screenshot` without `filePath` to receive inline pixels;
+if the server returns only a path, request a smaller viewport/element capture.
+
+Built-in DeepSeek search and web fetch are unchanged. They remain useful for
+finding and reading information without launching a browser; browser MCP adds
+interactive page observation, not a replacement search backend.
+
+### Browser interaction during managed processes (unreleased)
+
+By default, external MCP tools are blocked while a managed command is running.
+The optional `allow_during_process` list grants named tools on that particular
+server permission to run alongside it. This lets Chrome operate a local app
+started with `start_process`, without detaching the app or bypassing task records.
+The list accepts up to 128 exact advertised tool names, each at most 256 bytes;
+wildcards, whitespace, and missing tools are rejected. Names are the server's
+original names, not Meldra's `mcp__...` wire names. Restart the session after editing
+private configuration. Changing the list invalidates pending connection approvals.
+
+This is a **trust grant**, not a read-only classification or an origin/filesystem
+sandbox. Browser clicks and JavaScript can mutate application state, send network
+requests, and invoke server behavior. Neither server annotations nor a tool's name
+grant this permission. Remove any tools you do not trust to use alongside the app;
+the example includes `evaluate_script` for the demo's application-level shutdown.
+
+Normal external-call approval and Build-mode requirements still apply. Unlisted
+tools and other servers remain blocked, and the grant cannot override unresolved
+process effects or persistence failures. Those conditions and the current policy
+are checked again after approval, before dispatch. Tool calls remain serial.
+
+Built-in edits and other commands still cannot run alongside the managed process.
+Use the application's supported graceful shutdown, await a known exit, edit,
+restart, and capture fresh evidence. `stop_process`, cancellation, or a timeout
+may leave unknown effects that require explicit reconciliation; this feature does
+not treat termination as proof of a clean shutdown. Apps without a clean shutdown
+path need that reconciliation, or a separately user-managed server. There is no
+automatic browser workflow, hot-edit exception, or generic shutdown endpoint.
+
+### Reproduce the browser check
+
+The opt-in driver uses a real Meldra binary, real Chrome MCP, and a synthetic
+image-only board. An offline Responses fixture selects navigation and capture,
+then checks the actual wire payload and persisted PNG. It does not require
+browser installation or network inference in ordinary `make check` runs.
+
+```sh
+go build -o /tmp/meldra-images .
+python3 scripts/mcp-browser-check.py --binary /tmp/meldra-images \
+  --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
+  --output .artifacts/checks/browser-new-run
+```
+
+Use the entrypoint from the installed package's `bin.chrome-devtools-mcp` field
+and a fresh output directory. The driver requires Python 3.11+ and accepts
+`--node /absolute/path/to/node`. `--expect-text-only` records the pre-feature
+baseline. With explicit `--live-config /path/to/private/MELDRA_HOME`, the driver
+forwards the final image-bearing request to that configured model, incurs model
+usage, and checks the fresh visual code and shapes in its answer. It does not
+copy credentials into evidence. This verifies visual interpretation, not
+autonomous tool selection or a page-repair workflow. Reports, screenshots,
+provider requests, and task records are retained for inspection.
+
+### Reproduce autonomous page repair (unreleased)
+
+`scripts/mcp-browser-repair.py` runs the configured live model for the entire task
+against a disposable copy of `scripts/fixtures/browser-repair`. Unlike the
+screenshot check above, it does not script model responses or tool selections.
+The intentionally broken demo has a failing reservation action and horizontal
+overflow on phones. The model must reproduce them through Chrome, inspect
+screenshots/console/network, shut down cleanly, repair only the frontend, restart,
+and operate the form again. No real reservations or external sites are involved.
+
+```sh
+go build -o /tmp/meldra-browser .
+python3 -B scripts/mcp-browser-repair.py --binary /tmp/meldra-browser \
+  --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
+  --node /absolute/path/to/node --chrome /absolute/path/to/chrome \
+  --live-config /path/to/private/MELDRA_HOME \
+  --output .artifacts/checks/browser-repair-new-run
+```
+
+This opts in to paid inference and automatic approvals for the disposable task.
+It isolates HOME, state, browser profile, and workspace, but is **not an OS
+sandbox**: the configured model and MCP server are trusted. Credentials go only
+to the Meldra process, not the MCP environment or evidence files. The driver
+requires Python 3.11+, Node.js, Chrome, and the tested MCP package. Its independent
+verifier uses that package's bundled Puppeteer; pass `--puppeteer-module` if the
+installed package has a different layout.
+
+An independent browser, whose assertions are not supplied to the repairing model,
+checks real HTTP results and calculated prices, required/invalid fields and seat
+limits, reload, recovery after an injected HTTP 503, and control geometry at
+320/390/768/1280 pixels. The task audit checks before/after interaction, screenshots,
+console/network observations, artifact digests, clean managed-process exits, and
+the permitted file-change scope. Reports, diffs, screenshots, and task records are
+retained even for failed attempts when available. Use a fresh output directory
+per run; model outcomes vary, so repeat and report failures as well as successes.
+The default model-run bound is 900 seconds (`--timeout`). These opt-in live checks
+are outside ordinary `make check` and do not establish reliability on arbitrary
+sites, providers, or browsers.
 
 ## Configuration
 

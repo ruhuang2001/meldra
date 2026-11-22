@@ -302,6 +302,11 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 				return tool.Result{}, err
 			}
 			result := tool.Result{Status: string(old.Result.Status), Output: old.Result.Output, Error: old.Result.Error, ExitCode: old.Result.ExitCode, Truncated: old.Result.Truncated}
+			result.Content, err = e.restoreMCPContent(ctx, old.Result)
+			if err != nil {
+				e.err = &persistenceError{err}
+				return result, e.err
+			}
 			if result.Error != "" {
 				return result, errors.New(result.Error)
 			}
@@ -332,6 +337,9 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	defer cancel()
 	stored := task.Result{Status: task.ToolStatus(result.Status), Output: capText(result.Output), ExitCode: result.ExitCode, DurationMS: result.DurationMS, Truncated: result.Truncated || len(result.Output) > maxToolOutput, Retryable: result.Retryable, Error: truncateSessionMessage(result.Error)}
 	var artifactFailure error
+	if len(result.Content) > 0 {
+		stored.ContentManifest = mcpContentManifest
+	}
 	saveArtifact := func(name string, content []byte) {
 		if artifactFailure != nil {
 			stored.Truncated = true
@@ -340,7 +348,7 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 		ref, err := e.db.PutArtifact(saveCtx, e.lease, e.session.ID, name, content)
 		if err != nil {
 			stored.Truncated = true
-			if !errors.Is(err, task.ErrArtifactLimit) {
+			if len(result.Content) > 0 || !errors.Is(err, task.ErrArtifactLimit) {
 				artifactFailure = err
 			}
 			return

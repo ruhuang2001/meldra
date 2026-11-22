@@ -32,17 +32,18 @@ var mcpNamePart = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 var mcpEnvName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 type mcpServerConfig struct {
-	OAuth          *mcpOAuthConfig   `json:"oauth,omitempty"`
-	Sampling       bool              `json:"sampling,omitzero"`
-	Command        string            `json:"command,omitempty"`
-	Args           []string          `json:"args,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	EnvVars        []string          `json:"env_vars,omitempty"`
-	URL            string            `json:"url,omitempty"`
-	BearerTokenEnv string            `json:"bearer_token_env,omitempty"`
-	Disabled       bool              `json:"disabled,omitzero"`
-	StartupTimeout *int              `json:"startup_timeout_sec,omitempty"`
-	ToolTimeout    *int              `json:"tool_timeout_sec,omitempty"`
+	OAuth              *mcpOAuthConfig   `json:"oauth,omitempty"`
+	Sampling           bool              `json:"sampling,omitzero"`
+	Command            string            `json:"command,omitempty"`
+	Args               []string          `json:"args,omitempty"`
+	Env                map[string]string `json:"env,omitempty"`
+	EnvVars            []string          `json:"env_vars,omitempty"`
+	URL                string            `json:"url,omitempty"`
+	BearerTokenEnv     string            `json:"bearer_token_env,omitempty"`
+	Disabled           bool              `json:"disabled,omitzero"`
+	StartupTimeout     *int              `json:"startup_timeout_sec,omitempty"`
+	ToolTimeout        *int              `json:"tool_timeout_sec,omitempty"`
+	AllowDuringProcess []string          `json:"allow_during_process,omitempty"`
 }
 
 type mcpConnections struct {
@@ -102,6 +103,14 @@ func loadMCPConfig(paths ConfigPaths) (map[string]mcpServerConfig, error) {
 		}
 		if err := validateMCPOAuthConfig(server); err != nil {
 			return nil, fmt.Errorf("MCP server %s: %w", name, err)
+		}
+		if len(server.AllowDuringProcess) > 128 {
+			return nil, fmt.Errorf("MCP server %s: allow_during_process exceeds 128 tools", name)
+		}
+		for _, toolName := range server.AllowDuringProcess {
+			if toolName == "" || len(toolName) > 256 || strings.ContainsAny(toolName, "*\r\n\t ") {
+				return nil, fmt.Errorf("MCP server %s: allow_during_process requires exact tool names", name)
+			}
 		}
 		for _, seconds := range []*int{server.StartupTimeout, server.ToolTimeout} {
 			if seconds != nil && (*seconds < 1 || *seconds > 300) {
@@ -197,7 +206,11 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 		}
 		catalogBytes = candidateBytes
 		connections.sessions = append(connections.sessions, session)
-		connections.tools = append(connections.tools, workspace.guardedDefinitions(definitions)...)
+		var processTools []string
+		for _, toolName := range server.AllowDuringProcess {
+			processTools = append(processTools, mcpToolName(name, toolName))
+		}
+		connections.tools = append(connections.tools, workspace.guardedDefinitions(definitions, processTools...)...)
 	}
 	return connections, nil
 }
@@ -300,6 +313,11 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			definitions = append(definitions, definition)
 		}
 	}
+	for _, toolName := range config.AllowDuringProcess {
+		if !seen[mcpToolName(name, toolName)] {
+			return fail(fmt.Errorf("allow_during_process names a tool not advertised by this server"))
+		}
+	}
 	definitions = append(definitions, mcpCatalogTools(session, name, config, workspace)...)
 	if workspace.mcpBindings == nil {
 		workspace.mcpBindings = map[string]string{}
@@ -345,6 +363,9 @@ func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, tim
 		return "", fmt.Errorf("MCP arguments do not match the tool schema: %w", err)
 	}
 	detail := fmt.Sprintf("Server: %s\nTool: %s\nArguments: %s\nExternal tools use server privileges and are not confined to this workspace.", server, name, mcpApprovalArguments(input))
+	if permit, _ := w.ctx.Value(operationPermitKey{}).(*operationPermit); permit != nil && permit.allowDuringProcess {
+		detail += "\nPrivate MCP configuration allows this tool during a managed process. This is a trust grant, not a read-only or filesystem isolation guarantee."
+	}
 	if !w.requestApproval(ApprovalRequest{MCPServer: server, MCPBinding: w.mcpBindings[server], Kind: ApprovalCommand, Title: "Call MCP tool " + server + "/" + name, Detail: detail, Prompt: detail + "\nAllow MCP call? [y/N] "}) {
 		return "Declined; MCP tool was not called.", nil
 	}
@@ -365,27 +386,7 @@ func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, tim
 	if len(result.InputRequests) > 0 {
 		return "", fmt.Errorf("MCP input requests are unsupported; inspect external outcome")
 	}
-	data, err := json.Marshal(result)
-	if err != nil {
-		return "", err
-	}
-	truncated := len(data) > maxMCPMessage
-	if truncated {
-		data = []byte(truncateUTF8(string(data), maxMCPMessage, "\n[artifact truncated]"))
-	}
-	output := capText(string(data))
-	tool.Observe(w.ctx, func(o *tool.Observation) {
-		o.Result.Status = tool.Succeeded
-		if result.IsError {
-			o.Result.Status = tool.Failed
-		}
-		o.Result.Truncated = truncated || len(data) > maxToolOutput
-		o.Result.Attachments = []tool.OutputArtifact{{Name: "mcp-result.json", Content: data, Truncated: truncated}}
-	})
-	if result.IsError {
-		return output, fmt.Errorf("MCP tool failed: %s", output)
-	}
-	return output, nil
+	return mcpToolResult(w.ctx, result)
 }
 
 func mcpErrorKind(err error) string {

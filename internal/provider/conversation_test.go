@@ -12,6 +12,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
 	"github.com/openai/openai-go/v3/responses"
+	"meldra/internal/tool"
 )
 
 func TestToolFollowUpInputPreservesReasoningMessagesAndCalls(t *testing.T) {
@@ -339,6 +340,44 @@ func TestToolOutputWireIdentity(t *testing.T) {
 		if got["type"] != "function_call_output" || got["call_id"] != "call_123" || got["output"] != output {
 			t.Fatalf("invalid tool output wire format: %s", encoded)
 		}
+	}
+}
+
+func TestToolContentWireAndCompaction(t *testing.T) {
+	item := ToolContent("screenshot-call", []tool.ContentPart{
+		{Text: "before"},
+		{Image: &tool.OutputImage{MIMEType: "image/png", Data: []byte{1, 2, 3}}},
+		{Text: "after"},
+	})
+	encoded, err := json.Marshal(item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Type   string `json:"type"`
+		CallID string `json:"call_id"`
+		Output []struct {
+			Type, Text string
+			ImageURL   string `json:"image_url"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "function_call_output" || got.CallID != "screenshot-call" || len(got.Output) != 3 || got.Output[0].Text != "before" || got.Output[1].Type != "input_image" || got.Output[1].ImageURL != "data:image/png;base64,AQID" || got.Output[2].Text != "after" {
+		t.Fatalf("wrong multimodal tool result: %s", encoded)
+	}
+	bounded, _, compacted, err := boundCustomTurnInput(wireItems(Items{item}), len(encoded)-10)
+	if err != nil || !compacted {
+		t.Fatalf("compaction: %v, %v", compacted, err)
+	}
+	trimmed, _ := json.Marshal(bounded)
+	if bytes.Contains(trimmed, []byte("AQID")) || !bytes.Contains(trimmed, []byte("screenshot-call")) || !bytes.Contains(trimmed, []byte(compactedToolOutput)) {
+		t.Fatalf("compaction lost identity or retained pixels: %s", trimmed)
+	}
+	unchanged, _ := json.Marshal(item)
+	if !bytes.Equal(encoded, unchanged) {
+		t.Fatal("compaction mutated original image result")
 	}
 }
 

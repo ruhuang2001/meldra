@@ -102,14 +102,15 @@ type ArtifactRef struct {
 }
 
 type Result struct {
-	Status     ToolStatus    `json:"status"`
-	Output     string        `json:"output,omitempty"`
-	ExitCode   *int          `json:"exit_code,omitempty"`
-	DurationMS int64         `json:"duration_ms,omitzero"`
-	Truncated  bool          `json:"truncated,omitzero"`
-	Retryable  bool          `json:"retryable,omitzero"`
-	Error      string        `json:"error,omitempty"`
-	Artifacts  []ArtifactRef `json:"artifacts,omitempty"`
+	ContentManifest string        `json:"content_manifest,omitempty"`
+	Status          ToolStatus    `json:"status"`
+	Output          string        `json:"output,omitempty"`
+	ExitCode        *int          `json:"exit_code,omitempty"`
+	DurationMS      int64         `json:"duration_ms,omitzero"`
+	Truncated       bool          `json:"truncated,omitzero"`
+	Retryable       bool          `json:"retryable,omitzero"`
+	Error           string        `json:"error,omitempty"`
+	Artifacts       []ArtifactRef `json:"artifacts,omitempty"`
 }
 
 type ToolCall struct {

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fieldwork — workshop booking</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header><a href="/" class="brand">Fieldwork<span>MAKER WORKSHOPS</span></a><span class="location">Portland studio</span></header>
+  <main>
+    <p class="eyebrow">SMALL GROUPS · HANDS-ON LEARNING</p>
+    <h1>Make something<br>worth keeping.</h1>
+    <p class="intro">A Saturday at the workbench. Choose your workshop and reserve a place.</p>
+    <div class="booking-layout">
+      <section class="workshop" aria-labelledby="workshop-title">
+        <div class="illustration" aria-hidden="true"><div class="vase"></div><div class="bowl"></div><span>Made by hand.</span></div>
+        <p class="eyebrow">SATURDAYS · 10 AM–1 PM</p>
+        <h2 id="workshop-title">Your next good Saturday</h2>
+        <p>Materials, tools and a patient instructor included. No experience needed.</p>
+        <dl><div><dt>Group size</dt><dd>Up to 8 makers</dd></div><div><dt>Take home</dt><dd>Something you made</dd></div></dl>
+      </section>
+      <section class="booking-card" aria-labelledby="booking-title">
+        <p class="eyebrow">RESERVE YOUR PLACE</p>
+        <h2 id="booking-title">Save a seat at the table.</h2>
+        <form id="booking-form">
+          <label for="workshop">Workshop</label>
+          <select id="workshop" name="workshop"><option value="ceramics">Hand-built ceramics · $48 / person</option><option value="printmaking">Botanical printmaking · $65 / person</option></select>
+          <div class="fields"><div><label for="seats">Seats</label><input id="seats" name="seats" type="number" min="1" max="4" value="1" required></div><div><label for="name">Your name</label><input id="name" name="name" autocomplete="name" required></div></div>
+          <label for="email">Email address</label><input id="email" name="email" type="email" autocomplete="email" required>
+          <div class="total"><span>Total</span><output id="total">$48</output></div>
+          <button id="reserve" type="submit">Reserve seats <span aria-hidden="true">↗</span></button>
+          <p id="status" role="status" aria-live="polite">No payment collected in this demo.</p>
+        </form>
+      </section>
+    </div>
+  </main>
+  <footer>A local browser-verification fixture. No real reservations or payments.</footer>
+</body>
+</html>

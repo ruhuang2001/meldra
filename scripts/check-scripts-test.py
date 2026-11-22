@@ -40,7 +40,8 @@ class VerificationScriptsTest(unittest.TestCase):
 
     def test_optimized_verification_fails_closed(self):
         scripts = sorted((ROOT / 'scripts').glob('*e2e.py'))
-        scripts += [ROOT / 'scripts/mcp-check.py']
+        scripts += [ROOT / 'scripts' / name for name in
+                    ('mcp-check.py', 'mcp-browser-check.py', 'mcp-browser-repair.py')]
         for script in scripts:
             for flags, optimize in [([], '1'), (['-O'], '')]:
                 with self.subTest(script=script.name, flags=flags):

@@ -96,6 +96,13 @@ func (w *Workspace) processWriteConflict(name string, raw json.RawMessage) error
 			return nil
 		}
 	}
+	return w.processConflict(false)
+}
+
+func (w *Workspace) processConflict(allowRunning bool) error {
+	if w.processes == nil {
+		return nil
+	}
 	m := w.processes
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -106,7 +113,7 @@ func (w *Workspace) processWriteConflict(name string, raw json.RawMessage) error
 		if p.record.Effects == "unknown" {
 			return fmt.Errorf("%w: process %s has unknown effects", task.ErrUnresolved, p.record.ID)
 		}
-		if !p.record.State.Terminal() {
+		if !allowRunning && !p.record.State.Terminal() {
 			return fmt.Errorf("%w: process %s may write the workspace; stop or await it before editing or launching another command", ErrWorkspaceBusy, p.record.ID)
 		}
 	}

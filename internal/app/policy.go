@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -114,9 +115,10 @@ func classifyOperation(name string, input json.RawMessage) operationClass {
 }
 
 type operationPermit struct {
-	policy     *RuntimePolicy
-	generation uint64
-	class      operationClass
+	policy             *RuntimePolicy
+	generation         uint64
+	class              operationClass
+	allowDuringProcess bool
 }
 type operationPermitKey struct{}
 type operationGenerationKey struct{}
@@ -154,7 +156,17 @@ func admitOperation(ctx context.Context) error {
 	return nil
 }
 
-func (w *Workspace) admitOperation(ctx context.Context) error { return admitOperation(ctx) }
+func (w *Workspace) admitOperation(ctx context.Context) error {
+	if err := admitOperation(ctx); err != nil {
+		return err
+	}
+	if ctx != nil {
+		if permit, _ := ctx.Value(operationPermitKey{}).(*operationPermit); permit != nil && permit.allowDuringProcess {
+			return w.processConflict(true)
+		}
+	}
+	return nil
+}
 
 func (a *Agent) SetMode(mode ExecutionMode) error {
 	if !a.turnMu.TryLock() {
@@ -164,9 +176,10 @@ func (a *Agent) SetMode(mode ExecutionMode) error {
 	return a.applyMode(mode)
 }
 
-func (w *Workspace) guardedDefinitions(definitions []ToolDefinition) []ToolDefinition {
+func (w *Workspace) guardedDefinitions(definitions []ToolDefinition, processTools ...string) []ToolDefinition {
 	for i := range definitions {
 		definition := definitions[i]
+		allowDuringProcess := slices.Contains(processTools, definition.Name)
 		definitions[i].Function = func(ctx context.Context, input json.RawMessage) (string, error) {
 			if _, ok := ctx.Value(operationPermitKey{}).(*operationPermit); !ok {
 				var err error
@@ -175,12 +188,15 @@ func (w *Workspace) guardedDefinitions(definitions []ToolDefinition) []ToolDefin
 					return "", err
 				}
 			}
+			permit := *ctx.Value(operationPermitKey{}).(*operationPermit)
+			permit.allowDuringProcess = allowDuringProcess
+			ctx = context.WithValue(ctx, operationPermitKey{}, &permit)
 			if err := admitOperation(ctx); err != nil {
 				return "", err
 			}
 			class := classifyOperation(definition.Name, input)
 			if class == operationExecute || class == operationWrite {
-				if err := w.processWriteConflict("run_command", nil); err != nil {
+				if err := w.processConflict(allowDuringProcess); err != nil {
 					return "", err
 				}
 			}
