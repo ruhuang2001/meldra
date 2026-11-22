@@ -20,7 +20,19 @@ type OutputArtifact struct {
 	Truncated bool
 }
 
+type ContentPart struct {
+	Text  string       `json:"text,omitempty"`
+	Image *OutputImage `json:"image,omitempty"`
+}
+
+type OutputImage struct {
+	Name     string `json:"name"`
+	MIMEType string `json:"mime_type"`
+	Data     []byte `json:"-"`
+}
+
 type Result struct {
+	Content     []ContentPart    `json:"-"`
 	Attachments []OutputArtifact `json:"-"`
 	Status      string           `json:"status"`
 	Output      string           `json:"output"`

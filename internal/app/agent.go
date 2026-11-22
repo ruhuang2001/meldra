@@ -763,6 +763,7 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 		}
 
 		var result string
+		var content []tool.ContentPart
 		outcome := ""
 		var durationMS int64
 		var truncated bool
@@ -779,6 +780,7 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 		} else if a.execution != nil {
 			structured, callErr := a.execution.invoke(callContext, a.registry, call.CallID, call.Name, json.RawMessage(call.Arguments))
 			result, err = structured.Output, callErr
+			content = structured.Content
 			outcome = structured.Status
 			durationMS, truncated = structured.DurationMS, structured.Truncated
 			if errors.Is(callErr, errApprovalRequired) {
@@ -792,7 +794,8 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 				return results
 			}
 		} else {
-			result, err = a.executeTool(callContext, call.Name, json.RawMessage(call.Arguments))
+			structured, callErr := a.executeToolResult(callContext, call.Name, json.RawMessage(call.Arguments))
+			result, err, content = structured.Output, callErr, structured.Content
 			if _, ok := errors.AsType[*persistenceError](err); ok {
 				a.toolFailure = err
 				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: tool.Failed, Error: err.Error(), Detail: err.Error()})
@@ -818,7 +821,14 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 			}
 			a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: outcome, DurationMS: durationMS, Truncated: truncated, Error: errorText(err), Detail: detail})
 		}
-		results = append(results, provider.ToolOutput(call.CallID, result))
+		if len(content) > 0 {
+			if err != nil {
+				content = append(content, tool.ContentPart{Text: "Error: " + err.Error()})
+			}
+			results = append(results, provider.ToolContent(call.CallID, content))
+		} else {
+			results = append(results, provider.ToolOutput(call.CallID, result))
+		}
 	}
 	return results
 }
@@ -834,27 +844,32 @@ func countToolCalls(output []provider.OutputItem) int {
 }
 
 func (a *Agent) executeTool(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	result, err := a.executeToolResult(ctx, name, input)
+	return result.Output, err
+}
+
+func (a *Agent) executeToolResult(ctx context.Context, name string, input json.RawMessage) (tool.Result, error) {
 	if a.modeError != nil {
-		return "", a.modeError
+		return tool.Result{}, a.modeError
 	}
 	if _, ok := ctx.Value(operationPermitKey{}).(*operationPermit); !ok {
 		var err error
 		ctx, err = a.policy.invocation(ctx, name, input)
 		if err != nil {
-			return "", err
+			return tool.Result{}, err
 		}
 	}
 	if err := admitOperation(ctx); err != nil {
-		return "", err
+		return tool.Result{}, err
 	}
 	if a.registry == nil {
 		registry, err := tool.New(a.tools)
 		if err != nil {
-			return "", err
+			return tool.Result{}, err
 		}
 		a.registry = registry
 	}
-	return a.registry.Execute(ctx, name, input)
+	return a.registry.Invoke(ctx, name, input)
 }
 
 func (a *Agent) writer() io.Writer {

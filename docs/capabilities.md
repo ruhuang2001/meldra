@@ -238,6 +238,13 @@ other commands and built-in file modifications are blocked. Processes do not
 survive Run completion, terminal closure, or a new chat turn. Managed handles are
 not exposed through `mcp serve`, whose tool requests have separate Runs.
 
+**Unreleased:** private MCP configuration can allow exact external tools to run
+alongside a managed process, for example Chrome interaction with a dev server.
+This is an explicit trust grant, not a read-only or sandbox guarantee. It does
+not allow built-in edits or other commands, bypass approvals or Plan mode, or
+ignore unknown process effects. Shut down the app cleanly and await its exit
+before editing. See [browser interaction](mcp-support.md#browser-interaction-during-managed-processes-unreleased).
+
 An interrupted program can leave unknown effects even when its process is known
 to have stopped. Inspect those effects before resolving the process record:
 

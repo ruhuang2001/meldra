@@ -76,6 +76,13 @@ exact revision you intend to tag. Its expectations are in the
 
 Choose a new output directory for each run.
 
+**Unreleased:** optional [real browser checks](mcp-support.md#reproduce-the-browser-check)
+exercise inline screenshot transport and live-model page repair using installed
+Chrome DevTools MCP. The repair driver uses a disposable broken app and independent
+before/after form, layout, error-recovery, and task-evidence checks. Browser
+installation and paid model inference are not part of `make check`; run these
+explicitly and retain unsuccessful attempts when reporting reliability.
+
 **Unreleased (CI configuration):** Remote CI splits race tests across three Ubuntu
 jobs. Two partition `internal/app` with complementary `-run` / `-skip` filters:
 command/process/output/verification tests and everything else (including new
