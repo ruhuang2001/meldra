@@ -16,6 +16,18 @@ make check-local-ci  # full make check in a temporary copy of the index
 
 The test suite must maintain at least 75% statement coverage.
 
+The store capacity tests use Python 3's `sqlite3` module to prepare files at
+the production 256 MiB limit. The Go store performs recovery and migration
+under the race detector. To measure the cost on a CI runner, run:
+
+```bash
+go test -race -count=1 -v ./internal/store -run 'Test(OpenRecoversWALLargerThanDatabaseLimit|IndexMigrationAtCapacityPreservesReopenability)$'
+```
+
+On one macOS arm64 run, the interrupted writer left a 268,957,752-byte WAL
+(1.67 s test time); the index migration used a 267,329,536-byte database
+(3.10 s). Both timings include fixture preparation.
+
 ### Source comments
 
 **Unreleased:** Run `make comment-lint` to check first-party Go, Python, shell
