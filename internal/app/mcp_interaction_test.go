@@ -74,11 +74,14 @@ func TestMCPFormRejectsNumbersInStringFields(t *testing.T) {
 }
 
 func TestMCPFormNumericValidation(t *testing.T) {
-	w, _ := testWorkspace(t, t.TempDir(), "{\"value\":\"5\"}\n{\"value\":11}\n{\"value\":5}\n", false)
+	w, _ := testWorkspace(t, t.TempDir(), `{"label":"quoted","value":"5"}
+{"label":"over","value":11}
+{"label":"valid","value":5}
+`, false)
 	result, err := w.elicitMCP(t.Context(), "fixture", &mcp.ElicitParams{RequestedSchema: &jsonschema.Schema{
-		Type: "object", Properties: map[string]*jsonschema.Schema{"value": {Type: "number", Minimum: new(0.0), Maximum: new(10.0)}}, Required: []string{"value"},
+		Type: "object", Properties: map[string]*jsonschema.Schema{"label": {Type: "string"}, "value": {Type: "number", Minimum: new(0.0), Maximum: new(10.0)}}, Required: []string{"value", "label"},
 	}})
-	if err != nil || result.Action != "accept" || fmt.Sprint(result.Content["value"]) != "5" {
+	if err != nil || result.Action != "accept" || result.Content["label"] != "valid" || result.Content["value"] != float64(5) {
 		t.Fatalf("numeric type or bounds validation failed: %+v, %v", result, err)
 	}
 }
