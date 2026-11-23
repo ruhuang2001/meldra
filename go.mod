@@ -4,9 +4,9 @@ go 1.26.11
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.1.0
-	github.com/charmbracelet/x/ansi v0.11.9
+	charm.land/bubbletea/v2 v2.1.2
+	charm.land/lipgloss/v2 v2.1.1
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/term v0.2.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/joho/godotenv v1.5.1
