@@ -1,41 +1,19 @@
-//go:build !race
-
 package store
 
 import (
-	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
-func TestLargeWALWriterHelper(t *testing.T) {
-	path := os.Getenv("MELDRA_TEST_LARGE_WAL")
-	if path == "" {
-		return
+func prepareCapacityFixture(t *testing.T, mode, path string, ids ...string) {
+	t.Helper()
+	args := append([]string{"testdata/capacity.py", mode, path, strconv.Itoa(MaxDatabaseBytes)}, ids...)
+	if output, err := exec.CommandContext(t.Context(), "python3", args...).CombinedOutput(); err != nil {
+		t.Fatalf("prepare %s fixture: %s %v", mode, output, err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	db.SetMaxOpenConns(1)
-	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA synchronous=OFF; CREATE TABLE wal_fixture(id INTEGER PRIMARY KEY, payload BLOB); INSERT INTO wal_fixture VALUES(1,zeroblob(1048576))"); err != nil {
-		t.Fatal(err)
-	}
-	for i := 0; i < 300; i++ {
-		if _, err := db.Exec("UPDATE wal_fixture SET payload=randomblob(1048576) WHERE id=1"); err != nil {
-			t.Fatal(err)
-		}
-		info, err := os.Stat(path + "-wal")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if info.Size() > MaxDatabaseBytes {
-			os.Exit(0)
-		}
-	}
-	t.Fatal("fixture did not create an oversized WAL")
 }
 
 func TestOpenRecoversWALLargerThanDatabaseLimit(t *testing.T) {
@@ -47,15 +25,12 @@ func TestOpenRecoversWALLargerThanDatabaseLimit(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	command := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestLargeWALWriterHelper$")
-	command.Env = append(os.Environ(), "MELDRA_TEST_LARGE_WAL="+path)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("writer: %s %v", output, err)
-	}
+	prepareCapacityFixture(t, "wal", path)
 	info, err := os.Stat(path + "-wal")
 	if err != nil || info.Size() <= MaxDatabaseBytes {
 		t.Fatalf("WAL fixture: %v %v", info, err)
 	}
+	t.Logf("WAL fixture: %d bytes", info.Size())
 	recovered, err := Open(s.dir)
 	if err != nil {
 		t.Fatal(err)
