@@ -105,9 +105,11 @@ def main():
         if args.live_config:
             config = tomllib.loads((args.live_config / 'config.toml').read_text())
             key = os.environ.get('OPENAI_API_KEY', '')
-            for line in (args.live_config / 'credentials.env').read_text().splitlines():
-                if line.startswith('OPENAI_API_KEY='):
-                    key = line.partition('=')[2].strip().strip('"').strip("'")
+            credentials = args.live_config / 'credentials.env'
+            if not key and credentials.is_file():
+                for line in credentials.read_text().splitlines():
+                    if line.startswith('OPENAI_API_KEY='):
+                        key = line.partition('=')[2].strip().strip('"').strip("'")
             assert key, 'missing configured model key'
             endpoint = config.get('base_url', 'https://api.openai.com/v1').rstrip('/') + '/responses'
             assert endpoint.startswith('https://'), 'live endpoint must use HTTPS'
