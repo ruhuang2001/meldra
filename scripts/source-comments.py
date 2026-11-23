@@ -176,7 +176,15 @@ def workflow_scalars(source):
             if isinstance(run, yaml.ScalarNode):
                 interpreter = fields.get('shell', shell)
                 name = interpreter.value.split()[0] if interpreter and interpreter.value else 'bash'
-                yield ('python' if name.startswith('python') else 'bash'), run
+                if name in ('sh', 'bash'):
+                    language = 'bash'
+                elif re.fullmatch(r'python(?:[23](?:\.\d+)?)?', name):
+                    language = 'python'
+                elif name == 'node':
+                    language = 'javascript'
+                else:
+                    raise ValueError(f'unsupported workflow shell {name!r} at line {run.start_mark.line + 1}')
+                yield language, run
             action = fields.get('uses')
             script = mapping(fields.get('with')).get('script')
             if (isinstance(script, yaml.ScalarNode) and action

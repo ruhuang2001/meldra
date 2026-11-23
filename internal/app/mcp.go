@@ -20,6 +20,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -108,7 +109,9 @@ func loadMCPConfig(paths ConfigPaths) (map[string]mcpServerConfig, error) {
 			return nil, fmt.Errorf("MCP server %s: allow_during_process exceeds 128 tools", name)
 		}
 		for _, toolName := range server.AllowDuringProcess {
-			if toolName == "" || len(toolName) > 256 || strings.ContainsAny(toolName, "*\r\n\t ") {
+			if toolName == "" || len(toolName) > 256 || strings.IndexFunc(toolName, func(r rune) bool {
+				return r == '*' || unicode.IsSpace(r) || unicode.IsControl(r)
+			}) >= 0 {
 				return nil, fmt.Errorf("MCP server %s: allow_during_process requires exact tool names", name)
 			}
 		}

@@ -37,6 +37,9 @@ FIXTURES = {
       - shell: python
         run: |
           print("# data") # workflow python
+      - shell: node {0}
+        run: |
+          console.log('data'); // node step
       - uses: actions/github-script@v8
         with:
           script: |
@@ -49,7 +52,7 @@ ORDINARY = {
     'Makefile': ['# make variable', '# make recipe'], 'config.toml': ['# TOML note'],
     'site.yaml': ['# YAML note'], 'index.html': ['<!-- markup -->', '// HTML script', '/* HTML style */'],
     'style.css': ['/* first\nsecond */'], 'app.mjs': ['// JS note'],
-    '.github/workflows/probe.yml': ['# workflow shell', '# workflow python', '// workflow JS'],
+    '.github/workflows/probe.yml': ['# workflow shell', '# workflow python', '// node step', '// workflow JS'],
 }
 DIRECTIVES = {
     'go.mod': ['// indirect'], 'sample.go': ['//go:build linux'],

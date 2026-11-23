@@ -177,7 +177,7 @@ func TestMCPProcessGrantConfigAndConnectionIdentity(t *testing.T) {
 	if err != nil || before == after {
 		t.Fatal("changing the grant did not invalidate connection approvals", err)
 	}
-	for _, names := range [][]string{{}, {"screenshot"}, {"*"}, {""}, {"screenshot \n"}, {strings.Repeat("x", 257)}, make([]string, 129)} {
+	for _, names := range [][]string{{}, {"screenshot"}, {"*"}, {""}, {"screenshot \n"}, {"screen\u00a0shot"}, {"screen\x00shot"}, {strings.Repeat("x", 257)}, make([]string, 129)} {
 		config.AllowDuringProcess = names
 		raw, _ := json.Marshal(map[string]any{"mcpServers": map[string]mcpServerConfig{"chrome": config}})
 		if err := os.WriteFile(filepath.Join(paths.Home, "mcp.json"), raw, 0600); err != nil {

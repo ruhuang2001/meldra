@@ -45,8 +45,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(400, {'error': 'Invalid JSON'})
             return
         prices = {'ceramics': 48, 'printmaking': 65}
+        if not isinstance(data, dict):
+            self.reply(400, {'error': 'Expected a reservation object'})
+            return
         workshop, seats = data.get('workshop'), data.get('seats')
-        if workshop not in prices or type(seats) is not int or not 1 <= seats <= 4 or not data.get('name', '').strip() or '@' not in data.get('email', ''):
+        name, email = data.get('name'), data.get('email')
+        if (not isinstance(workshop, str) or workshop not in prices or type(seats) is not int or not 1 <= seats <= 4
+                or not isinstance(name, str) or not name.strip() or not isinstance(email, str) or '@' not in email):
             self.reply(400, {'error': 'Check your workshop, seats, name and email'})
             return
         self.reply(201, {'reference': 'FW-' + workshop[:3].upper() + '-' + str(seats), 'workshop': workshop, 'seats': seats, 'total': prices[workshop] * seats})
