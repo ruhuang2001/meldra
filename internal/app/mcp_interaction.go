@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"math/big"
 	"net/url"
 	"os"
@@ -156,17 +155,7 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 			}
 		}
 	}
-	validationSchema := schema
-	validationSchema.Properties = maps.Clone(schema.Properties)
-	for name, field := range schema.Properties {
-		if field.Type == "number" || field.Type == "integer" {
-			copy := *field
-			copy.Type = ""
-			copy.MinLength, copy.MaxLength = nil, nil
-			validationSchema.Properties[name] = &copy
-		}
-	}
-	resolved, err := validationSchema.Resolve(nil)
+	resolved, err := schema.Resolve(nil)
 	if err != nil {
 		return nil, fmt.Errorf("invalid or externally referenced elicitation schema")
 	}
@@ -191,12 +180,7 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 					declared = false
 					break
 				}
-				switch field.Type {
-				case "string":
-					_, declared = value.(string)
-				case "boolean":
-					_, declared = value.(bool)
-				case "array":
+				if field.Type == "array" {
 					items, ok := value.([]any)
 					declared = ok
 					for _, item := range items {
@@ -209,10 +193,9 @@ func (w *Workspace) elicitMCP(ctx context.Context, server string, p *mcp.ElicitP
 				if !declared {
 					break
 				}
-				if field.Type == "number" || field.Type == "integer" {
-					number, ok := value.(json.Number)
+				if number, ok := value.(json.Number); ok {
 					rational, valid := new(big.Rat).SetString(string(number))
-					if !ok || !valid || field.Type == "integer" && !rational.IsInt() {
+					if !valid || field.Type == "integer" && !rational.IsInt() {
 						declared = false
 						break
 					}
