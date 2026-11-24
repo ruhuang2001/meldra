@@ -1,12 +1,12 @@
 ---
-title: "Benchmarking and RSI"
-description: "Test quality analysis, agent benchmarking, and recursive self-improvement"
+title: "Benchmarking"
+description: "How the test suite is evaluated and how agent benchmark runs are recorded."
 ---
 
 ## Test Quality
 
 `make check` enforces a minimum statement coverage of 75% (see
-`COVERAGE_MIN` in the `Makefile` and [Development](development.md)). Treat that
+`COVERAGE_MIN` in the `Makefile` and [Development](./development.md)). Treat that
 gate as the source of truth for the current number; quoting a snapshot here
 would go stale as soon as the suite changes.
 
@@ -62,7 +62,7 @@ Start with a small sample to validate the pipeline, then grow.
 ### Quick Start
 
 Configure the model provider and `OPENAI_API_KEY` first; see
-[Configuration](configuration.md). Run these commands from the repository root.
+[Configuration](../reference/configuration.md). Run these commands from the repository root.
 
 ```bash
 # Install dependencies (swebench pulls in datasets)
@@ -133,7 +133,7 @@ Verification is a separate step: `--pull --evaluate` fetches the selected
 instance images and runs the official SWE-bench harness in Docker; `--submit`
 sends the predictions to hosted evaluation. The adapter does not directly run
 the task's tests during generation, although Meldra can run commands and tests.
-See [SWE-bench setup](swe-bench-setup.md) for hosted credentials and reports.
+See [SWE-bench setup](./swe-bench.md) for hosted credentials and reports.
 
 ### Establish a Baseline
 

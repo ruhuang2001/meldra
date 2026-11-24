@@ -32,4 +32,4 @@ Stage new files when capturing patches. Failed attempts retain partial diffs as 
 
 ## Provider examples
 
-Examples use placeholders for the model and endpoint. The remote example assumes Responses API compatibility and keeps the API key in the credentials file. See [provider configuration](../configuration.md).
+Examples use placeholders for the model and endpoint. The remote example assumes Responses API compatibility and keeps the API key in the credentials file. See [provider configuration](../reference/configuration.md).

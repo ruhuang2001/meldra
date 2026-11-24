@@ -6,11 +6,14 @@ Meldra is a local, serial foreground coding agent, not a daemon or scheduler.
 Read affected code and tests before editing, and check the authoritative docs:
 
 - [README.md](README.md): installation, configuration, commands, and development.
-- [docs/development.md](docs/development.md): test gates, local checks, and CI.
-- [docs/architecture.md](docs/architecture.md): dependency direction and runtime boundaries.
-- [docs/task-storage.md](docs/task-storage.md): ledger, ownership, and recovery.
-- [docs/capabilities.md](docs/capabilities.md): project context and foreground controls.
-- [docs/mcp-support.md](docs/mcp-support.md) and [docs/skills.md](docs/skills.md): integration contracts.
+- [docs/index.md](docs/index.md): the documentation site's home page and page map.
+- [docs/guides/modes.md](docs/guides/modes.md), [docs/guides/controls.md](docs/guides/controls.md),
+  and [docs/guides/project-context.md](docs/guides/project-context.md): user-facing
+  behavior for execution modes, session controls, and project context.
+- [docs/reference/architecture.md](docs/reference/architecture.md): dependency direction and runtime boundaries.
+- [docs/reference/task-records.md](docs/reference/task-records.md): ledger, ownership, and recovery.
+- [docs/integrations/mcp.md](docs/integrations/mcp.md) and [docs/integrations/skills.md](docs/integrations/skills.md): integration contracts.
+- [docs/engineering/development.md](docs/engineering/development.md): test gates, local checks, and CI.
 
 ## Code Ownership
 
@@ -27,7 +30,7 @@ Modify the existing owner of a behavior rather than adding parallel paths. Keep 
 
 Keep ordinary comments out of source and configuration. Record non-obvious
 choices in `docs/adr/`. Use `/delete-comment` to repeat the audit and
-`make comment-lint` to check the [comment policy](docs/development.md#source-comments).
+`make comment-lint` to check the [comment policy](docs/engineering/development.md#source-comments).
 
 ## Runtime Invariants
 
@@ -52,12 +55,12 @@ Use the `go.mod` toolchain and Python 3 for integration tests. Release builds us
 
 ## Documentation and Release Status
 
-- Document new behavior with its implementation, but mark unreleased features in the relevant sections. Do not assume `main` or a pending release PR is available in the latest installed binary; verify published release contents before claiming availability.
+- Document new behavior with its implementation, but mark unreleased features in the relevant sections with a **Unreleased** note; do not add per-page "Available since" markers for released behavior. Do not assume `main` or a pending release PR is available in the latest installed binary; verify published release contents before claiming availability.
 - Leave root `CHANGELOG.md` generation to Release Please. The site's `docs/changelog.mdx` is a separate user-facing summary, not a copy of the commit list. Agents may draft 3–5 highlights from version differences; a maintainer reviews them and any compatibility or upgrade instructions.
 - Add an entry to the published timeline only after confirming the actual release version/date and all four platform archives plus `meldra_checksums.txt`. A tag or release page alone is insufficient. Then replace the relevant unreleased notices with `Available since vX.Y.Z`.
 - Drafting notes or reviewing a release PR does not authorize merging, publishing, or triggering release workflows. Keep the release decision explicit.
 
-See [Maintaining the documentation](docs/documentation.md) for Mintlify preview, validation, and the release-note workflow. Keep detailed procedures there rather than duplicating them here.
+See [Maintaining the documentation](docs/engineering/documentation.md) for Mintlify preview, validation, and the release-note workflow. Keep detailed procedures there rather than duplicating them here.
 
 ## Project Language & Commits
 

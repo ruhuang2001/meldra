@@ -1,42 +1,70 @@
 ---
-title: "Meldra"
-description: "A local, foreground coding agent with explicit safety boundaries and durable execution records."
+title: "Introduction"
+description: "Meldra is a local coding agent for your terminal that runs in the foreground, asks before sensitive actions, and keeps a readable record of what it did."
 ---
 
-<img src="/assets/icon.png" alt="Meldra application icon" width="144" height="144" className="rounded-3xl not-prose" />
+Meldra reads your project, proposes changes, and runs commands you approve — all
+inside one terminal session that ends when you close it. There is no daemon
+working in the background while you are away.
 
-Meldra helps you inspect and change a project from your terminal. It runs locally
-in the foreground, streams responses in an interactive TUI, and records task
-execution so you can inspect outcomes and explicitly recover interrupted work.
+```sh wrap
+curl -fsSL https://raw.githubusercontent.com/ruhuang2001/meldra/main/scripts/install.sh | sh
+```
 
-Meldra is experimental. Review changes and avoid using it in directories with
-sensitive or irreplaceable files. Approved commands run as your OS user; Meldra
-is not an OS sandbox.
+Get from install to a first session in [Quickstart](./quickstart.md).
 
-## Start with a project
+## What it does
 
-[Install Meldra and run your first session](quickstart.md). You need macOS or
-Linux and an OpenAI API key or a compatible Responses API provider.
+- **Reads before it writes.** Build mode starts with investigation, and Plan
+  mode lets you ask for a proposal without touching a file.
+- **Asks before it acts.** File edits, commands, and network reads go through an
+  approval prompt unless you have granted that permission for the session.
+- **Keeps a local record.** Every task, tool call, and approval is written to a
+  ledger you can inspect with `meldra task show` — after a crash too.
+- **Stays on task.** One request, one workspace, one turn at a time. You can
+  steer, queue, or stop a turn while it runs.
 
-## Work with explicit boundaries
+Approved commands run with your own user permissions. Meldra is careful about
+approvals, but it is **not an operating-system sandbox**: review what it asks to
+run, and avoid working in directories whose contents you cannot afford to lose.
 
-Project context, execution modes, and foreground controls are available since
-v0.4.0.
+## A first request
 
-- **Inspect before editing.** [Plan and Build modes](capabilities.md)
-  separate read-only investigation from implementation.
-- **Keep project instructions close to the code.** Scoped `AGENTS.md`
-  files and explicit file references provide context for the paths you work on.
-- **Stay in control.** Foreground controls let you steer a turn,
-  queue a follow-up, or stop the current turn without leaving the session.
-- **Connect tools and guidance.** Use [MCP servers](mcp-support.md) for integrations and
-  [Skills](skills.md) for on-demand workflow instructions.
-- **Inspect execution evidence.** The [task ledger](task-storage.md) records runs,
-  tool outcomes, approvals, and managed processes. Recovery is explicit, not an
-  automatic replay of side effects.
+```sh wrap
+cd /path/to/project
+meldra --mode plan --prompt 'Explain the project structure and suggest one small improvement.'
+```
 
-## Understand the runtime
+Plan mode reads and searches files but cannot write, run commands, or reach the
+network without approval. When the plan looks right, switch to Build mode and let
+Meldra make the change.
 
-Read [Architecture and runtime boundaries](architecture.md) for package ownership,
-execution lifetimes, persistence, and recovery guarantees. Meldra is a serial
-foreground agent, not a daemon, scheduler, or multi-agent execution service.
+## Where to go next
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install, configure a provider, and run your first session.
+  </Card>
+  <Card title="Plan and Build modes" icon="compass" href="/guides/modes">
+    Choose how much Meldra is allowed to do in a session.
+  </Card>
+  <Card title="Project context" icon="file-code" href="/guides/project-context">
+    Point Meldra at files with `@` references and scoped `AGENTS.md` guidance.
+  </Card>
+  <Card title="Sessions and controls" icon="sliders" href="/guides/controls">
+    Steer, queue, stop, resume, and compact a running conversation.
+  </Card>
+  <Card title="MCP servers" icon="plug" href="/integrations/mcp">
+    Connect external tools, data sources, and browsers.
+  </Card>
+  <Card title="Configuration reference" icon="gear" href="/reference/configuration">
+    Every file, key, and environment variable Meldra reads.
+  </Card>
+</CardGroup>
+
+## Status
+
+Meldra is experimental and pre-1.0. The published archives are tested on macOS
+and Linux for `amd64` and `arm64`; behavior and file formats can change between
+minor releases. Pages mark features that are not in the latest release as
+**Unreleased**, and the [Changelog](./changelog.mdx) records what shipped.

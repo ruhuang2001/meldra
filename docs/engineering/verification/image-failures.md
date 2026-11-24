@@ -1,4 +1,7 @@
-# Image reference failure matrix
+---
+title: "Image reference verification"
+description: "Failure cases for image submission, replay, retention, and rejection."
+---
 
 **Available since v0.5.0.** Specified before implementation. Use the real-binary image E2E
 suite with a new output directory. All provider traffic uses a loopback fixture.

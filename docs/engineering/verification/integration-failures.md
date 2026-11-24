@@ -3,7 +3,6 @@ title: "Feature integration failure matrix"
 description: "Cross-feature protocol, approval and image verification."
 ---
 
-# Plan integration failure matrix
 
 Specified before cross-feature integration changes. This verification tree
 combines independently reviewable feature branches; it is not a release.

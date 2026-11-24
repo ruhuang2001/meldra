@@ -1,10 +1,13 @@
-# Stream JSON protocol
+---
+title: "Stream JSON output"
+description: "Consume Meldra's one-prompt JSONL protocol and resume an exactly approved operation."
+---
 
-**Available since v0.5.0.** The foreground CLI accepts `--output-format text|stream-json`.
+The foreground CLI accepts `--output-format text|stream-json`.
 The default is `text`. Stream JSON runs exactly one `--prompt`, never reads stdin,
 and never enters the TUI, input picker or interactive approval flow.
 
-```sh
+```sh wrap
 meldra --workspace /path/to/project --prompt 'Inspect this project.' --output-format stream-json
 meldra task resume TASK_ID --approve-detail-hash HASH
 ```
@@ -59,7 +62,7 @@ process releases its leases and exits **3**. No later calls in that response run
 
 After reviewing the operation, use the emitted task ID and `detail_hash`:
 
-```sh
+```sh wrap
 meldra task resume TASK_ID --approve-detail-hash HASH
 ```
 
@@ -112,7 +115,7 @@ and cancellation uses `cancelled`/`cancelled`.
 
 `make check` includes the real-binary stream suite. To repeat it independently:
 
-```sh
+```sh wrap
 CGO_ENABLED=0 go build -o /tmp/meldra-stream .
 python3 scripts/capability-e2e.py --binary /tmp/meldra-stream --output /tmp/meldra-stream-evidence --stream-json --only stream-json
 ```

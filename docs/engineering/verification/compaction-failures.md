@@ -1,4 +1,7 @@
-# Context compaction acceptance and failure matrix
+---
+title: "Context compaction verification"
+description: "Acceptance and failure cases for manual and automatic compaction."
+---
 
 This matrix was written before the compaction implementation. The repeatable
 real-binary verifier is `scripts/compaction-e2e.py`; it uses private HOME/state/

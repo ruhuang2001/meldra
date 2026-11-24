@@ -3,8 +3,8 @@
 Status: **historical v0.5.0 design** for
 [issue #65](https://github.com/ruhuang2001/meldra/issues/65). The decisions below
 describe the original scope, not every current behavior. Current contracts live
-in [configuration](../configuration.md#context-compaction) and
-[task storage](../task-storage.md); later token-window triggering supersedes
+in [configuration](../reference/configuration.md#context-compaction) and
+[task storage](../reference/task-records.md); later token-window triggering supersedes
 this design's byte-only measurement and token-threshold exclusion.
 
 ## Problem

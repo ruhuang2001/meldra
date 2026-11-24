@@ -1,6 +1,10 @@
-# Responses-compatible providers
+---
+title: "Providers"
+description: "Point Meldra at OpenAI or another endpoint that implements the Responses API, including local model servers."
+---
 
-**Updated for v0.5.0.** Meldra already supports a configurable Responses endpoint.
+
+Meldra supports a configurable Responses endpoint.
 The examples below describe the current source; they do not certify a particular
 model or server release. The endpoint must implement `POST /v1/responses`,
 including function calls and function-call outputs. A server advertising only
@@ -13,7 +17,7 @@ Use a separate private home for the local model. Run `meldra config init`, then
 edit that home's `config.toml`. The shared local template is
 [`local-responses.toml`](https://github.com/ruhuang2001/meldra/blob/main/config/examples/local-responses.toml):
 
-```toml
+```toml wrap
 model = "your-loaded-model"
 base_url = "http://127.0.0.1:8080/v1"
 allow_insecure_base_url = true
@@ -24,7 +28,7 @@ nonempty key; for an unauthenticated loopback server only, use an explicit dummy
 value such as `local-only`. For an authenticated server use its actual key.
 Never reuse a paid provider credential as the dummy value.
 
-```sh
+```sh wrap
 MELDRA_HOME="$HOME/.meldra-local" meldra config init
 # Edit ~/.meldra-local/config.toml and credentials.env first.
 MELDRA_HOME="$HOME/.meldra-local" meldra config show
@@ -42,7 +46,7 @@ OpenAI's Responses endpoint is the built-in default, so a normal OpenAI setup
 does not need a `base_url`. For another remote provider, start from
 [`openai-compatible.toml`](https://github.com/ruhuang2001/meldra/blob/main/config/examples/openai-compatible.toml):
 
-```toml
+```toml wrap
 model = "your-provider-model"
 base_url = "https://api.provider.example/v1"
 ```
@@ -80,7 +84,7 @@ bounded by `max_custom_turn_input_bytes`; older tool outputs may be replaced by
 explicit omission markers, and an irreducible over-budget turn pauses for an
 explicit continuation. This is not model-generated compaction.
 
-**Available since v0.5.0:** `/compact [focus]` and automatic threshold compaction add a
+`/compact [focus]` and automatic threshold compaction add a
 separate model-generated summary of older conversation. They use the configured
 model with no tools and a 1024-output-token limit. A valid summary is saved with
 an immutable evidence artifact and recent messages; subsequent requests rebuild
@@ -93,8 +97,8 @@ its denominator is the smaller of `max_custom_turn_input_bytes` and
 server history remains invisible locally, so the threshold is a floor on measured
 context, not a claim about the model's full context window. Omission-marker
 trimming still bounds custom-provider tool replay after compaction. See
-[configuration](configuration.md#context-compaction) for settings and
-[foreground controls](capabilities.md#context-compaction) for preserved evidence.
+[configuration](./configuration.md#context-compaction) for settings and
+[context compaction](../guides/context-compaction.md) for preserved evidence.
 
 Before the first compaction, local conversation reconstruction measures its
 bounded recent-message window, not all server-retained turns. The default
@@ -111,9 +115,9 @@ Cross-protocol reasoning preservation is not promised.
 
 The second-phase [Anthropic adapter issue](https://github.com/ruhuang2001/meldra/issues/66)
 defines explicit capability queries and provider-switch history rebuilding.
-The [task storage contract](task-storage.md) defines current summary/evidence
-preservation, and [configuration](configuration.md#context-compaction) defines
-triggers. The [original compaction design](proposals/context-compaction.md) is historical.
+The [task storage contract](./task-records.md) defines current summary/evidence
+preservation, and [configuration](./configuration.md#context-compaction) defines
+triggers. The [original compaction design](../proposals/context-compaction.md) is historical.
 
 ## Repeatable offline verification
 

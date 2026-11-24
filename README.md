@@ -55,17 +55,29 @@ permissions; use automatic approval only in an isolated environment.
 
 ## Documentation
 
-The [documentation](docs/index.md) has the [Quickstart](docs/quickstart.md),
-[capabilities and controls](docs/capabilities.md), [MCP](docs/mcp-support.md),
-[Skills](docs/skills.md), [providers](docs/providers.md), [task storage and recovery](docs/task-storage.md), and
-[architecture](docs/architecture.md). These pages also power the Mintlify site. Release highlights are in the
+The documentation site is organized by task:
+
+- **Get started:** [Introduction](docs/index.md) and [Quickstart](docs/quickstart.md).
+- **Guides:** [modes](docs/guides/modes.md), [project context](docs/guides/project-context.md),
+  [sessions and controls](docs/guides/controls.md), [commands](docs/guides/commands.md),
+  [context compaction](docs/guides/context-compaction.md), and
+  [custom slash commands](docs/guides/slash-commands.md).
+- **Integrations:** [MCP](docs/integrations/mcp.md), [Skills](docs/integrations/skills.md),
+  and [web tools](docs/integrations/web-tools.md).
+- **Reference:** [configuration](docs/reference/configuration.md),
+  [providers](docs/reference/providers.md), [task records](docs/reference/task-records.md),
+  [stream JSON](docs/reference/stream-json.md), [upgrades](docs/reference/upgrading.md),
+  and [architecture](docs/reference/architecture.md).
+
+The same pages power the Mintlify site. Release highlights are in the
 [site changelog](docs/changelog.mdx); generated technical history is in
-[CHANGELOG.md](CHANGELOG.md).
+[CHANGELOG.md](CHANGELOG.md). Contribution and verification records live under
+`docs/engineering/` and are hidden from the public sidebar.
 
 ## Development
 
 Requires Go 1.26.11 and Python 3 for PTY integration tests. See the
-[development guide](docs/development.md) for CI, hooks, and release workflows.
+[development guide](docs/engineering/development.md) for CI, hooks, and release workflows.
 
 ```sh
 make check-fast       # local Go checks and selected non-MCP E2E suites
@@ -76,5 +88,5 @@ make check E2E_SLOW=1     # also run deliberately slow E2E scenarios
 
 `make check-fast` skips race, coverage, and MCP-specific E2E suites. Run
 `make check` before submitting changes. See
-[Maintaining the documentation](docs/documentation.md) for Mintlify preview and
+[Maintaining the documentation](docs/engineering/documentation.md) for Mintlify preview and
 validation.

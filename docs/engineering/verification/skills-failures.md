@@ -1,4 +1,7 @@
-# Skills E2E failure matrix
+---
+title: "Skills verification"
+description: "Failure cases and real-binary evidence for skill discovery, loading, and confinement."
+---
 
 Run `python3 scripts/skills-e2e.py --output dist/skills-e2e` from the repository.
 The harness builds the real binary, uses temporary HOME/MELDRA_HOME/workspace

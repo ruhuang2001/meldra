@@ -10,4 +10,4 @@ Fetch OAuth tokens at HTTP request time so cancellation bounds refresh even when
 
 Exercise artifact-capacity failures using a sparse file retained by a real store reference. The failure then passes through the same quota and evidence checks as a production tool call.
 
-[MCP support](../mcp-support.md)
+[MCP support](../integrations/mcp.md)

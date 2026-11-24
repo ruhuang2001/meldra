@@ -3,7 +3,7 @@ title: "Web fetch and search"
 description: "Configure approved public-page fetching and optional DeepSeek search."
 ---
 
-**Available since v0.5.0.** Meldra exposes `web_fetch` in CLI, TUI and `mcp serve`. The
+Meldra exposes `web_fetch` in CLI, TUI and `mcp serve`. The
 default `builtin` backend needs no service key. `web_search` is registered only
 when the DeepSeek search backend and its separate credential are configured.
 These are external reads, classified as `external_read` in task records. They
@@ -15,7 +15,7 @@ them. Explicit `--auto-approve` also approves network disclosure and billing.
 
 Add these non-secret settings to the private `$MELDRA_HOME/config.toml`:
 
-```toml
+```toml wrap
 web.fetch_backend = "builtin" # default; alternatively "deepseek"
 web.search_backend = "deepseek" # omit to disable search
 ```
@@ -30,7 +30,7 @@ Set `DEEPSEEK_API_KEY` in the process environment or private
 from `OPENAI_API_KEY`. Updating the OpenAI key preserves the existing DeepSeek
 key. Web tools never borrow the inference provider key, base URL or cookies.
 
-```dotenv
+```dotenv wrap
 OPENAI_API_KEY="your-inference-key"
 DEEPSEEK_API_KEY="your-separate-deepseek-key"
 ```
@@ -110,4 +110,4 @@ validation and production policy remain active. Release binaries have no bypass.
 Fixture builds normalize the source path and `PWD`, then verify an overlay-only
 startup marker before any request. The suite repeats configuration checks with
 canonical and symlink source paths and records the build paths and probe output.
-`make check` runs this suite. See the [failure matrix](verification/web-failure-matrix.md).
+`make check` runs this suite. See the [failure matrix](../engineering/verification/web-failures.md).

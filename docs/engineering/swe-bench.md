@@ -1,6 +1,6 @@
 ---
-title: "SWE-bench Setup Guide"
-description: "Register for SWE-bench hosted evaluation and configure multimodal input"
+title: "SWE-bench runs"
+description: "Submit repository changes to hosted SWE-bench evaluation and keep the evidence."
 ---
 
 ## SWE-bench Hosted Evaluation (sb-cli)
@@ -36,7 +36,7 @@ sb-cli verify-api-key 'replace-with-your-verification-code'
 
 `SWEBENCH_API_KEY` authenticates hosted evaluation; Meldra separately needs
 its model-provider credentials (`OPENAI_API_KEY` and any provider overrides).
-See [Configuration](configuration.md).
+See [Configuration](../reference/configuration.md).
 
 ### Usage
 
@@ -84,7 +84,7 @@ quotas are controlled by the service.
 ## SWE-bench-m (Multimodal Support)
 
 > **Available since v0.5.0.** CLI and TUI turns accept local PNG/JPEG
-> references and preserve image snapshots. See [foreground capabilities](capabilities.md).
+> references and preserve image snapshots. See [foreground capabilities](../guides/modes.md).
 > The dedicated SWE-bench-m dataset adapter remains unimplemented.
 
 ### What is SWE-bench-m?
@@ -217,4 +217,4 @@ container requirement. Docker is needed only for local harness evaluation.
 - [SWE-bench GitHub](https://github.com/princeton-nlp/SWE-bench)
 - [sb-cli documentation](https://github.com/swe-bench/sb-cli)
 - [Leaderboard](https://www.swebench.com/leaderboard)
-- **Meldra benchmarking guide**: [Benchmarking](benchmarking.md)
+- **Meldra benchmarking guide**: [Benchmarking](./benchmarking.md)

@@ -49,7 +49,7 @@ to run that comparison locally.
 
 Run `/delete-comment [paths]` in Meldra to repeat the audit. The command loads
 the repository's `$delete-comment` skill. The original classifications and
-decision records are in the [comment audit](verification/comment-audit.md).
+decision records are in the [comment audit](./verification/comment-audit.md).
 `make comment-lint-e2e` verifies the rule with disposable repositories and
 writes `.artifacts/checks/comment-lint.json`. Both local check targets and CI
 run this gate.
@@ -84,11 +84,11 @@ python3 scripts/plan-integration-e2e.py --binary /tmp/meldra-integrated --output
 suite is an all-features acceptance run over a combined checkout, so it is
 deliberately outside `make check`; run it before a minor release and against the
 exact revision you intend to tag. Its expectations are in the
-[plan integration failure matrix](verification/plan-integration-failures.md).
+[plan integration failure matrix](./verification/integration-failures.md).
 
 Choose a new output directory for each run.
 
-**Unreleased:** optional [real browser checks](mcp-support.md#reproduce-the-browser-check)
+**Unreleased:** optional [real browser checks](../integrations/mcp.md#reproduce-the-browser-check)
 exercise inline screenshot transport and live-model page repair using installed
 Chrome DevTools MCP. The repair driver uses a disposable broken app and independent
 before/after form, layout, error-recovery, and task-evidence checks. Browser
@@ -169,7 +169,7 @@ before merging.
 
 ## Faster local feedback
 
-**Available since v0.4.1:** `make check-fast` provides local feedback. It currently
+`make check-fast` provides local feedback. It currently
 runs ordinary Go tests and selected non-MCP E2E suites, including PTY exit checks.
 The [driver](https://github.com/ruhuang2001/meldra/blob/main/scripts/mcp-check.py) and
 its report's `suite_order` identify the selected suites. It skips race, coverage, and MCP-specific E2E
@@ -181,13 +181,28 @@ HOME, XDG, temporary, and coverage directories. Use `make check E2E_WORKERS=1`
 on constrained machines. Reports, timings, logs, and checksums are retained in
 `.artifacts/checks`.
 
-**Available since v0.5.0:** Expensive suites, starting with compaction and capability, are
+Expensive suites, starting with compaction and capability, are
 submitted first; `report.json` records `suite_order` alongside suite timings.
 On a 12-core development machine, try `make check E2E_WORKERS=6`; the default
 remains three for smaller machines. Shared capability fixtures preserve the
 harness's `GORACE` and update-check controls, avoiding the race runtime's
 per-process exit sleep while retaining race instrumentation and coverage.
 
-**Available since v0.5.0:** `make check` skips deliberately slow E2E scenarios (currently
+`make check` skips deliberately slow E2E scenarios (currently
 `serve-approval-budget`, which waits 121s past the old fixed call deadline).
 `make check E2E_SLOW=1` and `make release-check` include them.
+
+## Verify updater changes
+
+From the source checkout, run the updater E2E suite with a new output directory:
+
+```bash
+python3 scripts/update-e2e.py --output .artifacts/checks/update-e2e-run
+```
+
+It builds two version-labeled copies of the current source and uses loopback
+release and model fixtures. It checks progress before delayed responses in pipe
+and PTY modes, replacement and failure behavior, and saved-session continuity.
+The output retains `report.json`, transcripts, binary and source hashes, and a
+`replay.sh` command. It does not download published releases or certify
+cross-version storage compatibility.

@@ -1,91 +1,99 @@
 ---
 title: "Quickstart"
-description: "Install Meldra, configure a provider, and start a foreground coding session."
+description: "Install Meldra, connect a provider, and run a first request in a few minutes."
 ---
 
-## Requirements
+You need macOS or Linux on `amd64` or `arm64`, `curl`, `tar`, and either
+`sha256sum` or `shasum`. You also need an OpenAI API key, or an endpoint that
+implements the Responses API.
 
-- macOS or Linux on `amd64` or `arm64`.
-- `curl`, `tar`, and either `sha256sum` or `shasum` for the installer.
-- An OpenAI API key or a compatible Responses API endpoint.
-
-## Install
+## 1. Install
 
 ```sh wrap
 curl -fsSL https://raw.githubusercontent.com/ruhuang2001/meldra/main/scripts/install.sh | sh
 ```
 
-The installer selects your platform, downloads the latest release, verifies its
-SHA-256 checksum, and installs to `~/.local/bin` without requiring `sudo`.
+The installer picks your platform, verifies the SHA-256 checksum, and installs to
+`~/.local/bin` without `sudo`.
 
-If that directory is not on your `PATH`, the installer prints instructions. For
-the current terminal:
+If `meldra` is not found afterwards, add that directory to your `PATH` for the
+current terminal, then check the version:
 
-```sh
+```sh wrap
 export PATH="$HOME/.local/bin:$PATH"
 meldra version
 ```
 
-For future terminals, add the export to your shell's startup configuration, such
-as `~/.zshrc` for interactive Zsh or `~/.bashrc` for interactive Bash. The installer
-does not edit these files automatically.
+Add the same export to `~/.zshrc` or `~/.bashrc` for future terminals; the
+installer does not edit your shell files. You can also download a platform archive
+from [GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
 
-You can also download a platform archive from
-[GitHub Releases](https://github.com/ruhuang2001/meldra/releases).
+## 2. Configure a provider
 
-## Configure your provider
-
-```sh
+```sh wrap
 meldra config init
-vi ~/.meldra/credentials.env
 ```
 
-Add your API key to the generated credentials file:
+This writes `~/.meldra/config.toml` and `~/.meldra/credentials.env`. Put your key
+in the credentials file:
 
-```sh
+```sh wrap
 OPENAI_API_KEY=your-api-key
 ```
 
-Do not commit credentials. `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL`
-environment variables override file configuration. Set `MELDRA_HOME` to select a
-different state/configuration directory. Inspect effective configuration without
-printing the API key:
+Never commit that file. `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL`
+override file values for a single process, and `MELDRA_HOME` selects a different
+state directory. Check the effective configuration without printing the key:
 
-```sh
+```sh wrap
 meldra config
 ```
 
-See the [configuration reference](configuration.md)
-for provider URL rules and response/context limits.
+<Note>
+Using a local model server? See [Providers](./reference/providers.md) for the
+Responses endpoint requirement, loopback HTTP rules, and a private-home setup
+that keeps a local model separate from your main configuration.
+</Note>
 
-## Start a session
+## 3. Start a session
 
-**Available since v0.4.0:** Plan/Build modes and foreground controls are
-included in the latest release. If upgrading from v0.3.0 or earlier, follow the
-[upgrade and rollback instructions](upgrading.md)
-before opening the new ledger.
-
-```sh
+```sh wrap
 cd /path/to/project
 meldra
 ```
 
-Supported interactive terminals use the full-screen TUI. Other terminals and
-non-interactive invocations use the line-based interface. Press `Ctrl-C` to exit.
+A supported interactive terminal opens the full-screen TUI; other terminals and
+non-interactive runs use a line interface. Press `Ctrl-C` to exit.
 
-For a read-only first request:
+Start with a read-only request if this is your first time:
 
-```sh
+```sh wrap
 meldra --mode plan --prompt 'Explain the project structure and suggest a small improvement.'
 ```
 
-Plan mode blocks project writes and command execution. Use Build mode when you
-are ready to implement, and review requested approvals. Automatic approval is
-not a sandbox and should only be used in an isolated environment.
+Plan mode blocks project writes and command execution. When you are ready to
+implement, start Build mode and review each approval prompt. Automatic approval is
+not a sandbox — use it only in an isolated environment.
 
-## Continue learning
+## 4. Point it at the right code
 
-- [Project instructions, references, modes, and controls](capabilities.md)
-- [MCP configuration and workspace tools](mcp-support.md)
-- [On-demand Skills](skills.md)
-- [Upgrade, backup, and downgrade guidance](upgrading.md)
+Meldra reads `AGENTS.md` from the workspace root, plus any `AGENTS.md` in an
+accessed file's parent directories. Reference specific files inline:
+
+```text wrap
+Review @src/main.go and compare it with @src/util.go:1-40
+```
+
+Add project guidance close to the code, and check what applies to a path without
+calling the model:
+
+```sh wrap
+meldra context --path src/main.go
+```
+
+## Next steps
+
+- [Plan and Build modes](./guides/modes.md): what Plan blocks and how permissions work.
+- [Sessions and controls](./guides/controls.md): steer, queue, stop, and resume.
+- [MCP servers](./integrations/mcp.md) and [Skills](./integrations/skills.md): external tools and reusable workflows.
+- [Upgrade and downgrade](./reference/upgrading.md): self-update, backups, and rollback.

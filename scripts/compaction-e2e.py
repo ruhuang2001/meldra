@@ -942,7 +942,7 @@ def main():
             parser.error('unknown scenarios: ' + ', '.join(sorted(unknown)))
         scenarios = {name: scenarios[name] for name in args.only}
     sources = sorted([*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(),
-                      ROOT / 'scripts/capability-e2e.py', ROOT / 'scripts/images-e2e.py', ROOT / 'docs/context-compaction-failure-matrix.md'])
+                      ROOT / 'scripts/capability-e2e.py', ROOT / 'scripts/images-e2e.py', ROOT / 'docs/engineering/verification/compaction-failures.md'])
     report = {'passed': False, 'live_model': False, 'platform': platform.platform(),
               'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'source_sha256': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources},

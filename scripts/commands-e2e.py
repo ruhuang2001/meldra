@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Verify custom slash commands with isolated real-binary CLI, PTY and ledger evidence.
 
-Failure cases are specified first in docs/commands-failure-matrix.md.
+Failure cases are specified first in docs/engineering/verification/commands-failures.md.
 No paid provider, real credential, shared HOME or automatic update is used.
 """
 import argparse
@@ -278,7 +278,7 @@ def main():
         if unknown:
             parser.error('unknown scenarios: ' + ', '.join(sorted(unknown)))
         scenarios = {name: scenarios[name] for name in args.only}
-    sources = sorted([*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(), ROOT / 'scripts/capability-e2e.py', ROOT / 'docs/commands-failure-matrix.md'])
+    sources = sorted([*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(), ROOT / 'scripts/capability-e2e.py', ROOT / 'docs/engineering/verification/commands-failures.md'])
     report = {'passed': False, 'live_model': False, 'platform': platform.platform(), 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'source_sha256': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sources}, 'scenarios': []}
     for name, scenario in scenarios.items():

@@ -1,4 +1,7 @@
-# Web tools failure matrix
+---
+title: "Web tools verification"
+description: "Failure boundaries for fetching, DNS validation, redirects, and hosted search."
+---
 
 **Available since v0.5.0.** Written before implementation. Verification uses a real Meldra
 binary, isolated homes, a fake Responses provider, controlled HTTP/TLS origins,

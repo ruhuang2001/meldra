@@ -290,7 +290,7 @@ def main():
     scenarios = dict(submit_resume=submit_resume, declarations=declarations, formats=formats, rejected=rejected, controls=controls, queue_recovery=queue_recovery, history_budget=history_budget, corrupt_artifact=corrupt_artifact)
     if args.only:
         scenarios = {name: scenarios[name] for name in args.only}
-    sources = [*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(), ROOT / 'docs/images-failure-matrix.md']
+    sources = [*ROOT.glob('internal/**/*.go'), ROOT / 'go.mod', ROOT / 'go.sum', Path(__file__).resolve(), ROOT / 'docs/engineering/verification/image-failures.md']
     report = {'passed': False, 'live_model': False, 'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(),
               'source_sha256': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(sources)}, 'scenarios': []}
     for name, scenario in scenarios.items():

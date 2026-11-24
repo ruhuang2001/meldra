@@ -1,4 +1,8 @@
-# Architecture and runtime boundaries
+---
+title: "Architecture"
+description: "How Meldra's processes, packages, execution lifetimes, persistence, and recovery fit together."
+---
+
 
 Meldra is a local, serial foreground coding agent. Its runtime provides
 versioned execution history, task/workspace ownership, structured tool outcomes,
@@ -11,7 +15,7 @@ lets users inspect and explicitly continue work.
 
 ## Dependency direction
 
-```text
+```text wrap
 main.go                          process entry and link-time version
   -> internal/app                signals, CLI/TUI and Agent
        contains Workspace, SessionTools, SessionSaver and taskExecution
@@ -123,10 +127,10 @@ observations supply structured status, exit code, elapsed time, truncation and
 retry information. The model still receives compatible human-readable output.
 The task adapter adds bounded artifact references to the persisted result.
 
-**Available since v0.5.0:** built-in `web_fetch` and optional DeepSeek `web_search` use the
+Built-in `web_fetch` and optional DeepSeek `web_search` use the
 distinct `external_read` effect. They are policy reads with explicit network
 approval, and their lost-response outcomes remain unknown. The shared Workspace
-handlers serve CLI, TUI and MCP. See [Web tools](web-tools.md) for DNS-at-dial
+handlers serve CLI, TUI and MCP. See [Web tools](../integrations/web-tools.md) for DNS-at-dial
 validation, hosted disclosure, metadata and bounded artifacts.
 
 The real execution sequence is:
@@ -199,7 +203,7 @@ five-second context independent of the cancelled request. Normal EOF after
 `--prompt` finishes the request before ending input. A real terminal hangup ends
 the foreground task.
 
-**Available since v0.4.1:** TUI output remains writable during cancellation until terminal
+TUI output remains writable during cancellation until terminal
 cleanup finishes, so Ctrl-C and SIGTERM can restore keyboard protocols and
 cursor modes before returning to the shell. Each terminal write retains its
 one-second deadline.
@@ -240,7 +244,7 @@ remains inspectable; the entire history is not sent to the model on every resume
 
 Under `MELDRA_HOME` (default `~/.meldra`):
 
-```text
+```text wrap
 config.toml / credentials.env   settings and credentials
 mcp.json / mcp-oauth-*.json     optional MCP server configuration and OAuth caches
 update-check.json               cached 24-hour stable release check metadata
@@ -327,7 +331,7 @@ available after another interruption. Wall-clock timestamps and
 repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
-See the [upgrade and downgrade guide](upgrading.md) for
+See the [upgrade and downgrade guide](./upgrading.md) for
 whole-store backups and legacy snapshot limits.
 
 ## Verification and next increments

@@ -78,7 +78,7 @@ class Harness:
         write(self.output / 'build.stderr.txt', result.stderr)
         self.check('real binary builds', result.returncode == 0, result.stderr[-3000:])
         paths = [*ROOT.glob('*.go'), *(ROOT / 'internal').rglob('*.go'), ROOT / 'go.mod', ROOT / 'go.sum',
-                 Path(__file__), ROOT / 'docs/skills-failure-matrix.md']
+                 Path(__file__), ROOT / 'docs/engineering/verification/skills-failures.md']
         self.report['source_sha256'] = {str(p.relative_to(ROOT)): digest(p) for p in sorted(paths)}
         self.report['binary_sha256'] = digest(self.binary)
         try:

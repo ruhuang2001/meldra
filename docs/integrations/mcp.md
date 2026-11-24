@@ -8,7 +8,7 @@ Meldra connects to external MCP servers and exposes bounded
 workspace tools through `meldra mcp serve`. It uses the official Go SDK v1.8.0 and
 Meldra's existing approvals, task records, and recovery runtime.
 
-**Available since v0.5.0:** [Stream JSON approval resume](stream-json.md) binds each external
+From v0.5.0, [Stream JSON approval resume](../reference/stream-json.md) binds each external
 operation to its MCP connection configuration and OAuth login generation.
 Changing the selected server, executable, environment or authentication settings
 requires a new approval before the replacement transport is started.
@@ -80,7 +80,7 @@ Use an existing browser server; Meldra has no browser engine or special browser
 approval bypass. A tested configuration uses Chrome DevTools MCP 1.13.0, Node.js
 and an installed Chrome. Add it to your private `mcp.json`:
 
-```json
+```json wrap
 {
   "mcpServers": {
     "chrome": {
@@ -150,7 +150,7 @@ image-only board. An offline Responses fixture selects navigation and capture,
 then checks the actual wire payload and persisted PNG. It does not require
 browser installation or network inference in ordinary `make check` runs.
 
-```sh
+```sh wrap
 go build -o /tmp/meldra-images .
 python3 scripts/mcp-browser-check.py --binary /tmp/meldra-images \
   --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
@@ -177,7 +177,7 @@ overflow on phones. The model must reproduce them through Chrome, inspect
 screenshots/console/network, shut down cleanly, repair only the frontend, restart,
 and operate the form again. No real reservations or external sites are involved.
 
-```sh
+```sh wrap
 go build -o /tmp/meldra-browser .
 python3 -B scripts/mcp-browser-repair.py --binary /tmp/meldra-browser \
   --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
@@ -210,7 +210,7 @@ sites, providers, or browsers.
 
 Create `~/.meldra/mcp.json`, or use `$MELDRA_HOME/mcp.json`, after `meldra config init`:
 
-```json
+```json wrap
 {
   "mcpServers": {
     "local": {
@@ -262,11 +262,11 @@ guarantee cleanup. Restart chat after changing configuration.
 
 ## Optional fetch and Tavily servers
 
-**Updated for v0.5.0.** Meldra's built-in [web tools](web-tools.md) work
+Meldra’s built-in [web tools](./web-tools.md) work
 without an MCP server. To use an external fetch implementation or Tavily search,
 install the relevant runtime (`uv` for Fetch, Node.js/npm for Tavily) and add:
 
-```json
+```json wrap
 {
   "mcpServers": {
     "fetch": {
@@ -296,7 +296,7 @@ Meldra reads MCP configuration from `~/.meldra/mcp.json` or
 `$MELDRA_HOME/mcp.json`. OAuth and static `bearer_token_env` are mutually exclusive.
 OAuth applies only to HTTP MCP servers.
 
-```json
+```json wrap
 {
   "mcpServers": {
     "remote": {
@@ -317,7 +317,7 @@ and requires `issuer` to bind it to the authorization server. HTTPS
 scopes; the default uses scopes advertised by the server. `callback_port` selects
 a fixed loopback port; the default uses an ephemeral port.
 
-```sh
+```sh wrap
 meldra mcp login remote
 meldra mcp logout remote
 ```
@@ -398,7 +398,7 @@ and does not leave a reader or stale approval behind.
 These commands connect only to the selected server and can inspect catalogs
 without model credentials. `--workspace PATH` selects their working directory.
 
-```sh
+```sh wrap
 meldra mcp resources SERVER [CURSOR]
 meldra mcp templates SERVER [CURSOR]
 meldra mcp read SERVER URI
@@ -417,7 +417,7 @@ be expanded to a resource URI before reading.
 
 ## Serving Meldra
 
-```sh
+```sh wrap
 meldra mcp serve --workspace /path/to/project [--mode plan|build] [--permissions interactive|workspace-edit] [--auto-approve]
 ```
 
@@ -450,7 +450,7 @@ completion, dynamic notifications, or multimodal sampling.
 ### Authentication and interaction checks
 
 
-```sh
+```sh wrap
 mkdir -p dist
 go build -race -o dist/meldra-mcp-race .
 python3 scripts/mcp-auth-interaction-e2e.py --binary dist/meldra-mcp-race --output dist/mcp-auth-interaction-repeat

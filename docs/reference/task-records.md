@@ -1,6 +1,10 @@
-# Foreground task storage contract
+---
+title: "Task records and recovery"
+description: "What Meldra records for each run, how ownership works, and how to inspect an interrupted task."
+---
 
-**Available since v0.5.0:** [Stream JSON](stream-json.md) can leave a clean foreground Run
+
+From v0.5.0, [Stream JSON](./stream-json.md) can leave a clean foreground Run
 in `waiting_approval` after releasing its leases. Its operation is recorded as
 cancelled before admission; `task resume --approve-detail-hash` revalidates the
 exact recorded operation under a new lease. Crash-incomplete approvals remain
@@ -25,7 +29,7 @@ filesystems that do not implement SQLite/advisory-lock semantics are unsupported
 
 The application places the ledger below `MELDRA_HOME/tasks/`:
 
-```text
+```text wrap
 tasks/
   tasks.db              # schema and immutable execution history
   tasks.db-wal          # SQLite recovery journal while open
@@ -43,11 +47,11 @@ contain secrets, so users must protect ledger backups as project data.
 
 ## Records and transitions
 
-**Available since v0.5.0:** web tools use the distinct `external_read` effect and approval
+Web tools use the distinct `external_read` effect and approval
 operation. They retain source metadata and bounded artifacts, and require
 approval before network access. An interrupted external read after dispatch is
 unknown, unlike a local read; recovery never silently retries or resolves it as
-having no effects. See [Web tools](web-tools.md) for backend disclosure and limits.
+having no effects. See [Web tools](../integrations/web-tools.md) for backend disclosure and limits.
 
 | Record | Meaning |
 | --- | --- |
@@ -77,7 +81,7 @@ changed. Explicit resume creates another Run, preserving all earlier attempts.
 
 Tool transitions are:
 
-```text
+```text wrap
 planned -> running | declined | cancelled
 running -> succeeded | failed | declined | cancelled | unknown
 unknown -> succeeded | failed | declined | cancelled  (explicit reconciliation only)
@@ -175,7 +179,7 @@ never migrates or writes files. Missing or changed parent evidence is an error,
 not permission to ignore unmatched child requests. Older binaries reject snapshots
 with the new field; back up the complete private state before downgrading.
 
-**Available since v0.5.0.** Compaction preserves execution records and stores the summary as
+Compaction preserves execution records and stores the summary as
 conversation metadata. It never changes an admitted operation, tool outcome,
 approval, or process result. Unknown tool outcomes, unknown process effects, and
 pending approvals prevent compaction until explicitly resolved.

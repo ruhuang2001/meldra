@@ -8,4 +8,4 @@ Digest-checked evidence restores full recent requests and tool outcomes when com
 
 File references preserve submitted bytes, structured paths and evidence identities. Quoting prevents file contents from forging attachment headers. Select the whole history before declaring current and historical images. Resolve queued references within their control lifetime and keep their scoped instructions separate until applied.
 
-[Compaction scenarios](../context-compaction-failure-matrix.md) · [Image scenarios](../images-failure-matrix.md)
+[Compaction scenarios](../engineering/verification/compaction-failures.md) · [Image scenarios](../engineering/verification/image-failures.md)

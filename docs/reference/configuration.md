@@ -2,9 +2,7 @@
 title: "Configuration"
 ---
 
-## Configuration
-
-```text
+```text wrap
 ~/.meldra/config.toml       # model, provider URL, and limits
 ~/.meldra/credentials.env   # OPENAI_API_KEY
 ~/.meldra/mcp.json          # optional trusted MCP server configuration
@@ -15,7 +13,10 @@ title: "Configuration"
 ~/.meldra/tasks/artifacts/  # bounded tool/verification output, named by digest
 ```
 
-The local and OpenAI-compatible TOML examples in `config/examples/` use placeholder model names and provider URLs. Set both values for your Responses API server. Store the remote provider’s API key in `credentials.env`.
+The local and OpenAI-compatible TOML examples in
+[`config/examples/`](https://github.com/ruhuang2001/meldra/tree/main/config/examples)
+use placeholder model names and provider URLs. Set both values for your Responses
+API server, and store the remote provider's key in `credentials.env`.
 
 Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 
@@ -23,12 +24,9 @@ Set `MELDRA_HOME` to use a different directory. Configuration precedence:
 2. Files under `~/.meldra`
 3. Built-in defaults
 
-**Unreleased session override:** `/model MODEL` saves a model choice in that
-session. Resuming it restores that model and its saved context-window setting
-over the environment/file values. A switch resets the window to zero and clears
-token calibration; it does not query a model-list endpoint or modify configuration
-files. `config show` describes global configuration, not the effective settings
-of an already saved session. See [session controls](capabilities.md).
+The precedence above is for global configuration. A saved session can override the
+model; see [sessions and controls](../guides/controls.md). `config show` reports
+global configuration, not the effective settings of an already saved session.
 
 Provider responses are capped at 32 MiB by default. Set
 `max_provider_response_bytes` in `config.toml`, or
@@ -43,7 +41,7 @@ a positive limit up to 64 MiB.
 
 ### Context compaction
 
-**Available since v0.5.0.** Model-generated compaction summarizes older conversation messages
+Model-generated compaction summarizes older conversation messages
 and retains a recent tail. These `config.toml` settings appear in `config show`:
 
 | Key | Default | Accepted values |
@@ -58,7 +56,7 @@ context reaches the 80% threshold, compaction makes an additional request to
 the configured model, which can add latency and provider charges. To disable
 the automatic trigger, set this in `config.toml`:
 
-```toml
+```toml wrap
 compact_threshold_percent = 0
 ```
 
@@ -86,7 +84,7 @@ The TUI footer shows the current turn's usage and, once calibrated, the context
 percentage.
 
 Use `/compact [focus]` while idle to request compaction manually, even when the
-automatic threshold is disabled. See [foreground controls](capabilities.md#context-compaction)
+automatic threshold is disabled. See [context compaction](../guides/context-compaction.md)
 for preservation and failure behavior. Omission-marker trimming remains a
 separate custom-provider budget safeguard.
 
@@ -95,13 +93,33 @@ separate custom-provider budget safeguard.
 Custom provider URLs must use HTTPS. For local development only, an HTTP URL
 on `localhost` or another loopback address can be enabled explicitly:
 
-```toml
+```toml wrap
 base_url = "http://localhost:8080/v1"
 allow_insecure_base_url = true
 ```
 
-```bash
+```bash wrap
 meldra config init   # create starter config files
 meldra config        # show effective values and config paths (hides API key)
 meldra version
 ```
+
+## Reference limits
+
+These bounds apply to inline `@` references and image attachments. They are
+fixed in the application, not configurable.
+
+| Item | Limit |
+| --- | --- |
+| Source file read per reference | 1 MiB |
+| Retained text per reference | 64 KiB |
+| Retained text per request | 128 KiB |
+| References per request | 32 |
+| Image encoded size | 1 MiB |
+| Image decoded pixels | 16 million |
+| Image bytes per request | 2 MiB |
+| Distinct images kept in history | 32, within 2 MiB |
+
+Older images beyond the history budget are replaced by an explicit omission
+notice; their artifacts remain in task history. See
+[project context and file references](../guides/project-context.md).

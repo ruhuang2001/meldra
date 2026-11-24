@@ -10,4 +10,4 @@ Workspace commands start with a narrow environment and temporary home. Validate 
 
 Benchmark the 100-file search fixture with allocation reporting to track the search allocation change in commit `9e82501`. Git approval previews include complete new-file content because ordinary diffs omit it. The idle context command inspects local rules without acknowledging them for a previously generated operation. Embedders own their interactive approval presentation. Showing an automatically approved operation preserves its existing decision.
 
-[Workspace capabilities](../capabilities.md) · [Skills](../skills.md)
+[Workspace capabilities](../guides/modes.md) · [Skills](../integrations/skills.md)

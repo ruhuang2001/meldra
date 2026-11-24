@@ -12,4 +12,4 @@ Use request watermarks and durable events to recover gaps around snapshot commit
 
 The process manager's mutex protects shared handle state. Current ownership can record lifecycle evidence while launch specifications and completed states remain immutable. Session listing returns aggregate diagnostics and omits filenames and errors that may expose prompts, summaries or response IDs. A concrete store owns selection and listing, while runners use the narrower persistence interface. Fault-injection tests simulate a directory-sync failure after rename, reload through recovery, and require an uncertain replacement to block inference. Ownership files remain protected even inside a user-selected workspace. Bounded lookup requires a nonempty provider ID and loads at most one matching record.
 
-[Task storage and recovery](../task-storage.md) · [Runtime boundaries](../architecture.md)
+[Task storage and recovery](../reference/task-records.md) · [Runtime boundaries](../reference/architecture.md)

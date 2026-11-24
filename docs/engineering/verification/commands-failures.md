@@ -1,7 +1,8 @@
 ---
-title: "Custom command verification"
-description: "Failure cases and repeatable E2E evidence for custom slash commands."
+title: "Slash command verification"
+description: "Failure cases and real-binary evidence for custom command discovery and expansion."
 ---
+
 
 **Available since v0.5.0.** Written before implementation. Verify through the real binary
 with `python3 scripts/commands-e2e.py --binary dist/meldra --output dist/commands-e2e`.

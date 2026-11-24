@@ -8,4 +8,4 @@ Compare validated semantic versions without integer overflow. Run eligible updat
 
 Resolve configuration paths to absolute paths at startup so a later working-directory change cannot redirect credential reads. An absent config uses compaction defaults. Displaying effective settings is a separate caller choice after environment overrides.
 
-[Configuration](../configuration.md) · [Web tools](../web-tools.md) · [Upgrading](../upgrading.md)
+[Configuration](../reference/configuration.md) · [Web tools](../integrations/web-tools.md) · [Upgrading](../reference/upgrading.md)

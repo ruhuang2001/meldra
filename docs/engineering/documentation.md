@@ -1,32 +1,50 @@
 ---
 title: "Maintaining the documentation"
-description: "Preview, validate, and publish the Mintlify site from the Meldra repository."
+description: "Where documentation lives, how to preview and validate it, and how releases are published."
 ---
 
 ## Source layout
 
-The Mintlify content root is `docs/`; its navigation and theme are configured in
-`docs/docs.json`. Existing Markdown guides are used directly by the site and
-remain readable on GitHub. Do not maintain separate MDX copies of these guides.
-Add new pages to the appropriate navigation group in `docs.json`.
+The Mintlify content root is `docs/`; navigation and theme live in
+`docs/docs.json`. The Markdown files are used directly by the site and read fine
+on GitHub, so do not keep separate MDX copies.
 
-Use relative Markdown links for pages within `docs/`. For source files or the
-root README outside this content root, use full GitHub URLs. Keep images under
-`docs/assets/`. Historical design notes under `proposals/` are not in the site
-navigation.
+| Directory | Audience | Navigation |
+| --- | --- | --- |
+| `docs/index.md`, `docs/quickstart.md`, `docs/changelog.mdx` | New users | Visible |
+| `docs/guides/` | People using Meldra day to day | Visible |
+| `docs/integrations/` | MCP, Skills, and web tools | Visible |
+| `docs/reference/` | Configuration, providers, storage, protocol, upgrades, architecture | Visible |
+| `docs/engineering/` | Contributors: build, tests, benchmarks, this guide | Hidden, searchable |
+| `docs/engineering/verification/` | Failure matrices and E2E evidence | Hidden, searchable |
+| `docs/adr/`, `docs/proposals/` | Design history | Not published |
 
-Keep a matching `.md` or `.mdx` redirect in `docs.json` for each new page. These aliases
-let relative links work both on GitHub and on the site's extensionless routes.
+Write for the person doing the task. Keep implementation detail — package names,
+SDK versions, test commands, and byte limits an ordinary user does not set — in
+`engineering/` or `reference/`, and link to it instead of inlining it. Every page
+starts with frontmatter; a visible page needs at least `title` and a one-sentence
+`description`. Do not repeat the title as a top-level heading.
+
+Hidden pages use `hidden: true` on their navigation group with `searchable: true`,
+so they stay reachable, searchable, and in `llms.txt` without appearing in the
+sidebar. Inspect the rendered sidebar before approving a navigation change: a
+group whose pages lack frontmatter renders as an empty heading.
+
+Use relative Markdown links for pages within `docs/`, relative to the current
+file. For source files or the root README outside this content root, use full
+GitHub URLs. Keep images under `docs/assets/`. Keep a `.md` redirect in
+`docs.json` for any page you move, so published URLs keep working; the Mintlify
+routes are extensionless.
 
 Mintlify reserves `/mcp` and `/authed/mcp` for its hosted search MCP servers.
-Use `mcp-support.md` and the `/mcp-support` route for Meldra's MCP guide; keep
-navigation entries and page links off those reserved endpoints. The legacy
-`/mcp.md` alias redirects to `/mcp-support`, but `/mcp` must remain available
-to the hosted service. See the [reserved MCP paths](https://www.mintlify.com/docs/ai/model-context-protocol#access-your-search-mcp-server).
+Meldra's MCP guide lives at `/integrations/mcp`, and the legacy `/mcp-support`
+and `/mcp.md` aliases redirect there. Keep every navigation entry and link off
+the reserved endpoints; see the
+[reserved MCP paths](https://www.mintlify.com/docs/ai/model-context-protocol#access-your-search-mcp-server).
 
 ## Release notes
 
-The site [Changelog](changelog.mdx) is a curated, user-facing summary. Use one
+The site [Changelog](../changelog.mdx) is a curated, user-facing summary. Use one
 Mintlify `Update` entry per published release, newest first, with its version,
 release date, a few concrete improvements, any upgrade action, and links to the
 release and full comparison. MDX is used here for the timeline component, not as
@@ -125,8 +143,8 @@ revision. The downloaded macOS arm64 binary reports version `0.4.1`.
 The [release workflow](https://github.com/ruhuang2001/meldra/actions/runs/39927918397)
 passed full source validation and retained its reports and binary metadata.
 The [four-platform native checks](https://github.com/ruhuang2001/meldra/actions/runs/39927960940)
-also passed at the exact release tag. See the [release highlights](changelog.mdx)
-and [upgrade guide](upgrading.md).
+also passed at the exact release tag. See the [release highlights](../changelog.mdx)
+and [upgrade guide](../reference/upgrading.md).
 
 ## Verified patch release v0.4.2
 
@@ -135,8 +153,8 @@ v0.4.2 was published on October 23, 2026 at immutable tag revision
 `meldra_checksums.txt` were downloaded on October 26, 2026; all four archive
 SHA-256 checks passed. The
 [release workflow](https://github.com/ruhuang2001/meldra/actions/runs/39936904798)
-succeeded. See the [release highlights](changelog.mdx) and
-[upgrade guide](upgrading.md) for the self-update output changes.
+succeeded. See the [release highlights](../changelog.mdx) and
+[upgrade guide](../reference/upgrading.md) for the self-update output changes.
 
 ## Verified minor release v0.5.0
 
@@ -149,8 +167,8 @@ macOS arm64 binary reports version `0.5.0`.
 The [release workflow](https://github.com/ruhuang2001/meldra/actions/runs/41417634518)
 passed full source validation, including slow E2E scenarios. The
 [four-platform native checks](https://github.com/ruhuang2001/meldra/actions/runs/41417741447)
-also passed at the exact release tag. See the [release highlights](changelog.mdx)
-and [upgrade guide](upgrading.md).
+also passed at the exact release tag. See the [release highlights](../changelog.mdx)
+and [upgrade guide](../reference/upgrading.md).
 
 ## Local preview
 
@@ -159,7 +177,7 @@ Node.js 22 LTS or a newer supported LTS version, then run from the repository:
 
 ```sh
 cd docs
-npx mint@4.2.1085 dev --no-open
+npx mint@4.3.88 dev --no-open
 ```
 
 Open `http://localhost:3000`. Changes reload as you edit. The CLI can download
@@ -171,8 +189,8 @@ preview does not require connecting a Mintlify account.
 From `docs/`, run:
 
 ```sh
-npx mint@4.2.1085 validate
-npx mint@4.2.1085 broken-links
+npx mint@4.3.88 validate
+npx mint@4.3.88 broken-links
 ```
 
 Check representative pages in the browser as well as command output. Keep

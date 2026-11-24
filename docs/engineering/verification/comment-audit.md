@@ -1,4 +1,7 @@
-# Repository comment audit
+---
+title: "First comment audit"
+description: "The November 2026 audit that cleared ordinary source comments."
+---
 
 The November 23, 2026 audit covered 204 first-party source and configuration files at commit `12b2070`. The original 1,008 ordinary comment tokens occupied 985 complete lines and shared 23 lines with code. All were removed. The 81 functional directives were 28 interpreter lines, 23 Go build constraints and 30 Go module dependency markers.
 
@@ -13,15 +16,15 @@ Adjacent comment lines that shared a disposition were reviewed together. The inv
 
 ## Decisions
 
-- [ADR 0001 · Build provenance and verification isolation](../adr/0001-build-and-verification.md)
-- [ADR 0002 · Foreground ownership and tool outcomes](../adr/0002-foreground-ownership.md)
-- [ADR 0003 · Responses streaming and continuation](../adr/0003-provider-streams.md)
-- [ADR 0004 · Context measurement and replay](../adr/0004-context-and-history.md)
-- [ADR 0005 · Workspace policy and approval scope](../adr/0005-workspace-policy.md)
-- [ADR 0006 · MCP transport and evidence](../adr/0006-mcp-boundaries.md)
-- [ADR 0007 · Durable execution and recovery](../adr/0007-durable-execution.md)
-- [ADR 0008 · Terminal ownership and bounded output](../adr/0008-terminal-io.md)
-- [ADR 0009 · Configuration, credentials and network input](../adr/0009-private-configuration.md)
+- [ADR 0001 · Build provenance and verification isolation](../../adr/0001-build-and-verification.md)
+- [ADR 0002 · Foreground ownership and tool outcomes](../../adr/0002-foreground-ownership.md)
+- [ADR 0003 · Responses streaming and continuation](../../adr/0003-provider-streams.md)
+- [ADR 0004 · Context measurement and replay](../../adr/0004-context-and-history.md)
+- [ADR 0005 · Workspace policy and approval scope](../../adr/0005-workspace-policy.md)
+- [ADR 0006 · MCP transport and evidence](../../adr/0006-mcp-boundaries.md)
+- [ADR 0007 · Durable execution and recovery](../../adr/0007-durable-execution.md)
+- [ADR 0008 · Terminal ownership and bounded output](../../adr/0008-terminal-io.md)
+- [ADR 0009 · Configuration, credentials and network input](../../adr/0009-private-configuration.md)
 
 ## Workarounds
 
