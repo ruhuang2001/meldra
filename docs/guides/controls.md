@@ -99,3 +99,11 @@ operation.
 Scroll chat history with the mouse wheel or trackpad; Page Up and Page Down also
 work (Fn–Up/Down on compact Mac keyboards). To select text, use your terminal's
 mouse-reporting override — often Shift or Option while dragging.
+
+## Reading the activity timeline
+
+Consecutive file reads, directory listings, and searches collapse into a single
+line that counts them, such as `Exploring ×3` while work continues and
+`Explored ×12` once it finishes. Only successful exploration steps fold this way:
+a failed call stays on its own line with its name, status, and reason, so an
+error never disappears into a counter. Everything else keeps a separate entry.

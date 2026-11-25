@@ -345,6 +345,27 @@ func TestTUIToolCompletionReturnsToThinking(t *testing.T) {
 	}
 }
 
+func TestTUIExplorationKeepsFailuresVisible(t *testing.T) {
+	m := newTUIModel(newTUIController(nil), tuiInitialState{})
+	m.width, m.height = 76, 16
+	m.resize()
+	for _, name := range []string{"read_file", "list_files", "search_files"} {
+		m.applyEvent(UIEvent{Kind: UIEventToolStarted, Name: name})
+		m.applyEvent(UIEvent{Kind: UIEventToolFinished, Name: name, Status: "succeeded", Detail: "No output"})
+	}
+	m.applyEvent(UIEvent{Kind: UIEventToolStarted, Name: "read_file"})
+	if got := ansi.Strip(m.renderViewportTimeline()); got != "Exploring ×4" {
+		t.Fatal(got)
+	}
+	m.applyEvent(UIEvent{Kind: UIEventToolFinished, Name: "read_file", Status: "failed", Detail: "failed: file not found"})
+	m.applyEvent(UIEvent{Kind: UIEventToolStarted, Name: "search_files"})
+	got := ansi.Strip(m.renderViewportTimeline())
+	if got != "Explored ×3\n\nread_file · failed  file not found\n\nExploring ×1" {
+		t.Fatal(got)
+	}
+	t.Log("\n" + ansi.Strip(m.View().Content))
+}
+
 func TestTUIPendingApprovalRequiresExplicitY(t *testing.T) {
 	controller := newTUIController(nil)
 	model := newTUIModel(controller, tuiInitialState{})

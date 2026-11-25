@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"meldra/internal/tool"
+
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
@@ -402,6 +404,8 @@ type tuiEntry struct {
 	name        string
 	processID   string
 	detail      string
+	status      string
+	explored    int
 	active      bool
 	cachedWidth int
 	cached      string
@@ -908,18 +912,31 @@ func (m *tuiModel) applyEvent(event UIEvent) tea.Cmd {
 	case UIEventToolStarted:
 		m.submissionPending = false
 		m.activeAssistant = -1
-		m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, active: true})
+		last := len(m.entries) - 1
+		if explorationTool(event.Name) && last >= 0 && m.entries[last].explored > 0 && !m.entries[last].active {
+			entry := &m.entries[last]
+			entry.name, entry.active, entry.cached = event.Name, true, ""
+			m.invalidateCompletedPrefix()
+		} else {
+			m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, active: true})
+		}
 		m.activeTool = len(m.entries) - 1
 		m.status = "Running " + event.Name
 		m.busy = true
 		m.refreshViewport()
 	case UIEventToolFinished:
 		if m.activeTool >= 0 && m.entries[m.activeTool].name == event.Name {
-			m.entries[m.activeTool].active = false
-			m.entries[m.activeTool].detail = event.Detail
-			m.entries[m.activeTool].cached = ""
+			entry := &m.entries[m.activeTool]
+			entry.active, entry.cached = false, ""
+			if explorationTool(event.Name) && event.Status == tool.Succeeded {
+				entry.explored++
+			} else if entry.explored > 0 {
+				m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, status: event.Status, detail: event.Detail})
+			} else {
+				entry.status, entry.detail = event.Status, event.Detail
+			}
 		} else {
-			m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, detail: event.Detail})
+			m.appendEntry(tuiEntry{kind: tuiEntryTool, name: event.Name, status: event.Status, detail: event.Detail})
 		}
 		m.activeTool = -1
 		m.invalidateCompletedPrefix()
@@ -1049,6 +1066,10 @@ func (m *tuiModel) renderEntry(entry *tuiEntry, width int) string {
 	return rendered
 }
 
+func explorationTool(name string) bool {
+	return name == "read_file" || name == "search_files" || name == "list_files"
+}
+
 func (m *tuiModel) renderEntryUnwrapped(entry *tuiEntry) string {
 	var output strings.Builder
 	switch entry.kind {
@@ -1064,6 +1085,16 @@ func (m *tuiModel) renderEntryUnwrapped(entry *tuiEntry) string {
 		output.WriteString("\n")
 		output.WriteString(sanitizeTerminalText(entry.content()))
 	case tuiEntryTool:
+		if entry.active && explorationTool(entry.name) {
+			return tuiDimStyle.Render(fmt.Sprintf("Exploring ×%d", entry.explored+1))
+		}
+		if entry.explored > 0 {
+			return tuiDimStyle.Render(fmt.Sprintf("Explored ×%d", entry.explored))
+		}
+		if entry.status != "" && entry.status != tool.Succeeded {
+			detail := strings.TrimPrefix(entry.detail, entry.status+": ")
+			return tuiWarnStyle.Render(sanitizeTerminalText(strings.TrimSpace(entry.name + " · " + entry.status + "  " + detail)))
+		}
 		state := "done"
 		if entry.active {
 			state = "working"
