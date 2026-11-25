@@ -68,7 +68,7 @@ func newUpdateFixture(t *testing.T, current string) *updateFixture {
 	f := &updateFixture{
 		target:  filepath.Join(t.TempDir(), "meldra"),
 		archive: updateTestArchive(t, tar.Header{Name: "meldra", Typeflag: tar.TypeReg, Size: 10, Mode: 0755}),
-		release: `{"tag_name":"v0.3.0"}`,
+		release: "v0.3.0",
 	}
 	if err := os.WriteFile(f.target, []byte("old-binary"), 0755); err != nil {
 		t.Fatal(err)
@@ -81,7 +81,8 @@ func newUpdateFixture(t *testing.T, current string) *updateFixture {
 		f.requests.Add(1)
 		switch r.URL.Path {
 		case "/latest":
-			fmt.Fprint(w, f.release)
+			w.Header().Set("Location", "/ruhuang2001/meldra/releases/tag/"+f.release)
+			w.WriteHeader(http.StatusFound)
 		case "/v0.3.0/meldra_checksums.txt":
 			if f.checksum != "" {
 				fmt.Fprint(w, f.checksum)
@@ -95,7 +96,7 @@ func newUpdateFixture(t *testing.T, current string) *updateFixture {
 		}
 	}))
 	t.Cleanup(server.Close)
-	f.u = releaseUpdater{client: server.Client(), apiURL: server.URL + "/latest", downloadURL: server.URL, executable: func() (string, error) { return f.target, nil }}
+	f.u = releaseUpdater{client: server.Client(), latestURL: server.URL + "/latest", downloadURL: server.URL, executable: func() (string, error) { return f.target, nil }}
 	return f
 }
 
@@ -114,6 +115,9 @@ func TestUpdateVersionContract(t *testing.T) {
 		{"abc123-dirty", false, true},
 		{"0.03.0", false, true},
 		{"0.3.0-01", false, true},
+		{"v0.5.0-32-gf23aabb", false, true},
+		{"v0.5.0-32-gf23aabb-dirty", false, true},
+		{"v0.6.0-dirty", false, true},
 		{"0.10.0", false, false},
 		{"999999999999999999999999.0.0", false, false},
 	} {
@@ -363,7 +367,7 @@ func TestUpdateKeepsRunningExecutableAlive(t *testing.T) {
 }
 
 func TestUpdateRejectsInvalidReleaseAndArguments(t *testing.T) {
-	for _, release := range []string{`{`, `{"tag_name":"v0.3.0-rc.1"}`, `{"tag_name":"v0.3.0","draft":true}`, `{"tag_name":"v0.3.0","prerelease":true}`, `{"tag_name":"../escape"}`, strings.Repeat("x", (1<<20)+1)} {
+	for _, release := range []string{"v0.3.0-rc.1", "v0.3.0-dirty", "v0.3.0+build.2", "../escape", "", strings.Repeat("x", 4096)} {
 		f := newUpdateFixture(t, "0.2.0")
 		f.release = release
 		if err := f.u.run(t.Context(), nil, io.Discard); err == nil {
@@ -403,7 +407,7 @@ func TestUpdateCachedAndAsyncNotices(t *testing.T) {
 				}
 			}
 			if scenario == "failure" {
-				f.release = "invalid"
+				f.release = "v0.3"
 			}
 			if scenario == "disabled" {
 				t.Setenv("MELDRA_DISABLE_UPDATE_CHECK", "1")

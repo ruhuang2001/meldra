@@ -40,6 +40,12 @@ What it does not do:
 - It does not downgrade: a known newer version stays installed.
 - It does not update Homebrew, npm, or Nix installations; use the package manager.
 - Builds without a valid SemVer version, including `dev`, cannot self-update.
+  Local `git describe` builds are treated the same way: `v0.5.0-32-gf23aabb` and
+  any `-dirty` build refuse to update and never touch the network, so a working
+  copy is not replaced by a release binary.
+
+The updater resolves the latest version from the GitHub release redirect rather
+than the GitHub API, so anonymous API rate limits do not block `meldra update`.
 
 SHA-256 checks detect a corrupted download, not a compromised publisher.
 

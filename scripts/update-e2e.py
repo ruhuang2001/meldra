@@ -30,6 +30,7 @@ if not __debug__:
 
 ROOT = Path(__file__).resolve().parents[1]
 OLD, NEW = 'v0.4.0', 'v0.4.1'
+DEV = 'v0.4.0-32-gf23aabb-dirty'
 
 
 def write(path, value):
@@ -56,15 +57,37 @@ class ReleaseFixture:
             def log_message(self, *_args):
                 pass
 
+            def do_HEAD(self):
+                scenario = fixture.current
+                try:
+                    assert scenario is not None, 'release request outside a scenario'
+                    assert self.path == '/latest', 'unexpected release metadata request: ' + self.path
+                    record = {'case': scenario['name'], 'path': self.path, 'stage': 'metadata',
+                              'received_at': time.monotonic(), 'completed_at': None}
+                    fixture.requests.append(record)
+                    scenario['entered']['metadata'].set()
+                    if 'metadata' in scenario['gated']:
+                        assert scenario['gates']['metadata'].wait(25), 'metadata gate timed out'
+                    failed = scenario['metadata_error']
+                    record['status'] = 503 if failed else 302
+                    self.send_response(record['status'])
+                    if not failed:
+                        self.send_header('Location', fixture.url + '/ruhuang2001/meldra/releases/tag/' + scenario['latest'])
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    record['completed_at'] = time.monotonic()
+                except (BrokenPipeError, ConnectionResetError):
+                    record['client_disconnected'] = True
+                except Exception:
+                    fixture.errors.append(traceback.format_exc())
+                    self.send_error(500)
+
             def do_GET(self):
                 scenario = fixture.current
                 try:
                     assert scenario is not None, 'release request outside a scenario'
                     base = '/download/' + scenario['latest'] + '/'
-                    if self.path == '/latest':
-                        stage = 'metadata'
-                        payload = json.dumps({'tag_name': scenario['latest'], 'draft': False, 'prerelease': False}).encode()
-                    elif self.path == base + 'meldra_checksums.txt':
+                    if self.path == base + 'meldra_checksums.txt':
                         stage = 'checksums'
                         checksum = '0' * 64 if scenario['bad_checksum'] else hashlib.sha256(fixture.archive).hexdigest()
                         payload = (checksum + '  ' + fixture.archive_name + '\n').encode()
@@ -78,9 +101,8 @@ class ReleaseFixture:
                     scenario['entered'][stage].set()
                     if stage in scenario['gated']:
                         assert scenario['gates'][stage].wait(25), stage + ' gate timed out'
-                    status = 503 if stage == 'metadata' and scenario['metadata_error'] else 200
-                    record['status'] = status
-                    self.send_response(status)
+                    record['status'] = 200
+                    self.send_response(200)
                     self.send_header('Content-Length', str(len(payload)))
                     self.end_headers()
                     self.wfile.write(payload)
@@ -193,7 +215,7 @@ class Harness:
         original = source.read_text()
         overlay = original
         substitutions = {
-            'https://api.github.com/repos/ruhuang2001/meldra/releases/latest': self.fixture.url + '/latest',
+            'https://github.com/ruhuang2001/meldra/releases/latest': self.fixture.url + '/latest',
             'https://github.com/ruhuang2001/meldra/releases/download': self.fixture.url + '/download',
         }
         for old, new in substitutions.items():
@@ -206,7 +228,7 @@ class Harness:
              'endpoint_substitutions': substitutions, 'source_sha256': digest(source),
              'overlay_sha256': digest(overlay_source), 'old_version': OLD, 'new_version': NEW})
         self.binaries = {}
-        for version in (OLD, NEW):
+        for version in (OLD, NEW, DEV):
             binary = self.output / ('meldra-' + version)
             args = ['go', 'build', '-trimpath', '-overlay', str(overlay_json), '-ldflags',
                     '-X main.version=' + version, '-o', str(binary), '.']
@@ -330,6 +352,27 @@ class Harness:
                 client.close()
                 dump(directory / 'gate-observations.json', observations)
 
+    def run_development_build(self):
+        directory = self.output / 'development-build'
+        binary = directory / 'bin/meldra'
+        with self.Case(binary, self.output, 'development-build', []) as case:
+            case.env['MELDRA_DISABLE_UPDATE_CHECK'] = '1'
+            binary.parent.mkdir()
+            shutil.copy2(self.binaries[DEV], binary)
+            self.check('development build reports its version', case.run(['version'], label='dev-version').stdout.strip() == DEV)
+            before = digest(binary)
+            requests_before = len(self.fixture.requests)
+            result = case.run(['update'], label='dev-update', success=False)
+            transcript = result.stdout + result.stderr
+            self.check('development build refuses self-update', 'development build' in transcript, transcript)
+            self.check('development build makes no release request', len(self.fixture.requests) == requests_before,
+                       self.fixture.requests[requests_before:])
+            self.check('development build binary unchanged', digest(binary) == before)
+            case.complete()
+            self.report['cases'].append({'name': 'development-build', 'passed': True, 'terminal': False,
+                                         'before_sha256': before, 'after_sha256': before})
+        dump(directory / 'dev-transcript.txt', transcript)
+
     def run(self):
         self.build()
         for terminal in (False, True):
@@ -339,6 +382,7 @@ class Harness:
         self.run_case('metadata-failure', metadata_error=True)
         self.run_case('checksum-failure', bad_checksum=True)
         self.run_case('cancel-download', cancel=True)
+        self.run_development_build()
         self.check('release fixture has no internal errors', not self.fixture.errors, self.fixture.errors)
         self.report['passed'] = True
 

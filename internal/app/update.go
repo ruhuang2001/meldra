@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,17 @@ func parseUpdateVersion(value string) []string {
 
 func numericVersionID(id string) bool {
 	return id != "" && strings.Trim(id, "0123456789") == ""
+}
+
+var gitDescribeSuffix = regexp.MustCompile(`(?:^|-)[0-9]+-g[0-9a-f]{7,}$`)
+
+func developmentBuild(value string) bool {
+	parts := parseUpdateVersion(value)
+	if parts == nil {
+		return true
+	}
+	prerelease := parts[4]
+	return strings.HasSuffix(prerelease, "dirty") || gitDescribeSuffix.MatchString(prerelease)
 }
 
 func compareSemver(current, latest string) int {
@@ -83,7 +95,7 @@ func compareSemver(current, latest string) int {
 
 type releaseUpdater struct {
 	client      *http.Client
-	apiURL      string
+	latestURL   string
 	downloadURL string
 	executable  func() (string, error)
 }
@@ -91,18 +103,17 @@ type releaseUpdater struct {
 func newReleaseUpdater() releaseUpdater {
 	return releaseUpdater{
 		client:      &http.Client{Timeout: 10 * time.Second},
-		apiURL:      "https://api.github.com/repos/ruhuang2001/meldra/releases/latest",
+		latestURL:   "https://github.com/ruhuang2001/meldra/releases/latest",
 		downloadURL: "https://github.com/ruhuang2001/meldra/releases/download",
 		executable:  os.Executable,
 	}
 }
 
 func (u releaseUpdater) fetch(ctx context.Context, url string, limit int64) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := u.request(ctx, http.MethodGet, url)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "meldra-updater")
 	resp, err := u.client.Do(req)
 	if err != nil {
 		return nil, err
@@ -112,6 +123,15 @@ func (u releaseUpdater) fetch(ctx context.Context, url string, limit int64) ([]b
 		return nil, fmt.Errorf("update request returned HTTP %d", resp.StatusCode)
 	}
 	return readUpdateBytes(resp.Body, limit)
+}
+
+func (u releaseUpdater) request(ctx context.Context, method, url string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "meldra-updater")
+	return req, nil
 }
 
 func readUpdateBytes(reader io.Reader, limit int64) ([]byte, error) {
@@ -126,22 +146,29 @@ func readUpdateBytes(reader io.Reader, limit int64) ([]byte, error) {
 }
 
 func (u releaseUpdater) latest(ctx context.Context) (string, error) {
-	data, err := u.fetch(ctx, u.apiURL, 1<<20)
+	req, err := u.request(ctx, http.MethodHead, u.latestURL)
 	if err != nil {
 		return "", err
 	}
-	var release struct {
-		Tag        string `json:"tag_name"`
-		Draft      bool   `json:"draft"`
-		Prerelease bool   `json:"prerelease"`
+	client := *u.client
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
 	}
-	if err := json.Unmarshal(data, &release); err != nil {
-		return "", fmt.Errorf("decode latest release: %w", err)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusMovedPermanently && resp.StatusCode != http.StatusFound {
+		return "", fmt.Errorf("update request returned HTTP %d", resp.StatusCode)
 	}
-	if release.Draft || release.Prerelease || !stableReleaseTag.MatchString(release.Tag) {
+	location, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		return "", errors.New("latest release redirect is not a valid URL")
+	}
+	tag := strings.TrimPrefix(location.Path, "/ruhuang2001/meldra/releases/tag/")
+	if tag == location.Path || !stableReleaseTag.MatchString(tag) {
 		return "", errors.New("latest release is not a stable vMAJOR.MINOR.PATCH release")
 	}
-	return release.Tag, nil
+	return tag, nil
 }
 
 func updateArchiveName() (string, error) {
@@ -169,8 +196,8 @@ func (u releaseUpdater) run(ctx context.Context, args []string, stdout io.Writer
 	if len(args) != 0 {
 		return fmt.Errorf("update does not accept arguments\n%s", updateUsage)
 	}
-	if parseUpdateVersion(version) == nil {
-		return errors.New("self-update is unavailable for an unversioned development build; install a release build first")
+	if developmentBuild(version) {
+		return errors.New("self-update is unavailable for a development build; install a release build first")
 	}
 	current := "v" + strings.TrimPrefix(version, "v")
 	if _, err := fmt.Fprintf(stdout, "Checking for updates (current: %s)...\n", current); err != nil {
@@ -343,7 +370,7 @@ type updateCheckState struct {
 }
 
 func (u releaseUpdater) startUpdateCheck(ctx context.Context, paths ConfigPaths, current string, sink UIEventSink) {
-	if os.Getenv("MELDRA_DISABLE_UPDATE_CHECK") == "1" || parseUpdateVersion(current) == nil {
+	if os.Getenv("MELDRA_DISABLE_UPDATE_CHECK") == "1" || developmentBuild(current) {
 		return
 	}
 	path := filepath.Join(paths.Home, "update-check.json")
