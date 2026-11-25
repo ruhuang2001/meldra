@@ -5,6 +5,38 @@ All notable changes to Meldra are documented here. The format is based on
 [Semantic Versioning](https://semver.org/). This file is updated automatically
 by Release Please from Conventional Commits.
 
+## [0.6.0](https://github.com/ruhuang2001/meldra/compare/v0.5.0...v0.6.0) (2026-11-25)
+
+
+### Features
+
+* **agent:** add approved git checkpoints and session controls ([24169a9](https://github.com/ruhuang2001/meldra/commit/24169a9a4f90112268afbbe74bbad3218d1c342d))
+* **agent:** support inline mcp images and browser interaction ([5045f29](https://github.com/ruhuang2001/meldra/commit/5045f29ecf56a22e2215ef3cf0aa820179052b43))
+* **config:** add a token-based compaction trigger ([c45c947](https://github.com/ruhuang2001/meldra/commit/c45c947e1aeef583d915cd2826199a19aa23d2e9))
+* **tui:** add composer mode badge and shift-tab switching ([beb7c44](https://github.com/ruhuang2001/meldra/commit/beb7c44485600648a3d8a4d42d9ea1111c4043ca))
+* **tui:** enable mouse wheel scrolling in the timeline ([864fd9a](https://github.com/ruhuang2001/meldra/commit/864fd9a1486cc64fe2cff1505e3cbbcd6d5860b6))
+* **tui:** fold consecutive exploration calls into one line ([e6c4e7b](https://github.com/ruhuang2001/meldra/commit/e6c4e7b2a3071c4cfa4ae9fa312cd4ab3f237ff9))
+* **tui:** show token usage and context waterline in the footer ([e8c62b3](https://github.com/ruhuang2001/meldra/commit/e8c62b3b74c0737781540241fcfe0c49328baeec))
+* **workspace:** keep a bounded undo stack instead of one step ([82f915f](https://github.com/ruhuang2001/meldra/commit/82f915f96f877e8a0adefdc92f71dd275ae81957))
+* **workspace:** summarize git_review with stats before diffs ([39dd095](https://github.com/ruhuang2001/meldra/commit/39dd09569b450cca0870280fa14d617700dbf0a7))
+* **workspace:** support renames in apply_patch ([7836469](https://github.com/ruhuang2001/meldra/commit/7836469dd030201ef09cd34d587d1b41bac6724d))
+
+
+### Bug Fixes
+
+* **agent:** address mcp validation and verification review findings ([1bf2e9c](https://github.com/ruhuang2001/meldra/commit/1bf2e9c19246072635752ce5c3765d5b19afcb59))
+* **agent:** close review safety and verification gaps ([1a32bd4](https://github.com/ruhuang2001/meldra/commit/1a32bd487b99fd1c511d949385053a87521022ed))
+* **agent:** validate numeric elicitation answers against the original schema ([4522d5b](https://github.com/ruhuang2001/meldra/commit/4522d5bc72f3cddecd305a2e83f3d3c808461cc4)), closes [#86](https://github.com/ruhuang2001/meldra/issues/86)
+* **ci:** run local checks across python minor versions ([2aa62b4](https://github.com/ruhuang2001/meldra/commit/2aa62b4d80b867effc1211b1a2859898858f7c4d))
+* **tui:** execute asynchronous mode commands in tests ([c67307f](https://github.com/ruhuang2001/meldra/commit/c67307f3804db0b03972d3bd6dc814c8fce0be2f))
+* **tui:** stop printing a mode notice above the composer badge ([9ffdaae](https://github.com/ruhuang2001/meldra/commit/9ffdaae2c3893cd6a6715a28c75ada95892ec5bc))
+* **tui:** track pending mode changes and ignore repeated shift-tab ([3d5778f](https://github.com/ruhuang2001/meldra/commit/3d5778ff15ba4bd09a538f93175a02951ecfafcb))
+
+
+### Performance
+
+* **ci:** accelerate actions without dropping checks ([#77](https://github.com/ruhuang2001/meldra/issues/77)) ([470c24a](https://github.com/ruhuang2001/meldra/commit/470c24a917edb8a7caf1ec9135016ee64e68a7e4))
+
 ## [0.5.0](https://github.com/ruhuang2001/meldra/compare/v0.4.2...v0.5.0) (2026-11-02)
 
 
