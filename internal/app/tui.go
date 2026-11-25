@@ -1229,7 +1229,7 @@ func (m *tuiModel) View() tea.View {
 		}
 	}
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeNone
+	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
 
