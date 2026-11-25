@@ -19,7 +19,6 @@ import signal
 import subprocess
 import sys
 import time
-import tomllib
 import urllib.request
 
 if not __debug__:
@@ -133,6 +132,8 @@ def main():
     binary, output, server = args.binary.resolve(), args.output.resolve(), args.server_script.resolve()
     module = (args.puppeteer_module or server.parent.parent / 'third_party/index.js').resolve()
     assert module.is_file() and binary.is_file() and server.is_file()
+    import tomllib
+
     config = tomllib.loads((args.live_config / 'config.toml').read_text())
     key = os.environ.get('OPENAI_API_KEY', '')
     credentials = args.live_config / 'credentials.env'

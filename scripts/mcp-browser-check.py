@@ -18,7 +18,6 @@ import re
 import secrets
 import shutil
 import threading
-import tomllib
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -103,6 +102,8 @@ def main():
         cap.write(output / 'screenshot.png', pixels)
         report.update(screenshot_sha256=digest, screenshot_bytes=len(pixels), call_id=result['call_id'])
         if args.live_config:
+            import tomllib
+
             config = tomllib.loads((args.live_config / 'config.toml').read_text())
             key = os.environ.get('OPENAI_API_KEY', '')
             credentials = args.live_config / 'credentials.env'

@@ -4,8 +4,10 @@ title: "Development"
 
 ## Development
 
-Requires Go 1.26.11. Python 3 is required for the real-terminal integration
-tests; building the binary itself requires only Go.
+Requires Go 1.26.11. Local CI uses the `python3` on your `PATH` (3.10 or
+newer); no specific minor version is required. Only the optional live browser
+checks need Python 3.11+ to read TOML credentials configuration. Building the
+binary itself requires only Go.
 
 ```bash
 make check           # formatting, vet, modules, race tests, E2E suites, coverage, and build
