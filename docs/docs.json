@@ -8,66 +8,221 @@
     "dark": "#2563EB"
   },
   "favicon": "/assets/icon.png",
-  "description": "A local, foreground coding agent that asks before it acts and records what it did.",
+  "description": "A local coding agent that runs in your terminal, asks before it acts, and records what it did.",
   "redirects": [
-    { "source": "/capabilities.md", "destination": "/guides/modes" },
-    { "source": "/index.md", "destination": "/" },
-    { "source": "/quickstart.md", "destination": "/quickstart" },
-    { "source": "/changelog.mdx", "destination": "/changelog" },
-    { "source": "/architecture.md", "destination": "/reference/architecture" },
-    { "source": "/task-storage.md", "destination": "/reference/task-records" },
-    { "source": "/stream-json.md", "destination": "/reference/stream-json" },
-    { "source": "/skills.md", "destination": "/integrations/skills" },
-    { "source": "/mcp.md", "destination": "/integrations/mcp" },
-    { "source": "/mcp-support.md", "destination": "/integrations/mcp" },
-    { "source": "/mcp-auth-interactions.md", "destination": "/integrations/mcp" },
-    { "source": "/mcp-auth-interactions", "destination": "/integrations/mcp" },
-    { "source": "/web-tools.md", "destination": "/integrations/web-tools" },
-    { "source": "/configuration.md", "destination": "/reference/configuration" },
-    { "source": "/providers.md", "destination": "/reference/providers" },
-    { "source": "/upgrading.md", "destination": "/reference/upgrading" },
-    { "source": "/documentation.md", "destination": "/engineering/documentation" },
-    { "source": "/development.md", "destination": "/engineering/development" },
-    { "source": "/benchmarking.md", "destination": "/engineering/benchmarking" },
-    { "source": "/swe-bench-setup.md", "destination": "/engineering/swe-bench" },
-    { "source": "/skills-failure-matrix.md", "destination": "/engineering/verification/skills-failures" },
-    { "source": "/commands-failure-matrix.md", "destination": "/engineering/verification/commands-failures" },
-    { "source": "/plan-failure-matrix.md", "destination": "/engineering/verification/plan-failures" },
-    { "source": "/images-failure-matrix.md", "destination": "/engineering/verification/image-failures" },
-    { "source": "/context-compaction-failure-matrix.md", "destination": "/engineering/verification/compaction-failures" },
-    { "source": "/verification/web-failure-matrix.md", "destination": "/engineering/verification/web-failures" },
-    { "source": "/verification/stream-json-failures.md", "destination": "/engineering/verification/stream-json-failures" },
-    { "source": "/verification/plan-integration-failures.md", "destination": "/engineering/verification/integration-failures" },
-    { "source": "/verification/comment-audit.md", "destination": "/engineering/verification/comment-audit" },
-    { "source": "/mcp", "destination": "/integrations/mcp" },
-    { "source": "/mcp-support", "destination": "/integrations/mcp" },
-    { "source": "/skills", "destination": "/integrations/skills" },
-    { "source": "/web-tools", "destination": "/integrations/web-tools" },
-    { "source": "/configuration", "destination": "/reference/configuration" },
-    { "source": "/providers", "destination": "/reference/providers" },
-    { "source": "/upgrading", "destination": "/reference/upgrading" },
-    { "source": "/stream-json", "destination": "/reference/stream-json" },
-    { "source": "/architecture", "destination": "/reference/architecture" },
-    { "source": "/task-storage", "destination": "/reference/task-records" },
-    { "source": "/development", "destination": "/engineering/development" },
-    { "source": "/documentation", "destination": "/engineering/documentation" },
-    { "source": "/benchmarking", "destination": "/engineering/benchmarking" },
-    { "source": "/swe-bench-setup", "destination": "/engineering/swe-bench" },
-    { "source": "/skills-failure-matrix", "destination": "/engineering/verification/skills-failures" },
-    { "source": "/commands-failure-matrix", "destination": "/engineering/verification/commands-failures" },
-    { "source": "/plan-failure-matrix", "destination": "/engineering/verification/plan-failures" },
-    { "source": "/images-failure-matrix", "destination": "/engineering/verification/image-failures" },
-    { "source": "/context-compaction-failure-matrix", "destination": "/engineering/verification/compaction-failures" },
-    { "source": "/verification/web-failure-matrix", "destination": "/engineering/verification/web-failures" },
-    { "source": "/verification/plan-integration-failures", "destination": "/engineering/verification/integration-failures" },
-    { "source": "/verification/stream-json-failures", "destination": "/engineering/verification/stream-json-failures" },
-    { "source": "/verification/comment-audit", "destination": "/engineering/verification/comment-audit" }
+    {
+      "source": "/benchmarking.md",
+      "destination": "/engineering/swe-bench"
+    },
+    {
+      "source": "/benchmarking",
+      "destination": "/engineering/swe-bench"
+    },
+    {
+      "source": "/swe-bench-setup.md",
+      "destination": "/engineering/swe-bench"
+    },
+    {
+      "source": "/swe-bench-setup",
+      "destination": "/engineering/swe-bench"
+    },
+    {
+      "source": "/engineering/benchmarking",
+      "destination": "/engineering/swe-bench"
+    },
+    {
+      "source": "/architecture.md",
+      "destination": "/reference/configuration"
+    },
+    {
+      "source": "/task-storage.md",
+      "destination": "/guides/controls"
+    },
+    {
+      "source": "/stream-json.md",
+      "destination": "/guides/controls"
+    },
+    {
+      "source": "/reference/architecture",
+      "destination": "/reference/configuration"
+    },
+    {
+      "source": "/reference/task-records",
+      "destination": "/guides/controls"
+    },
+    {
+      "source": "/reference/stream-json",
+      "destination": "/guides/controls"
+    },
+    {
+      "source": "/capabilities.md",
+      "destination": "/guides/modes"
+    },
+    {
+      "source": "/index.md",
+      "destination": "/"
+    },
+    {
+      "source": "/quickstart.md",
+      "destination": "/quickstart"
+    },
+    {
+      "source": "/changelog.mdx",
+      "destination": "/changelog"
+    },
+    {
+      "source": "/skills.md",
+      "destination": "/integrations/skills"
+    },
+    {
+      "source": "/mcp.md",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/mcp-support.md",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/mcp-auth-interactions.md",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/mcp-auth-interactions",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/web-tools.md",
+      "destination": "/integrations/web-tools"
+    },
+    {
+      "source": "/configuration.md",
+      "destination": "/reference/configuration"
+    },
+    {
+      "source": "/providers.md",
+      "destination": "/reference/providers"
+    },
+    {
+      "source": "/upgrading.md",
+      "destination": "/reference/upgrading"
+    },
+    {
+      "source": "/documentation.md",
+      "destination": "/engineering/documentation"
+    },
+    {
+      "source": "/development.md",
+      "destination": "/engineering/development"
+    },
+    {
+      "source": "/skills-failure-matrix.md",
+      "destination": "/engineering/verification/skills-failures"
+    },
+    {
+      "source": "/commands-failure-matrix.md",
+      "destination": "/engineering/verification/commands-failures"
+    },
+    {
+      "source": "/plan-failure-matrix.md",
+      "destination": "/engineering/verification/plan-failures"
+    },
+    {
+      "source": "/images-failure-matrix.md",
+      "destination": "/engineering/verification/image-failures"
+    },
+    {
+      "source": "/context-compaction-failure-matrix.md",
+      "destination": "/engineering/verification/compaction-failures"
+    },
+    {
+      "source": "/verification/web-failure-matrix.md",
+      "destination": "/engineering/verification/web-failures"
+    },
+    {
+      "source": "/verification/stream-json-failures.md",
+      "destination": "/engineering/verification/stream-json-failures"
+    },
+    {
+      "source": "/verification/plan-integration-failures.md",
+      "destination": "/engineering/verification/integration-failures"
+    },
+    {
+      "source": "/mcp",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/mcp-support",
+      "destination": "/integrations/mcp"
+    },
+    {
+      "source": "/skills",
+      "destination": "/integrations/skills"
+    },
+    {
+      "source": "/web-tools",
+      "destination": "/integrations/web-tools"
+    },
+    {
+      "source": "/configuration",
+      "destination": "/reference/configuration"
+    },
+    {
+      "source": "/providers",
+      "destination": "/reference/providers"
+    },
+    {
+      "source": "/upgrading",
+      "destination": "/reference/upgrading"
+    },
+    {
+      "source": "/development",
+      "destination": "/engineering/development"
+    },
+    {
+      "source": "/documentation",
+      "destination": "/engineering/documentation"
+    },
+    {
+      "source": "/skills-failure-matrix",
+      "destination": "/engineering/verification/skills-failures"
+    },
+    {
+      "source": "/commands-failure-matrix",
+      "destination": "/engineering/verification/commands-failures"
+    },
+    {
+      "source": "/plan-failure-matrix",
+      "destination": "/engineering/verification/plan-failures"
+    },
+    {
+      "source": "/images-failure-matrix",
+      "destination": "/engineering/verification/image-failures"
+    },
+    {
+      "source": "/context-compaction-failure-matrix",
+      "destination": "/engineering/verification/compaction-failures"
+    },
+    {
+      "source": "/verification/web-failure-matrix",
+      "destination": "/engineering/verification/web-failures"
+    },
+    {
+      "source": "/verification/plan-integration-failures",
+      "destination": "/engineering/verification/integration-failures"
+    },
+    {
+      "source": "/verification/stream-json-failures",
+      "destination": "/engineering/verification/stream-json-failures"
+    }
   ],
   "navigation": {
     "groups": [
       {
         "group": "Get started",
-        "pages": ["index", "quickstart"]
+        "pages": [
+          "index",
+          "quickstart"
+        ]
       },
       {
         "group": "Build with Meldra",
@@ -93,10 +248,7 @@
         "pages": [
           "reference/configuration",
           "reference/providers",
-          "reference/task-records",
-          "reference/stream-json",
-          "reference/upgrading",
-          "reference/architecture"
+          "reference/upgrading"
         ]
       },
       {
@@ -106,7 +258,6 @@
         "pages": [
           "engineering/development",
           "engineering/documentation",
-          "engineering/benchmarking",
           "engineering/swe-bench",
           "engineering/verification/skills-failures",
           "engineering/verification/commands-failures",
@@ -116,15 +267,21 @@
           "engineering/verification/web-failures",
           "engineering/verification/stream-json-failures",
           "engineering/verification/integration-failures",
-          "engineering/verification/comment-audit"
+          "engineering/verification/local-e2e-suites"
         ]
       }
     ]
   },
   "navbar": {
     "links": [
-      { "label": "Changelog", "href": "/changelog" },
-      { "label": "GitHub", "href": "https://github.com/ruhuang2001/meldra" }
+      {
+        "label": "Changelog",
+        "href": "/changelog"
+      },
+      {
+        "label": "GitHub",
+        "href": "https://github.com/ruhuang2001/meldra"
+      }
     ],
     "primary": {
       "type": "button",

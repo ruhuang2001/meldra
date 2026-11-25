@@ -1,14 +1,96 @@
 ---
 title: "SWE-bench runs"
-description: "Submit repository changes to hosted SWE-bench evaluation and keep the evidence."
+description: "Generate patches for SWE-bench tasks, submit them for evaluation, and keep the evidence."
 ---
 
-## SWE-bench Hosted Evaluation (sb-cli)
+> **Repository tooling (v0.5.0).** The adapter described here is development
+> tooling. Run it from this checkout with an explicitly selected binary; it is
+> not part of the published Meldra binary.
 
-> **Repository tooling (v0.5.0).** The Meldra adapter described here is repository development
-> tooling. Run it from this checkout with an explicitly selected binary.
+## Generate and evaluate patches
 
-Install the CLI and its missing runtime dependency:
+`scripts/swe-bench-lite.py` generates patches and can invoke the official
+evaluator. Configure the model provider and `OPENAI_API_KEY` first; see
+[Configuration](../reference/configuration.md). Run these commands from the
+repository root.
+
+```bash
+python3 -m pip install swebench sb-cli typing-extensions
+CGO_ENABLED=0 make build
+python3 scripts/swe-bench-lite.py --binary dist/meldra --max-tasks 5
+```
+
+The script prints one line per instance as patches land:
+
+```text
+[1/5] django__django-11099: empty patch, 42.1s
+[2/5] django__django-11133: 812 byte patch, 96.4s
+Predictions: benchmarks/swe-bench/meldra-<timestamp>/predictions.jsonl
+```
+
+A resolve rate appears only after `--evaluate`, once the official harness has
+run the project's tests.
+
+### How it works
+
+1. Loads the SWE-bench subset from HuggingFace.
+2. Clones each repository at `base_commit` into a temporary directory, runs
+   Meldra with the problem statement and `--auto-approve`, stages the result,
+   and captures the diff.
+3. Records every attempt in `attempts.jsonl`, including agent errors and partial
+   patches. Only successful attempts enter `predictions.jsonl`; a successful
+   empty patch is still a legitimate prediction.
+4. Resumes with the same `--run-id`: successful predictions are retained, failed
+   instances are retried, and the predictions file is rewritten atomically.
+
+Generation runs on the host as your own user with automatic approval enabled by
+default, because stdin is closed and command approvals would otherwise read EOF.
+Each checkout is temporary; Docker is needed only for local evaluation.
+
+Verification is a separate step: `--pull --evaluate` fetches the selected images
+and runs the official harness in Docker, while `--submit` sends predictions to
+hosted evaluation.
+
+### Establish a baseline
+
+```bash
+python3 scripts/swe-bench-lite.py --binary dist/meldra --max-tasks 50 \
+    --run-id baseline-v0.5.0 --pull --evaluate
+```
+
+Save the harness report next to the predictions and commit both so later runs
+have a reference. `.gitignore` ignores `benchmarks/swe-bench/` but not
+`benchmarks/baseline-*`:
+
+```bash
+mkdir -p benchmarks
+cp benchmarks/swe-bench/baseline-v0.5.0/predictions.jsonl \
+   benchmarks/baseline-v0.5.0.predictions.jsonl
+cp benchmarks/swe-bench/baseline-v0.5.0/meldra.baseline-v0.5.0.json \
+   benchmarks/baseline-v0.5.0.report.json
+git add benchmarks/baseline-v0.5.0.*
+git commit -m "docs(docs): record SWE-bench Lite baseline for v0.5.0"
+```
+
+The harness names its report `<model_name>.<run_id>.json`; adjust the copy if you
+run it with a different model name.
+
+Cost scales with instance count, model, and turn length. Measure one 5-task
+sample with your configured model and multiply before committing to a long run.
+
+### Offline adapter verification
+
+The adapter regression suite runs in `make check` and `make check-fast` without
+network access or model credentials. To run it alone:
+
+```bash
+python3 scripts/swe-bench-adapter-e2e.py --output .artifacts/adapter-e2e
+```
+
+Use a fresh output directory. It retains `report.json`, invocation logs,
+predictions, attempt records, and process-cleanup evidence.
+
+## Hosted evaluation with sb-cli
 
 ```bash
 python3 -m pip install sb-cli typing-extensions
@@ -20,201 +102,97 @@ dependency.
 
 ### Registration
 
-The commands below match `sb-cli` 0.1.5. Request a key for your email address:
+Request a key for your email address:
 
 ```bash
 sb-cli gen-api-key you@example.com
 ```
 
-The service emails an API key and a verification code. Set the key in your
-shell, then verify it with the emailed code:
+The service emails an API key and a verification code. Set the key in your shell,
+then verify it with the emailed code:
 
 ```bash
-export SWEBENCH_API_KEY='replace-with-your-api-key'
-sb-cli verify-api-key 'replace-with-your-verification-code'
+export SWEBENCH_API_KEY="..."
+sb-cli verify-api-key --code <code>
 ```
 
-`SWEBENCH_API_KEY` authenticates hosted evaluation; Meldra separately needs
-its model-provider credentials (`OPENAI_API_KEY` and any provider overrides).
-See [Configuration](../reference/configuration.md).
+Hosted submission also needs the key in the environment when you pass `--submit`.
 
-### Usage
+## SWE-bench-m (multimodal)
 
-Run from the repository root after `CGO_ENABLED=0 make build`:
-
-```bash
-# Submit to hosted evaluation (no local Docker required)
-python3 scripts/swe-bench-lite.py \
-    --binary dist/meldra \
-    --max-tasks 50 \
-    --run-id hosted-baseline \
-    --submit
-
-# List submitted runs for the same subset and split
-sb-cli list-runs swe-bench_lite test
-
-# Retrieve the report for the submitted run
-sb-cli get-report swe-bench_lite test hosted-baseline \
-    --output_dir sb-cli-reports
-```
-
-`sb-cli submit` waits for evaluation and generates a report by default.
-`get-report` retrieves a run's report; `status` and `download` are not commands
-in `sb-cli` 0.1.5. Use the same subset, split, and run ID when retrieving results.
-For `--subset verified`, use `swe-bench_verified test` in the direct CLI commands.
-Check your account's remaining hosted quota with:
-
-```bash
-sb-cli get-quotas
-```
-
-Hosted evaluation does not need local Docker. Patch generation still runs
-locally, and the model provider is billed separately. Hosted availability and
-quotas are controlled by the service.
-
-### When to Use Hosted vs Local
-
-| Scenario | Recommended | Why |
-|----------|-------------|-----|
-| Development and debugging | Local (`--pull --evaluate`) | Inspect local harness logs and containers |
-| Establishing a baseline | Either, with a fixed subset and run ID | Retain predictions and the evaluator report |
-| Evaluation without local Docker | Hosted (`--submit`) | Run the evaluation through the hosted service |
-| CI integration | Either | Configure model credentials and the chosen evaluator |
-
-## SWE-bench-m (Multimodal Support)
-
-> **Available since v0.5.0.** CLI and TUI turns accept local PNG/JPEG
-> references and preserve image snapshots. See [foreground capabilities](../guides/modes.md).
+> **Available since v0.5.0.** CLI and TUI turns accept local PNG/JPEG references
+> and preserve image snapshots. See
+> [image references](../guides/project-context.md#attach-an-image).
 > The dedicated SWE-bench-m dataset adapter remains unimplemented.
 
-### What is SWE-bench-m?
-
-SWE-bench-m is a multimodal variant of SWE-bench whose tasks need **image
-input**, for example screenshot-driven UI bug fixes, chart generation, and
-visualization issues.
-
-### Meldra Multimodal Support
-
-The provider package exposes a constructor for user messages that mix text and
-images.
-
-#### API
-
-```go
-// internal/provider/conversation.go
-
-// ImageContent represents an image input for multimodal requests.
-type ImageContent struct {
-    URL    string // https://, http://, or a data: URL carrying base64 image data
-    Detail string // "low", "high", "auto", or "original"; empty selects "auto"
-}
-
-// UserItemsWithImages fails locally for images without a URL and for messages
-// with no content, instead of emitting an uninterpretable request.
-func UserItemsWithImages(text string, images []ImageContent) (Items, error)
-```
-
-#### Example Usage
-
-```go
-import "meldra/internal/provider"
-
-// Image from a URL
-items, err := provider.UserItemsWithImages(
-    "Fix the UI bug shown in the screenshot",
-    []provider.ImageContent{{URL: "https://example.com/screenshot.png", Detail: "high"}},
-)
-if err != nil {
-    return err
-}
-
-// Image from local bytes, as a base64 data URL
-imageData := base64.StdEncoding.EncodeToString(imageBytes)
-items, err = provider.UserItemsWithImages(
-    "Describe what is broken here",
-    []provider.ImageContent{{URL: "data:image/png;base64," + imageData, Detail: "high"}},
-)
-```
-
-The `URL` field accepts a plain `http(s)` URL or a `data:` URL with inline
-base64 data; there is no separate base64 field.
-
-#### SWE-bench-m Integration
+SWE-bench-m is a multimodal variant whose tasks need image input, for example
+screenshot-driven UI fixes, chart generation, and visualization issues.
 
 Integration status:
 
 - [x] Accept local image references from the CLI and TUI
-- [x] Wire image content through the agent turn builder in `internal/app`
+- [x] Wire image content through the agent turn builder
 - [ ] Write `scripts/swe-bench-m.py` to pull images from the dataset
-- [x] End-to-end image-reference tests against a mock provider (`scripts/images-e2e.py`)
+- [x] End-to-end image-reference tests against a mock provider
 
 ## Troubleshooting
 
-### Empty Patches and Failed Attempts
+### Empty patches and failed attempts
 
-A successful Meldra run can produce an empty patch. This is a legitimate
-attempt: it stays in `predictions.jsonl` and counts in the benchmark denominator.
-An empty patch alone is not an infrastructure error.
+A successful Meldra run can produce an empty patch. It stays in
+`predictions.jsonl` and counts in the denominator; an empty patch alone is not an
+infrastructure error.
 
 Checkout failures, agent failures, timeouts, and diff failures are recorded in
-`attempts.jsonl`. These failed attempts are excluded from `predictions.jsonl`,
-even when the workspace contains a partial patch. Any instance failure makes
-the batch exit nonzero and skip evaluation or submission.
+`attempts.jsonl` and excluded from `predictions.jsonl`, even when the workspace
+holds a partial patch. Any instance failure makes the batch exit nonzero and skip
+evaluation or submission. Inspect the attempt records and `agent-logs/`, fix the
+cause, then rerun with the same `--run-id` to retry only the failures.
 
-Inspect the attempt records and `agent-logs/`, fix the underlying error, then
-rerun with the same `--run-id` to retry failed instances. Successful predictions
-are retained. Resume atomically rewrites the predictions file so a damaged
-trailing record cannot corrupt a newly appended prediction.
+### Streaming timeout
 
-### Streaming Timeout
+`response stream was idle for 90s without a terminal event` means the configured
+gateway did not finish a Responses stream. Point Meldra at a gateway with
+streaming support or raise the timeout there; the failure is reported rather than
+mistaken for a finished turn.
 
-**Symptom**: `response stream was idle for 90s without a terminal event`.
+### Agent deadline
 
-**Resolution**: this means the configured gateway did not finish a Responses
-stream. Point Meldra at a gateway with Responses streaming support, or increase
-the provider timeout at the gateway. The provider reports the condition as an
-error so a failed turn is never mistaken for a finished one.
+Each Meldra process gets 10 minutes by default (`--agent-timeout 600`). On
+timeout the adapter sends SIGTERM and allows 15 seconds (`--termination-grace 15`)
+for Meldra to cancel subprocesses before force-killing them. Both options take
+positive seconds.
 
-### Agent Deadline
+### Docker image pulls
 
-The adapter allows each Meldra process 10 minutes by default (`--agent-timeout
-600`). On timeout, it sends SIGTERM and allows 15 seconds by default
-(`--termination-grace 15`) for Meldra to cancel subprocesses and clean up before
-force-killing remaining processes. Both options take positive seconds. The
-timeout is recorded as a failed attempt, so a partial patch is not submitted as
-a successful run.
-
-### Docker Image Pull Failures
-
-Use `--pull` to fetch the selected instance images before local evaluation.
-`--mirror` changes the pull source; it does not enable pulling by itself.
+Use `--pull` to fetch the selected images before local evaluation. `--mirror`
+changes the pull source; it does not enable pulling by itself.
 
 ```bash
-# Use a mirror (the default)
 python3 scripts/swe-bench-lite.py --binary dist/meldra --pull --evaluate \
     --mirror docker.1ms.run
-
-# Or pull from Docker Hub directly
-python3 scripts/swe-bench-lite.py --binary dist/meldra --pull --evaluate \
-    --mirror ""
-
-# Pull selected images with more parallelism, then generate and evaluate
 python3 scripts/swe-bench-lite.py --binary dist/meldra --pull --evaluate \
     --pull-workers 16
 ```
 
-### Commands Are Declined During a Benchmark Run
+## Go performance benchmarks
 
-The script passes `--auto-approve` by default because stdin is closed. Without
-it, command approvals read EOF and are declined. Each instance uses a temporary
-checkout on the host, and commands run with the host user's permissions.
-Automatic approval remains enabled for host runs; there is no extra opt-in or
-container requirement. Docker is needed only for local harness evaluation.
+Go benchmarks track system performance, not agent capability:
+
+```bash
+go test -bench=. -benchmem ./internal/app ./internal/store
+go test -bench=BenchmarkSearchFiles -benchmem ./internal/app > old.txt
+# make the change
+go test -bench=BenchmarkSearchFiles -benchmem ./internal/app > new.txt
+go install golang.org/x/perf/cmd/benchstat@latest
+benchstat old.txt new.txt
+```
+
+Compare with `benchstat` on your own machine rather than quoting figures here;
+allocate fewer bytes and allocations per operation where the code allows it.
 
 ## References
 
-- [SWE-bench website](https://www.swebench.com)
-- [SWE-bench GitHub](https://github.com/princeton-nlp/SWE-bench)
-- [sb-cli documentation](https://github.com/swe-bench/sb-cli)
-- [Leaderboard](https://www.swebench.com/leaderboard)
-- **Meldra benchmarking guide**: [Benchmarking](./benchmarking.md)
+- [SWE-bench](https://www.swebench.com) · [source](https://github.com/princeton-nlp/SWE-bench)
+- [sb-cli](https://github.com/swe-bench/sb-cli) · [leaderboard](https://www.swebench.com/leaderboard)
+- [Test gates and local checks](./development.md)

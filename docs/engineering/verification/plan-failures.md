@@ -3,7 +3,7 @@ title: "Planned feature failure cases"
 description: "Acceptance cases for regex search, session titles, images, and compaction."
 ---
 
-These cases are specified before implementation. Real-binary E2E reports retain
+Real-binary E2E reports retain
 provider requests, CLI transcripts, session snapshots, and ledger inspection.
 
 ## Regex search and session titles

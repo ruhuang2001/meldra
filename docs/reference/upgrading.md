@@ -35,7 +35,7 @@ synced `0755` binary. User symlinks are preserved.
 
 What it does not do:
 
-- It never migrates or rewrites the task ledger.
+- It never migrates or rewrites task records.
 - It does not keep a rollback copy — save the old binary yourself.
 - It does not downgrade: a known newer version stays installed.
 - It does not update Homebrew, npm, or Nix installations; use the package manager.
@@ -79,8 +79,8 @@ are held.
   <Accordion title="v0.5.0">
     Run `meldra update`, then restart Meldra to use context compaction, web tools,
     stream JSON output, custom slash commands, image references, regex
-    `search_files`, and session titles. No task-store migration: the ledger
-    remains schema 2.
+    `search_files`, and session titles. No task-store migration: the record
+    schema remains version 2.
 
     Two behavior changes to know before upgrading:
 
@@ -92,9 +92,9 @@ are held.
       recorded as `external_read` and ask before dispatch, including in Plan mode.
       `--auto-approve` also approves network disclosure and billing.
 
-    Downgrading keeps the ledger readable, but v0.4.2 cannot read v0.5.0 session
+    Downgrading keeps task records readable, but v0.4.2 cannot read v0.5.0 session
     snapshots: it reports `skipped 1 unreadable or invalid saved session file`
-    and lists no sessions. The snapshot files are not deleted. The ledger,
+    and lists no sessions. The snapshot files are not deleted. Task records,
     `task show`, `task show --json`, and `task events` remain readable, including
     `external_read` records. If you need an older conversation after a downgrade,
     restore its pre-upgrade backup.
@@ -119,7 +119,7 @@ are held.
   <Accordion title="v0.3.0 and earlier">
     These versions have no `meldra update`. Use the installer in the
     [Quickstart](../quickstart.md) or a checksum-verified platform archive. Before
-    first opening the new ledger, stop all old processes and make the backup
+    first opening the new task records, stop all old processes and make the backup
     described above: v0.4.0 migrates schema 1 to schema 2 on open, and v0.3.0
     cannot read schema 2. To roll back, use the previous binary with the
     pre-upgrade backup or a separate `MELDRA_HOME`. Restoring the backup loses

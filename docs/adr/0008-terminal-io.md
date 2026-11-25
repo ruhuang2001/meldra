@@ -10,4 +10,4 @@ Sanitize untrusted terminal controls and invalid UTF-8 before presentation. Boun
 
 Distinguish normal EOF on piped input after a prompt from a real controlling-terminal hangup. Integration fixtures close the master of a real PTY to let the OS deliver the signal. Surface tool follow-up activity even when a gateway omits the next progress event. Display the agent-reported mode alone in the composer border. Fitting it within the existing frame preserves IME cursor coordinates and minimum-width layout. Round abbreviated usage counts half up and wait for real usage before showing the footer.
 
-[Terminal and controls](../guides/modes.md) · [JSON stream](../reference/stream-json.md)
+[Terminal and controls](../guides/modes.md) · [JSON stream](https://github.com/ruhuang2001/meldra/blob/main/engineering/stream-json.md)

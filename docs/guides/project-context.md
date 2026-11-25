@@ -93,6 +93,10 @@ instruction filenames are not loaded. Per-file discovery also cannot bound what 
 program writes, because an approved program may touch files outside its working
 directory.
 
+For instructions that apply only to one kind of task — a review checklist, a
+migration recipe — use a [skill](../integrations/skills.md) instead of loading
+them into every request.
+
 ## Reference limits
 
 | Item | Limit |

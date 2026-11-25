@@ -10,4 +10,4 @@ Opaque items retain provider continuation fields. When shrinking a tool result, 
 
 Measure each encoded conversation item once and account for array delimiters. Re-encoding the entire array after every tool-output replacement produces quadratic work on long histories. Keep credentials in the transport configuration and out of model items, results and observer events. Streaming fixtures pass through the public provider boundary so replay sees the opaque items a real provider supplies.
 
-[Provider behavior](../reference/providers.md) · [Architecture](../reference/architecture.md)
+[Provider behavior](../reference/providers.md) · [Architecture](https://github.com/ruhuang2001/meldra/blob/main/engineering/architecture.md)

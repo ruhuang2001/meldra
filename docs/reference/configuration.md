@@ -6,11 +6,8 @@ title: "Configuration"
 ~/.meldra/config.toml       # model, provider URL, and limits
 ~/.meldra/credentials.env   # OPENAI_API_KEY
 ~/.meldra/mcp.json          # optional trusted MCP server configuration
-~/.meldra/update-check.json # cached 24-hour stable release check metadata
-~/.meldra/sessions/         # preserved legacy 0.1.x session snapshots
-~/.meldra/tasks/tasks.db    # versioned task, run, tool, process, approval, and event records
-~/.meldra/tasks/sessions/   # current conversation snapshots
-~/.meldra/tasks/artifacts/  # bounded tool/verification output, named by digest
+~/.meldra/commands/         # optional custom slash commands
+~/.meldra/skills/           # optional skills
 ```
 
 The local and OpenAI-compatible TOML examples in
@@ -66,27 +63,18 @@ The corresponding process overrides are `MELDRA_COMPACT_KEEP_MESSAGES`,
 `MELDRA_COMPACT_THRESHOLD_PERCENT`, `MELDRA_MAX_TURN_CONTEXT_BYTES`, and
 `MELDRA_CONTEXT_WINDOW_TOKENS` (unreleased).
 
-The threshold measures UTF-8 bytes of the locally rebuilt text context, not
-tokens or model capacity. Native Responses uses `max_turn_context_bytes` as the
-denominator. Custom endpoints use the smaller of that value and
-`max_custom_turn_input_bytes`. Attachment payloads have separate limits.
-Native server-side history is not measurable locally, so the threshold does
-not guarantee that the provider's context window has not been exceeded.
+The threshold counts bytes of the text context Meldra rebuilds locally, not the
+provider's tokens. Native server-side history cannot be measured locally, so a
+threshold hit is not a guarantee about the provider's context window.
 
 **Unreleased.** Setting `context_window_tokens` to the model's context window
-adds a token trigger. After the first successful response, Meldra pairs the
-provider-reported `input_tokens` with the byte count of the request it built,
-then scales later byte measurements by that ratio. Compaction starts when the
-estimate reaches `compact_threshold_percent` of the configured window. The byte
-budget keeps applying as a hard ceiling in every case, and no token estimate is
-made until a response has calibrated it, so an unset window changes nothing.
-The TUI footer shows the current turn's usage and, once calibrated, the context
-percentage.
+adds a token trigger alongside the byte threshold, and the TUI footer then shows
+the current turn's usage and a context percentage. An unset window changes
+nothing.
 
 Use `/compact [focus]` while idle to request compaction manually, even when the
 automatic threshold is disabled. See [context compaction](../guides/context-compaction.md)
-for preservation and failure behavior. Omission-marker trimming remains a
-separate custom-provider budget safeguard.
+for what compaction keeps and when it is blocked.
 
 ## Provider transport
 

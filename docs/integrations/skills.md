@@ -1,133 +1,135 @@
 ---
 title: "Skills"
-description: "Package reusable workflow instructions and resources that Meldra loads only when needed."
+description: "Pack reusable review checklists, project conventions, and reference files that Meldra loads only when a task needs them."
 ---
 
+A skill is a folder with a `SKILL.md` file. Meldra sees its name and description
+at the start of a conversation and reads the body only when the task calls for
+it, so long checklists and reference files cost context only when used.
 
-This document describes Meldra's `SKILL.md` discovery rules, integration
-boundaries, and verification approach.
+Use one when you repeat the same instructions — a review checklist, a migration
+recipe, house style for a package. Leave `AGENTS.md` for facts that always apply
+to a directory tree; see [Project context](../guides/project-context.md).
 
-## Design
+## Write a skill
 
-Skills provide discoverable workflow guidance and resources loaded on demand. Meldra reuses its existing executor, workspace command tools, approvals, task records, and artifact storage. No separate script runtime is introduced.
+Create the package next to the code it governs:
 
-This implements the application flow rather than full compatibility with other agents' permission extensions, plugin installers, or slash commands. `$name` is a prompt convention that asks the model to read a skill, not a frontend-enforced command.
-
-## Reference implementations
-
-| Reference | Discovery and duplicates | Loading and invocation | Implication for Meldra |
-| --- | --- | --- | --- |
-| Agent Skills specification [1] | Defines package format, not directories or precedence | YAML metadata, Markdown body, optional scripts and resources; progressive disclosure | Adopt the format and layered loading, with explicit Meldra discovery policy |
-| Codex documentation [2] | Workspace `.agents/skills`, user and managed/system directories; same-name skills may coexist | Initial names, descriptions, and paths; bodies loaded for explicit mentions or matching tasks | Include metadata in context and read bodies and references on demand |
-| Claude Code documentation [3] | `.claude/skills` from project, personal, and enterprise sources; documented precedence is enterprise > personal > project | Skill commands, argument substitution, invocation controls, and permission extensions | Do not interpret agent-specific extensions as portable Meldra authorization |
-| OpenCode documentation and source [4] | Native and `.claude`/`.agents` directories, recursive discovery, additional sources | Dedicated skill reader with a base directory and permission checks; command-name conflict handling | Use a dedicated audited reader and document discovery and duplicate behavior |
-
-OpenCode source was examined at commit `907b3bc518fa48e90e8ec24dd327d13eee71c36c`, including `skill/index.ts`, `skill/discovery.ts`, `tool/skill.ts`, and `command/index.ts`. Its concurrent `Effect.forEach` loading overwrites duplicate map entries after warning, which does not establish a deterministic last-scanner-wins rule. The reader calls `ctx.ask`; command registration avoids existing command names.
-
-Format, discovery, and execution policy are separate compatibility questions. The integration guide's project-over-user summary differs from Claude Code's documented precedence. Meldra's precedence is its own policy, not a universal interoperability rule.
-
-## Discovery and metadata
-
-Scan direct `<name>/SKILL.md` children in this order:
-
-1. Workspace `.meldra/skills`.
-2. Workspace `.agents/skills`.
-3. `$MELDRA_HOME/skills`, defaulting to `~/.meldra/skills`.
-4. `$HOME/.agents/skills`.
-
-The first valid package admitted to the catalog wins a duplicate name. Shadowed sources produce warnings; the final catalog is sorted by name. Missing directories are skipped, and invalid packages do not block valid ones. Discovery does not recurse, search parent repositories, or read private `.claude` and `.codex` sources.
-
-`SKILL.md` must be UTF-8 text beginning with YAML frontmatter:
-
-- `name`: 1–64 lowercase ASCII letters, digits, or single hyphens, matching the directory name; no leading, trailing, or consecutive hyphens.
-- `description`: a nonempty string of at most 1,024 Unicode characters.
-- Quoted values, folded scalars, and CRLF are supported. Duplicate keys and invalid field types are rejected.
-- Other fields do not affect policy. `allowed-tools`, `disable-model-invocation`, `context`, argument substitution, and `agents/openai.yaml` are not implemented. They cannot grant permissions or disable implicit loading.
-
-The implementation uses `go.yaml.in/yaml/v3`; the [module file](https://github.com/ruhuang2001/meldra/blob/main/go.mod) records the dependency version.
-
-| Limit | Behavior |
-| --- | --- |
-| One file: 128 KiB | Oversized instructions and resources are rejected rather than silently truncated |
-| YAML header: 16 KiB | Oversized or unterminated headers are rejected |
-| Direct entries: 256 total | An overfull root and subsequent sources are skipped with a warning instead of choosing a filesystem-order subset |
-| Initial catalog JSON: 64 KiB | Entries that do not fit are skipped with warnings; bodies are excluded |
-
-The catalog is a process-lifetime snapshot, refreshed on restart or resume. Each `read_skill` call reads the current resource. Body edits take effect immediately; new packages, renames, and changed descriptions require a refresh.
-
-## Integration and security boundaries
-
-`newChatRuntime` discovers skills after protecting runtime paths and registers `read_skill` when valid packages exist. `runInference` adds names, descriptions, and paths to every request without preloading bodies. Empty catalogs retain explicit missing-skill guidance.
-
-Example tool input:
-
-```json wrap
-{"name":"review-checklist","path":null}
+```text
+.agents/skills/review-checklist/SKILL.md
+.agents/skills/review-checklist/references/severity.md
 ```
 
-`path=null` reads `SKILL.md`; `path=references/checklist.md` reads a resource relative to its package. Output includes the name, base directory, and resource path. Successful reads use digest-addressed task artifacts and the `read` effect. Recovery reuses existing task, session, and audit mechanisms without adding tables.
+```markdown
+---
+name: review-checklist
+description: Check correctness, error handling, and verification evidence during code review.
+---
+Inspect changes and their call sites. Prefer reproducible findings with file
+locations. Verify with existing tools and follow Meldra's command approval
+requirements.
 
-Configuration, task storage, and execution locks are protected across all sources, including packages outside the workspace. The sole configuration-directory exception permits `read_skill` to access native `$MELDRA_HOME/skills` packages. Protected descendants inside those packages remain blocked; ordinary file tools retain their configuration-directory restrictions.
+Read `references/severity.md` before ranking findings.
+```
 
-Absolute paths, traversal, `.git`, symlinks, hard-linked files, non-regular files, binary data, and oversized resources are rejected. Configured home prefixes are canonicalized; package components never follow symlinks. Directory identities and file link counts are checked during opening. Darwin/Linux use `O_NOFOLLOW` and `O_NONBLOCK` to prevent final-file symlink and FIFO swaps. Other platforms reject skill reads before opening files.
+Frontmatter has two fields:
 
-Skill guidance remains subordinate to the user's request and runtime restrictions. Reading does not execute scripts, grant permissions, or add tools. Workspace scripts use the existing allowlist and approvals; external scripts must first be copied into the workspace with approval. Approved commands run as the user, and Skills do not add an operating-system sandbox.
+| Field | Rule |
+| --- | --- |
+| `name` | 1–64 lowercase ASCII letters, digits, or single hyphens; must match the directory name; no leading, trailing, or repeated hyphens |
+| `description` | Nonempty, at most 1,024 characters; this is what the model uses to decide whether to load the skill |
 
-Compaction may discard previously loaded guidance. The prompt requires rereading it when needed. Tests cover fresh discovery and resource loading after cross-process recovery, but do not prove that a real model reliably rereads instructions after compaction.
+Quoted values, folded scalars, and CRLF are accepted. Duplicate keys, wrong
+types, and empty descriptions are rejected. Fields from other agents'
+implementations — `allowed-tools`, `disable-model-invocation`, `context`,
+argument substitution, `agents/openai.yaml` — are ignored and cannot grant
+permissions or prevent loading.
 
-## Try it
+Check the package without model credentials:
 
-Create `.agents/skills/review-checklist/SKILL.md` in a test project:
+```sh wrap
+meldra skills --workspace /path/to/project
+meldra skills --workspace /path/to/project --json
+```
 
-    ---
-    name: review-checklist
-    description: Check correctness, error handling, and verification evidence during code review.
-    ---
-    Inspect changes and their call sites. Prefer reproducible findings with file locations.
-    Verify with existing tools and follow Meldra's command approval requirements.
+## Use a skill
 
-Build and inspect the test project:
+Name it in the request with `$` when you want a specific one:
 
-    mkdir -p dist && go build -o dist/meldra-skills .
-    ./dist/meldra-skills skills --workspace /path/to/test-project --json
-    ./dist/meldra-skills --workspace /path/to/test-project --prompt 'Use $review-checklist to review the current changes'
+```text wrap
+Use $review-checklist to review the current changes.
+```
 
-Listing requires no API credentials. Chat uses the existing model and credential configuration.
+Otherwise the model decides from the description. Reading a skill is an ordinary
+`read_skill` call recorded with the task. It cannot run scripts, grant
+permissions, or reach outside its package.
 
-## Verification and evidence
+Pass a resource path to load supporting files relative to the package:
 
-The failure matrix [5] and executable harness define the expected application boundaries, alongside focused Go regression tests. `scripts/skills-e2e.py` builds the real binary, isolates `HOME`, `MELDRA_HOME`, and the workspace, and drives the CLI, tools, approvals, SQLite records, and session recovery through a deterministic loopback Responses SSE server. It uses fake credentials and no paid model.
+```json wrap
+{"name":"review-checklist","path":"references/severity.md"}
+```
 
-    python3 scripts/skills-e2e.py --output dist/skills-e2e-new-run
-    make check-local-ci
+## Where Meldra looks
 
-The output directory must be new or empty. Stage changes before `make check-local-ci`, which checks an isolated copy of the index. Keep a separate output directory for each E2E run.
+Direct `<name>/SKILL.md` children of these directories, in order:
 
-Each E2E run writes `assertions.json` with passing checks, source and binary SHA-256 hashes, HTTP requests/responses, stdout/stderr, task/event JSON, fixtures, generated files, and audit artifacts.
+1. Workspace `.meldra/skills`
+2. Workspace `.agents/skills`
+3. `$MELDRA_HOME/skills`, default `~/.meldra/skills`
+4. `$HOME/.agents/skills`
 
-The suite covers external packages containing protected configuration, global reads, CLI/runtime cache protection consistency, static FIFO rejection, hard-linked metadata and credential rejection, approval decline and acceptance, multiline presentation, help, and recovery with fresh bodies.
+The first valid package wins a duplicate name; later copies are shadowed with a
+warning. The catalog is sorted by name. Missing directories are skipped, and one
+invalid package does not hide the others. Discovery does not recurse, read parent
+repositories, or load `.claude` and `.codex` directories.
 
-**Unreleased verification:** automatic Go tests also cover protected hardlinks,
-file/directory symlinks, traversal, lazy body loading, and fresh resource reads.
-The full standalone Skills suite remains a manual integration check.
+Both workspace sources ship with the repository and are visible to everyone
+working in it. The two home sources are private to your machine — put anything
+project-specific in the workspace copies.
 
-The scripted provider validates application behavior, not live-model skill selection or instruction compliance. Arbitrary concurrent filesystem replacements, mounts, and malicious-instruction resistance require separate security review.
+## Limits
 
-## Future trade-offs
+| Item | Limit |
+| --- | --- |
+| One `SKILL.md` or resource | 128 KiB |
+| YAML frontmatter | 16 KiB |
+| Direct entries across all sources | 256 |
+| Initial catalog sent to the model | 64 KiB |
 
-Add a frontend selector when deterministic selection is needed. Explicit-only invocation requires enforceable policy filtering rather than prompt text alone. Consider pagination, hot reload, and ancestor discovery when catalog scale or update frequency justifies them. Marketplaces, installers, remote downloads, new executors, and new permission systems are outside the current scope.
+Oversized files are rejected rather than truncated, and entries that do not fit
+the catalog are skipped with a warning.
 
-## Primary sources
+The catalog is a snapshot for the life of the process: restart or resume after
+adding, renaming, or redesigning a skill. Editing a body takes effect on the next
+read, so a correction does not need a restart.
 
-1. Agent Skills: [specification](https://agentskills.io/specification) and [integration guide](https://agentskills.io/integrate-skills).
-2. OpenAI: [Codex Skills](https://developers.openai.com/codex/skills/) and [Markdown](https://developers.openai.com/codex/skills.md).
-3. Claude Code: [Skills](https://code.claude.com/docs/en/skills) and [duplicate resolution](https://code.claude.com/docs/en/skills#resolve-skills-that-share-a-name).
-4. OpenCode: [documentation](https://opencode.ai/docs/skills/) and pinned [loader](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/index.ts), [discovery](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/skill/discovery.ts), [skill tool](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/tool/skill.ts), and [commands](https://github.com/anomalyco/opencode/blob/907b3bc518fa48e90e8ec24dd327d13eee71c36c/packages/opencode/src/command/index.ts).
-5. This repository: [failure matrix](../engineering/verification/skills-failures.md), [E2E harness](https://github.com/ruhuang2001/meldra/blob/main/scripts/skills-e2e.py), and [implementation](https://github.com/ruhuang2001/meldra/blob/main/internal/app/skills.go).
+## Warnings and troubleshooting
 
-## Discovery notices
+| Symptom | Cause |
+| --- | --- |
+| `No skills found.` | No `.agents/skills/<name>/SKILL.md` in the workspace or home sources |
+| Skill missing from the catalog | Invalid frontmatter, a name that differs from its directory, a symlinked package, or a filled catalog |
+| Old description after an edit | The catalog is stale; restart or resume the session |
+| A warning repeats | It appeared once per home; a changed message is shown again |
 
-Identical discovery warnings are shown once per Meldra home,
-including across restarts and resumes. Warning fingerprints are stored privately
-in `skill-warnings.json`. Changed diagnostics are shown again; failure to read or
-save the cache leaves warnings visible. Invalid packages remain excluded.
+Identical discovery warnings are shown once per Meldra home, including across
+restarts, with fingerprints cached privately in `skill-warnings.json`. Failing to
+read or save that cache leaves the warnings visible.
+
+## Security boundaries
+
+Reading a skill does not execute anything. Workspace scripts it points to still
+need the normal command allowlist and approval; a script outside the workspace
+must first be copied in with approval. Skills do not add an operating-system
+sandbox.
+
+Packages outside the workspace are read through the same protected-path checks as
+configuration and task storage. Traversal, symlinks, hard links, binary files, and
+oversized resources are rejected, and a package cannot open configuration or
+credential files by a relative path.
+
+Compaction can discard guidance loaded earlier, so the instructions require
+rereading a skill when it is still needed. That is a prompt-level rule, not proof
+that a model always complies.
+

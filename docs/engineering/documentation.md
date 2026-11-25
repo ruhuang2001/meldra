@@ -14,14 +14,15 @@ on GitHub, so do not keep separate MDX copies.
 | `docs/index.md`, `docs/quickstart.md`, `docs/changelog.mdx` | New users | Visible |
 | `docs/guides/` | People using Meldra day to day | Visible |
 | `docs/integrations/` | MCP, Skills, and web tools | Visible |
-| `docs/reference/` | Configuration, providers, storage, protocol, upgrades, architecture | Visible |
+| `docs/reference/` | Configuration, providers, upgrades | Visible |
+| `engineering/` | Runtime architecture, task records, stream JSON protocol (repository only) | Not published |
 | `docs/engineering/` | Contributors: build, tests, benchmarks, this guide | Hidden, searchable |
 | `docs/engineering/verification/` | Failure matrices and E2E evidence | Hidden, searchable |
 | `docs/adr/`, `docs/proposals/` | Design history | Not published |
 
 Write for the person doing the task. Keep implementation detail — package names,
 SDK versions, test commands, and byte limits an ordinary user does not set — in
-`engineering/` or `reference/`, and link to it instead of inlining it. Every page
+`docs/engineering/` or `engineering/`, and link to it instead of inlining it. Every page
 starts with frontmatter; a visible page needs at least `title` and a one-sentence
 `description`. Do not repeat the title as a top-level heading.
 

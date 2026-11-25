@@ -8,4 +8,4 @@ Tools expose immutable definitions and structured outcomes independent of the pr
 
 The serial conversation owner also presents command warnings. Dispatch validates the registered tool identity once and invokes an exact name. The caller remains responsible for serializing handlers and deciding how to reconcile side effects.
 
-[Runtime boundaries](../reference/architecture.md) · [Foreground controls](../guides/modes.md)
+[Runtime boundaries](https://github.com/ruhuang2001/meldra/blob/main/engineering/architecture.md) · [Foreground controls](../guides/modes.md)

@@ -35,7 +35,7 @@ OPENAI_API_KEY="your-inference-key"
 DEEPSEEK_API_KEY="your-separate-deepseek-key"
 ```
 
-Restart the foreground session after changing configuration.
+Restart the session after changing configuration.
 
 ## Approval and network boundaries
 
@@ -89,25 +89,13 @@ Intent and approval are persisted before the request; outcome and artifacts
 afterward. A lost or cancelled response after request dispatch is `unknown`,
 requires explicit inspection/reconciliation, and is never automatically replayed
 as a harmless local read. Artifact persistence failures stop execution. MCP uses
-the same tool handlers, effect, approvals and ledger; its approval tokens bind
+the same tool handlers, effect, approvals and task records; its approval tokens bind
 to the exact arguments and cannot be reused for a changed target or query.
 
-## API contract and verification
+## Backend contract
 
-The implementation follows the official DeepSeek contracts checked on
-October 29, 2026:
+The DeepSeek backends follow the documented contracts checked on October 29, 2026:
 
 - [Search and Fetch guide](https://api-docs.deepseek.com/guides/search/)
 - [Fetch API](https://api-docs.deepseek.com/api/fetch/): `POST /v1/tools/fetch` with `url`.
 - [Search API](https://api-docs.deepseek.com/api/search/): `POST /v1/tools/search` with `query`, `count`, and `need_content`. Queries contain 1–128 Unicode characters; count is 1–50, default 10.
-
-`python3 scripts/web-e2e.py --binary /absolute/path/to/meldra --output /tmp/web-evidence`
-exercises the real CLI/MCP and durable records with isolated homes and offline
-HTTP/TLS fixtures. It produces `report.json`, protocol/provider transcripts,
-task records, content artifacts and binary/overlay provenance. Positive-network
-tests replace only DNS/raw dialing/TLS trust with a build overlay; all address
-validation and production policy remain active. Release binaries have no bypass.
-Fixture builds normalize the source path and `PWD`, then verify an overlay-only
-startup marker before any request. The suite repeats configuration checks with
-canonical and symlink source paths and records the build paths and probe output.
-`make check` runs this suite. See the [failure matrix](../engineering/verification/web-failures.md).

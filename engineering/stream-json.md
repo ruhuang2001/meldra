@@ -3,7 +3,7 @@ title: "Stream JSON output"
 description: "Consume Meldra's one-prompt JSONL protocol and resume an exactly approved operation."
 ---
 
-The foreground CLI accepts `--output-format text|stream-json`.
+The CLI accepts `--output-format text|stream-json`.
 The default is `text`. Stream JSON runs exactly one `--prompt`, never reads stdin,
 and never enters the TUI, input picker or interactive approval flow.
 
@@ -48,8 +48,7 @@ while successful turn completion describes completion of the model interaction;
 it does not assert that every proposed tool succeeded. Reasoning and provider
 request bodies are excluded from this presentation protocol.
 
-Consumers must ignore unknown kinds. The checked schema snapshot is
-`scripts/fixtures/stream-json-v1.json`; internal UI and ledger events are separate
+Consumers must ignore unknown kinds. Internal UI and ledger events are separate
 contracts. Startup failures may emit `error` and `session_end` before a session
 exists. Usage errors write only a human diagnostic to stderr.
 
@@ -69,7 +68,7 @@ meldra task resume TASK_ID --approve-detail-hash HASH
 This defaults to `stream-json` and resumes in the saved workspace. The hash is
 an opaque SHA-256 binding to that pending approval, its original parameter
 hash, full preview digest, file/command fingerprints, policy and inspected
-project instructions. The new foreground process acquires the same leases,
+project instructions. The new process acquires the same leases,
 validates the pending record, recovers the old Run, and re-prepares exactly the
 stored operation before any new model request. Its new approval records the
 consumed hash and source `detail-hash`. It grants one operation only; further
@@ -110,16 +109,3 @@ errors, **2** for invalid stream options, and **3** for required approval. Norma
 completion ends with `session_end` status `succeeded`, reason `completed`;
 approval uses `waiting_approval`/`approval_required`, errors use `failed`/`error`,
 and cancellation uses `cancelled`/`cancelled`.
-
-## Verification
-
-`make check` includes the real-binary stream suite. To repeat it independently:
-
-```sh wrap
-CGO_ENABLED=0 go build -o /tmp/meldra-stream .
-python3 scripts/capability-e2e.py --binary /tmp/meldra-stream --output /tmp/meldra-stream-evidence --stream-json --only stream-json
-```
-
-Use a new output directory. The suite uses isolated homes, fake credentials and
-a loopback provider, and preserves stdout/stderr, provider requests, ledger
-snapshots, a report, binary checksum and evidence checksums.

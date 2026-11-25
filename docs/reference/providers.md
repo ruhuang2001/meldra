@@ -73,7 +73,6 @@ Consult the server's own documentation and verify your installed build:
 [Ollama](https://docs.ollama.com/api/openai-compatibility),
 [vLLM](https://docs.vllm.ai/en/latest/serving/openai_compatible_server/), and
 [llama.cpp](https://github.com/ggml-org/llama.cpp/tree/master/tools/server).
-No live server/model compatibility benchmark is claimed by the offline suite.
 
 ## Continuation and streaming
 
@@ -110,18 +109,9 @@ nonstreaming request only before any output event; an interrupted partial stream
 must not be retried as though it never happened. JSON Responses returned to a
 streaming request are normalized. Malformed responses and missing tool identities
 fail closed. Responses replay can carry opaque protocol reasoning transiently,
-but credentials and raw reasoning do not enter durable session/ledger records.
+but credentials and raw reasoning do not enter durable session or task records.
 Cross-protocol reasoning preservation is not promised.
 
-The second-phase [Anthropic adapter issue](https://github.com/ruhuang2001/meldra/issues/66)
-defines explicit capability queries and provider-switch history rebuilding.
-The [task storage contract](./task-records.md) defines current summary/evidence
-preservation, and [configuration](./configuration.md#context-compaction) defines
-triggers. The [original compaction design](../proposals/context-compaction.md) is historical.
-
-## Repeatable offline verification
-
-`make check` exercises custom Responses SSE/JSON handling, tool replay, limits,
-errors and cancellation through Go regressions and real-binary loopback E2E.
-Run `python3 scripts/provider-compat-e2e.py --binary dist/meldra --output /tmp/meldra-provider-check`
-for the dedicated compatibility scenarios and retained wire/ledger evidence.
+Provider switching that rebuilds history is tracked in the
+[Anthropic adapter issue](https://github.com/ruhuang2001/meldra/issues/66). Compaction
+thresholds are in the [configuration reference](./configuration.md#context-compaction).

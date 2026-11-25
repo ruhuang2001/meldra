@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>A local, foreground coding agent for your terminal.</strong>
+  <strong>A local coding agent that runs in your terminal.</strong>
 </p>
 
 <p align="center">
@@ -14,9 +14,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/ruhuang2001/meldra" alt="License"></a>
 </p>
 
-Meldra works in the foreground, asks before sensitive actions, and keeps a local
-record of task execution for inspection and explicit recovery. It is experimental:
-review its changes and use it carefully around sensitive or irreplaceable files.
+Meldra runs inside one terminal session, asks before sensitive actions, and
+keeps a local record of task execution for inspection and explicit recovery. It
+is experimental: review its changes and use it carefully around sensitive or
+irreplaceable files.
 Approved commands run as your user; Meldra is not an operating-system sandbox.
 
 ## Install
@@ -65,14 +66,17 @@ The documentation site is organized by task:
 - **Integrations:** [MCP](docs/integrations/mcp.md), [Skills](docs/integrations/skills.md),
   and [web tools](docs/integrations/web-tools.md).
 - **Reference:** [configuration](docs/reference/configuration.md),
-  [providers](docs/reference/providers.md), [task records](docs/reference/task-records.md),
-  [stream JSON](docs/reference/stream-json.md), [upgrades](docs/reference/upgrading.md),
-  and [architecture](docs/reference/architecture.md).
+  [providers](docs/reference/providers.md), and
+  [upgrades](docs/reference/upgrading.md).
 
 The same pages power the Mintlify site. Release highlights are in the
 [site changelog](docs/changelog.mdx); generated technical history is in
-[CHANGELOG.md](CHANGELOG.md). Contribution and verification records live under
-`docs/engineering/` and are hidden from the public sidebar.
+[CHANGELOG.md](CHANGELOG.md).
+
+Engineering records are not published. [engineering/](engineering/) holds the
+runtime architecture, [task records](engineering/task-records.md), and the
+[stream JSON](engineering/stream-json.md) protocol; contribution and verification
+notes live under `docs/engineering/` and stay out of the public sidebar.
 
 ## Development
 

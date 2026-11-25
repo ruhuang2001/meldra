@@ -3,7 +3,7 @@ title: "Web tools verification"
 description: "Failure boundaries for fetching, DNS validation, redirects, and hosted search."
 ---
 
-**Available since v0.5.0.** Written before implementation. Verification uses a real Meldra
+**Available since v0.5.0.** Verification uses a real Meldra
 binary, isolated homes, a fake Responses provider, controlled HTTP/TLS origins,
 and retained JSON reports, provider transcripts, task records and artifacts.
 No unit tests are added. Production binaries have no SSRF bypass configuration.

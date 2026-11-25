@@ -4,7 +4,7 @@ description: "How Meldra's processes, packages, execution lifetimes, persistence
 ---
 
 
-Meldra is a local, serial foreground coding agent. Its runtime provides
+Meldra is a local coding agent that runs one turn at a time. Its runtime provides
 versioned execution history, task/workspace ownership, structured tool outcomes,
 explicit recovery, scoped project context, MCP integration, Skills, and runtime
 controls.
@@ -130,7 +130,7 @@ The task adapter adds bounded artifact references to the persisted result.
 Built-in `web_fetch` and optional DeepSeek `web_search` use the
 distinct `external_read` effect. They are policy reads with explicit network
 approval, and their lost-response outcomes remain unknown. The shared Workspace
-handlers serve CLI, TUI and MCP. See [Web tools](../integrations/web-tools.md) for DNS-at-dial
+handlers serve CLI, TUI and MCP. See [Web tools](../docs/integrations/web-tools.md) for DNS-at-dial
 validation, hosted disclosure, metadata and bounded artifacts.
 
 The real execution sequence is:
@@ -165,7 +165,7 @@ access the user's filesystem, network and other external systems.
 | Record | Meaning |
 | --- | --- |
 | Task | Goal, canonical workspace, session association and latest overall state |
-| Run | One foreground attempt, configuration, executor, timestamps and immutable terminal outcome |
+| Run | One execution attempt, configuration, executor, timestamps and immutable terminal outcome |
 | ToolCall | Provider call identity, parameters, effect class, execution state and structured result |
 | Approval | Pending/approved/declined/expired decision bound to a call and reviewed operation |
 | Process | Run-owned command identity, lifecycle state, effect certainty, exit evidence, and output artifacts |
@@ -181,8 +181,7 @@ It is not interchangeable with cancellation or failure.
 
 Store writes use SQLite transactions. Partial indexes reject multiple active
 runs for the same task. Advisory file locks cover the task and canonical writable
-workspace for the whole foreground turn, across processes using the same user
-home. Separate `MELDRA_HOME` directories still contend on workspace ownership.
+workspace for the whole turn, across processes using the same user home. Separate `MELDRA_HOME` directories still contend on workspace ownership.
 Primary locks live in `~/.meldra-locks`; legacy cache locks are also held to
 exclude older builds. Cache eviction cannot bypass the primary locks.
 Lock file identity is rechecked before recording side effects. Locks release
@@ -201,7 +200,7 @@ requests and tools; command execution kills its owned process group and bounds
 pipe cleanup. The task adapter gives terminal-state persistence a bounded
 five-second context independent of the cancelled request. Normal EOF after
 `--prompt` finishes the request before ending input. A real terminal hangup ends
-the foreground task.
+the current task.
 
 TUI output remains writable during cancellation until terminal
 cleanup finishes, so Ctrl-C and SIGTERM can restore keyboard protocols and
@@ -331,24 +330,27 @@ available after another interruption. Wall-clock timestamps and
 repeated prompt text are not used to discard requests. Cancelling an idle legacy resume
 does not create a task-era snapshot before the legacy source is imported.
 
-See the [upgrade and downgrade guide](./upgrading.md) for
+See the [upgrade and downgrade guide](../docs/reference/upgrading.md) for
 whole-store backups and legacy snapshot limits.
 
-## Verification and next increments
+## Context budgets and compaction measurement
 
-The root remains the build target (`go build .`), and `-X main.version=...`
-continues to identify binaries. `make check` covers formatting, vet, module
-consistency, race tests, real-binary E2E suites, aggregate coverage, and build.
-Store tests cover state transitions, ownership, crash boundaries, schema
-rejection, and imports. App tests cover real tools, persistence failures,
-recovery, legacy compatibility, signals, owned subprocesses, and actual PTY
-closure.
+Native Responses uses `max_turn_context_bytes` as the compaction denominator.
+Custom endpoints use the smaller of that value and `max_custom_turn_input_bytes`
+plus omission-marker trimming. Attachment payloads have their own limits.
 
-Repeatable JSONL test logs can be retained with
-`go test -race -json -count=3 -timeout=5m ./...`. Real-model quality evaluations
-are outside the deterministic test suite.
+**Unreleased:** setting `context_window_tokens` adds a token trigger. After the
+first successful response, the application pairs the provider-reported
+`input_tokens` with the byte count of the request it built and scales later byte
+measurements by that ratio; compaction starts at `compact_threshold_percent` of
+the configured window. The byte budget remains a hard ceiling, and no token
+estimate exists until a response calibrates it.
 
-After this runtime is validated, independent child workspaces, parent/child
-contracts, inherited budgets and serial result integration can build on these
-records. No shared-workspace parallel writer, distributed scheduler or cloud
-service is implied by the current architecture.
+## Where this stops
+
+The records described here support one writer per task and workspace. Independent
+child workspaces, parent/child contracts, inherited budgets, and serial result
+integration could be built on them later. No shared-workspace parallel writer,
+distributed scheduler, or cloud service is implied by the current architecture.
+
+Build, test, and release commands are in the [development guide](../docs/engineering/development.md).

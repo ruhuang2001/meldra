@@ -53,7 +53,7 @@ Substitution happens once. Dollar placeholders inside the arguments stay literal
 and expanded text never invokes another command or a built-in control. An unknown
 slash name remains ordinary text. Templates never run a shell.
 
-Commands go through the normal reference, policy, approval, session, and ledger
+Commands go through the normal reference, policy, approval, session, and record
 path, so Plan restrictions and approval rules are unchanged. `/steer /review focus`
 and `/queue /review focus` expand before their control request is recorded, and a
 recovered request keeps the saved expansion. A remote MCP prompt never expands a

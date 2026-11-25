@@ -1084,7 +1084,7 @@ const usageText = `Usage:
   meldra tasks [--json]           List recorded tasks.
   meldra task show ID [--json]    Inspect task runs, tools, processes, and approvals.
   meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.
-  meldra task resume ID           Explicitly continue in the foreground.
+  meldra task resume ID           Explicitly continue an interrupted task.
   meldra task resolve ID CALL_ID --outcome succeeded|failed --reason TEXT
                                  Record an inspected unknown outcome; runs no tools.
   meldra task resolve-process ID PROCESS_ID --reason TEXT

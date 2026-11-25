@@ -2,8 +2,6 @@
 title: "Development"
 ---
 
-## Development
-
 Requires Go 1.26.11. Local CI uses [uv](https://docs.astral.sh/uv/getting-started/installation/)
 and the `python3` on your `PATH` (3.10 or
 newer); no specific minor version is required. Only the optional live browser
@@ -17,7 +15,10 @@ make check-staged    # quick checks of staged whitespace and Go formatting
 make check-local-ci  # full make check in a temporary copy of the index
 ```
 
-The test suite must maintain at least 75% statement coverage.
+The test suite must maintain at least 75% statement coverage. Repeatable JSONL
+test logs can be retained with
+`go test -race -json -count=3 -timeout=5m ./...`; real-model quality evaluations
+are outside the deterministic suite.
 
 The store capacity tests use Python 3's `sqlite3` module to prepare files at
 the production 256 MiB limit. The Go store performs recovery and migration
@@ -52,7 +53,7 @@ to run that comparison locally.
 
 Run `/delete-comment [paths]` in Meldra to repeat the audit. The command loads
 the repository's `$delete-comment` skill. The original classifications and
-decision records are in the [comment audit](./verification/comment-audit.md).
+decision records are in the [comment audit](https://github.com/ruhuang2001/meldra/blob/main/engineering/history/comment-audit.md).
 `make comment-lint-e2e` verifies the rule with disposable repositories and
 writes `.artifacts/checks/comment-lint.json`. Both local check targets and CI
 run this gate.
@@ -91,7 +92,7 @@ exact revision you intend to tag. Its expectations are in the
 
 Choose a new output directory for each run.
 
-**Unreleased:** optional [real browser checks](../integrations/mcp.md#reproduce-the-browser-check)
+**Unreleased:** optional [real browser checks](./verification/local-e2e-suites.md#browser-checks)
 exercise inline screenshot transport and live-model page repair using installed
 Chrome DevTools MCP. The repair driver uses a disposable broken app and independent
 before/after form, layout, error-recovery, and task-evidence checks. Browser

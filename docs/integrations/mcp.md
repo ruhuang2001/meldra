@@ -1,17 +1,30 @@
 ---
-title: MCP
-sidebarTitle: MCP
-description: Connect MCP servers, configure authentication and interactions, and expose Meldra workspace tools.
+title: MCP servers
+description: Connect Meldra to external tools, or serve Meldra's workspace tools to another MCP client.
 ---
 
-Meldra connects to external MCP servers and exposes bounded
-workspace tools through `meldra mcp serve`. It uses the official Go SDK v1.8.0 and
-Meldra's existing approvals, task records, and recovery runtime.
+An MCP server gives Meldra tools and data it does not have itself: a browser, a
+ticket tracker, a documentation index. Meldra can also act as an MCP server, so
+another client can use its workspace tools.
 
-From v0.5.0, [Stream JSON approval resume](../reference/stream-json.md) binds each external
-operation to its MCP connection configuration and OAuth login generation.
-Changing the selected server, executable, environment or authentication settings
-requires a new approval before the replacement transport is started.
+Configuration lives in your private `$MELDRA_HOME/mcp.json`. Nothing starts until
+you list a server there, and every external call still goes through the normal
+approval and task-record path.
+
+```json wrap
+{
+  "mcpServers": {
+    "remote": {
+      "url": "https://mcp.example.com/mcp",
+      "oauth": {}
+    }
+  }
+}
+```
+
+See [Configuration](#configuration) for a stdio example and the full set of keys.
+
+## What Meldra supports
 
 | Capability | Supported surface |
 | --- | --- |
@@ -26,22 +39,72 @@ requires a new approval before the replacement transport is started.
 This is the implemented product surface, not complete MCP certification. Sampling is
 retained for compatibility even though it is deprecated in the `2026-07-28` spec.
 
-## Design
+## How calls behave
 
-`newChatRuntime -> connectMCP -> ToolDefinition -> Agent.runInference -> taskExecution -> Workspace.requestApproval -> ClientSession`.
+An external tool appears as `mcp__SERVER__TOOL`, `mcp_resources__SERVER`, or
+`mcp_prompts__SERVER`; long names use a digest to avoid collisions. Meldra
+validates arguments against the server's schema before dispatch and never fetches
+a remote schema reference.
 
-- `mcp.go` handles configuration, connections, discovery, limits, and cleanup.
-- `mcp_catalog.go` exposes on-demand resource and prompt operations.
-- `mcp_oauth.go` and `mcp_interaction.go` handle OAuth and server interactions.
-- CLI, TUI, and task resume share the runtime and close owned connections.
-- External names normally use `mcp__SERVER__TOOL`, `mcp_resources__SERVER`, or
-  `mcp_prompts__SERVER`; long names use a digest to avoid collisions.
-- External schemas remain non-strict and are validated before dispatch; external
-  references are never fetched.
-- Calls that disconnect, time out, or cancel after dispatch are recorded as
-  `unknown` and are never retried automatically.
-- Complete result JSON is retained as an artifact up to 16 MiB; model-visible text
-  is capped at 256 KiB. Inline images use the separate artifacts described below.
+A call that disconnects, times out, or is cancelled after dispatch is recorded as
+`unknown` and never retried automatically; inspect it with `meldra task show`.
+Complete result JSON is kept as an artifact up to 16 MiB, while the model sees at
+most 256 KiB of text. Switching the server, executable, environment, or
+authentication settings invalidates a pending approval for the old transport.
+
+## Configuration
+
+Create `~/.meldra/mcp.json`, or use `$MELDRA_HOME/mcp.json`, after `meldra config init`:
+
+```json wrap
+{
+  "mcpServers": {
+    "local": {
+      "command": "node",
+      "args": ["/absolute/path/to/server.js"],
+      "env_vars": ["MY_SERVICE_TOKEN"],
+      "env": {"LOG_LEVEL": "warn"},
+      "startup_timeout_sec": 10,
+      "tool_timeout_sec": 60
+    },
+    "remote": {
+      "url": "https://mcp.example.com/mcp",
+      "oauth": {},
+      "sampling": false,
+      "disabled": true
+    }
+  }
+}
+```
+
+The configuration directory must be `0700` and the file `0600`. Each server must
+specify exactly one of `command` or `url`. stdio servers do not use a shell and run
+with the workspace as their working directory. Only a small default environment is
+inherited; use `env_vars` and `env` explicitly. `OPENAI_API_KEY` is never inherited.
+
+HTTP endpoints require HTTPS or loopback HTTP and reject credentials, queries,
+fragments, and redirects. Use `bearer_token_env` for static authentication or
+`oauth` for browser authorization; the modes are mutually exclusive.
+
+Startup and discovery default to 10 seconds. An MCP call defaults to 60 seconds;
+both values can be configured from 1 to 300 seconds. OAuth login waits up to five
+minutes, while OAuth metadata and token requests have a 30-second limit. Configuration
+is capped at 1 MiB and 16 servers. Each server may advertise at most 128 tools and
+1 MiB of encoded tool definitions. For chat, the external tool allowance is computed from the actual built-in and
+Skill tool count so the combined model catalog fits within 128 tools. The combined
+external catalog also has a 1 MiB limit, counting fully encoded JSON including
+escaped descriptions and metadata. stdio frames and HTTP responses are capped at 16 MiB.
+
+Configuration grants startup trust: stdio processes run with the current OS user's
+permissions and are not sandboxed. Configure only trusted servers and keep secrets
+out of command arguments and URLs.
+
+Only private user configuration is read; repository MCP configuration does not
+start servers automatically. Tool arguments and results may enter private task
+history and artifacts, which are not encrypted or automatically redacted. On
+macOS/Linux, connection cleanup terminates the server's process group. Processes
+that deliberately detach from the group can survive; SIGKILL or power loss cannot
+guarantee cleanup. Restart chat after changing configuration.
 
 ## Inline tool images (unreleased)
 
@@ -62,7 +125,7 @@ opened automatically; this feature handles inline tool images, not binary resour
 or multimodal prompts/sampling.
 
 Images are saved as private, digest-checked binary task artifacts before the next
-inference. The text ledger and `mcp-result.json` contain artifact metadata rather
+inference. The task record and `mcp-result.json` contain artifact metadata rather
 than image base64; `mcp-content-v1.json` retains ordered text and image references.
 Duplicate provider call IDs restore that evidence without calling the server
 again. Missing or corrupt evidence stops execution, including when the original
@@ -142,123 +205,6 @@ may leave unknown effects that require explicit reconciliation; this feature doe
 not treat termination as proof of a clean shutdown. Apps without a clean shutdown
 path need that reconciliation, or a separately user-managed server. There is no
 automatic browser workflow, hot-edit exception, or generic shutdown endpoint.
-
-### Reproduce the browser check
-
-The opt-in driver uses a real Meldra binary, real Chrome MCP, and a synthetic
-image-only board. An offline Responses fixture selects navigation and capture,
-then checks the actual wire payload and persisted PNG. It does not require
-browser installation or network inference in ordinary `make check` runs.
-
-```sh wrap
-go build -o /tmp/meldra-images .
-python3 scripts/mcp-browser-check.py --binary /tmp/meldra-images \
-  --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
-  --output .artifacts/checks/browser-new-run
-```
-
-Use the entrypoint from the installed package's `bin.chrome-devtools-mcp` field
-and a fresh output directory. The driver requires Python 3.11+ and accepts
-`--node /absolute/path/to/node`. `--expect-text-only` records the pre-feature
-baseline. With explicit `--live-config /path/to/private/MELDRA_HOME`, the driver
-forwards the final image-bearing request to that configured model, incurs model
-usage, and checks the fresh visual code and shapes in its answer. It does not
-copy credentials into evidence. This verifies visual interpretation, not
-autonomous tool selection or a page-repair workflow. Reports, screenshots,
-provider requests, and task records are retained for inspection.
-
-### Reproduce autonomous page repair (unreleased)
-
-`scripts/mcp-browser-repair.py` runs the configured live model for the entire task
-against a disposable copy of `scripts/fixtures/browser-repair`. Unlike the
-screenshot check above, it does not script model responses or tool selections.
-The intentionally broken demo has a failing reservation action and horizontal
-overflow on phones. The model must reproduce them through Chrome, inspect
-screenshots/console/network, shut down cleanly, repair only the frontend, restart,
-and operate the form again. No real reservations or external sites are involved.
-
-```sh wrap
-go build -o /tmp/meldra-browser .
-python3 -B scripts/mcp-browser-repair.py --binary /tmp/meldra-browser \
-  --server-script /absolute/path/to/installed/chrome-devtools-mcp.js \
-  --node /absolute/path/to/node --chrome /absolute/path/to/chrome \
-  --live-config /path/to/private/MELDRA_HOME \
-  --output .artifacts/checks/browser-repair-new-run
-```
-
-This opts in to paid inference and automatic approvals for the disposable task.
-It isolates HOME, state, browser profile, and workspace, but is **not an OS
-sandbox**: the configured model and MCP server are trusted. Credentials go only
-to the Meldra process, not the MCP environment or evidence files. The driver
-requires Python 3.11+, Node.js, Chrome, and the tested MCP package. Its independent
-verifier uses that package's bundled Puppeteer; pass `--puppeteer-module` if the
-installed package has a different layout.
-
-An independent browser, whose assertions are not supplied to the repairing model,
-checks real HTTP results and calculated prices, required/invalid fields and seat
-limits, reload, recovery after an injected HTTP 503, and control geometry at
-320/390/768/1280 pixels. The task audit checks before/after interaction, screenshots,
-console/network observations, artifact digests, clean managed-process exits, and
-the permitted file-change scope. Reports, diffs, screenshots, and task records are
-retained even for failed attempts when available. Use a fresh output directory
-per run; model outcomes vary, so repeat and report failures as well as successes.
-The default model-run bound is 900 seconds (`--timeout`). These opt-in live checks
-are outside ordinary `make check` and do not establish reliability on arbitrary
-sites, providers, or browsers.
-
-## Configuration
-
-Create `~/.meldra/mcp.json`, or use `$MELDRA_HOME/mcp.json`, after `meldra config init`:
-
-```json wrap
-{
-  "mcpServers": {
-    "local": {
-      "command": "node",
-      "args": ["/absolute/path/to/server.js"],
-      "env_vars": ["MY_SERVICE_TOKEN"],
-      "env": {"LOG_LEVEL": "warn"},
-      "startup_timeout_sec": 10,
-      "tool_timeout_sec": 60
-    },
-    "remote": {
-      "url": "https://mcp.example.com/mcp",
-      "oauth": {},
-      "sampling": false,
-      "disabled": true
-    }
-  }
-}
-```
-
-The configuration directory must be `0700` and the file `0600`. Each server must
-specify exactly one of `command` or `url`. stdio servers do not use a shell and run
-with the workspace as their working directory. Only a small default environment is
-inherited; use `env_vars` and `env` explicitly. `OPENAI_API_KEY` is never inherited.
-
-HTTP endpoints require HTTPS or loopback HTTP and reject credentials, queries,
-fragments, and redirects. Use `bearer_token_env` for static authentication or
-`oauth` for browser authorization; the modes are mutually exclusive.
-
-Startup and discovery default to 10 seconds. An MCP call defaults to 60 seconds;
-both values can be configured from 1 to 300 seconds. OAuth login waits up to five
-minutes, while OAuth metadata and token requests have a 30-second limit. Configuration
-is capped at 1 MiB and 16 servers. Each server may advertise at most 128 tools and
-1 MiB of encoded tool definitions. For chat, the external tool allowance is computed from the actual built-in and
-Skill tool count so the combined model catalog fits within 128 tools. The combined
-external catalog also has a 1 MiB limit, counting fully encoded JSON including
-escaped descriptions and metadata. stdio frames and HTTP responses are capped at 16 MiB.
-
-Configuration grants startup trust: stdio processes run with the current OS user's
-permissions and are not sandboxed. Configure only trusted servers and keep secrets
-out of command arguments and URLs.
-
-Only private user configuration is read; repository MCP configuration does not
-start servers automatically. Tool arguments and results may enter private task
-history and artifacts, which are not encrypted or automatically redacted. On
-macOS/Linux, connection cleanup terminates the server's process group. Processes
-that deliberately detach from the group can survive; SIGKILL or power loss cannot
-guarantee cleanup. Restart chat after changing configuration.
 
 ## Optional fetch and Tavily servers
 
@@ -431,33 +377,3 @@ update invalidates a pending approval. Validation and execution share a workspac
 
 `--auto-approve` skips workspace-operation approval for explicitly trusted isolated
 environments. It does not make server-initiated sampling or form answers automatic.
-
-## Verification
-
-Run `make check` for Go race tests, real-binary MCP and application E2E suites,
-and the 75% coverage gate. The [verification driver](https://github.com/ruhuang2001/meldra/blob/main/scripts/mcp-check.py)
-defines suite selection; each report records `suite_order` and omitted checks. The suites use local fixtures
-and write a fresh `.artifacts/checks/mcp-check-*` evidence directory. Override
-it with `make check CHECK_DIR=/path/to/checks` or
-`scripts/mcp-check.py --output-dir /path/to/checks`. Keep check evidence outside
-`dist/`, which GoReleaser requires to be empty after its before hooks. CI also
-runs `govulncheck`.
-
-The tests cover implemented local integration paths. They do not certify every
-third-party server, real OAuth provider, HTTP server hosting, subscriptions,
-completion, dynamic notifications, or multimodal sampling.
-
-### Authentication and interaction checks
-
-
-```sh wrap
-mkdir -p dist
-go build -race -o dist/meldra-mcp-race .
-python3 scripts/mcp-auth-interaction-e2e.py --binary dist/meldra-mcp-race --output dist/mcp-auth-interaction-repeat
-```
-
-Choose a fresh output directory to preserve evidence. Scripts use local protocol
-and model fixtures without real accounts or model fees. Reports, checksums, wire
-records, provider requests, and transcripts support reproduction. OAuth evidence
-records grant and refresh types without printing access or refresh tokens. Real
-third-party OAuth accounts and full conformance require separate validation.

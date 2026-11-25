@@ -85,7 +85,7 @@ operation.
   conversation branching, not a Git branch, worktree, or filesystem rewind:
   project files stay shared. It does not copy execution records, approvals,
   queued requests, provider response IDs, or the in-memory undo stack. The child
-  inherits the compacted summary, not the parent's ledger.
+  inherits the compacted summary, not the parent's recorded history.
 
   **`/init`** expands into a repository-inspection request. In Build it uses the
   same edit approval path as any request; in Plan it proposes text without

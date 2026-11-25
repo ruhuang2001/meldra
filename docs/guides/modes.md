@@ -1,52 +1,43 @@
 ---
 title: "Plan and Build modes"
-description: "Decide how much Meldra may change before it starts: investigate in Plan, implement in Build, and choose a permission profile."
+description: "Investigate in Plan before anything changes, then implement in Build with the approvals you choose."
 ---
 
-A session has two independent settings. The **mode** decides whether Meldra may
-change anything at all. The **permission profile** decides which changes still
-need your approval.
+By default a session starts in Build mode: Meldra can change files and run
+programs, asking first according to your permission profile.
 
-| Mode | Allowed work |
-| --- | --- |
-| `plan` | Read and search workspace files, inspect diffs, and save the task's plan or summary. |
-| `build` | Use any available tool within the selected permission profile. |
-
-## Choose a mode
+Plan mode is the read-only half of the same session. Ask a question, read the
+answer, and decide before anything is touched.
 
 ```sh wrap
-meldra --mode plan --prompt 'Inspect the project and propose a change.'
-meldra --mode build --permissions workspace-edit
-meldra mcp serve --workspace /path/to/project --mode plan
+meldra --mode plan --prompt 'Explain the project structure and suggest one small improvement.'
 ```
 
-Inside a session, switch with `/plan` and `/build`, or press `Shift-Tab` in the
-TUI composer. A mode change always needs a user action; Meldra never enters Plan
-or Build on its own. `/plan` waits for incompatible active work to settle before
-it applies.
+Plan mode reads and searches files, inspects diffs, and can save the plan. It
+cannot write files, run commands, or reach the network without approval. It is
+not a no-network mode: approved web reads stay available, so you can ask Meldra
+to look something up while it plans. It also does not connect configured MCP
+servers; switching to Build connects them on demand.
 
-In Plan mode the agent reads the workspace only when the plan needs project
-information. For a request that needs no project context — "rename this
-function" with no file named — it replies that Plan cannot perform the change,
-names Build as the required mode, and ends the turn instead of exploring.
+## From a plan to a change
 
-### What Plan mode blocks
+Switch inside the session with `/plan` and `/build`, or press `Shift-Tab` in the
+TUI composer. A mode change always needs your action; Meldra never changes mode
+on its own. `/plan` waits for incompatible work to settle before it applies.
 
-Plan mode denies workspace edits, undo, tests, builds, formatting, process
-creation, and unclassified external effects at runtime. None of these can lift
-that boundary:
+Plan mode is strict about what a request needs. For something that needs no
+project reading — "rename this function" with no file named — Meldra replies
+that Plan cannot make the change, names Build, and ends the turn instead of
+exploring.
 
-- `--auto-approve`
-- Skills
-- `AGENTS.md` instructions
-- MCP `readOnlyHint` annotations
+None of these can lift the Plan boundary: `--auto-approve`, Skills, `AGENTS.md`
+instructions, or MCP `readOnlyHint` annotations. Meldra's own file tools are
+blocked regardless of what a project file or server claims.
 
-Plan mode is not a no-network mode. Approved built-in web reads stay available,
-so you can ask Meldra to look something up while it plans. Starting a Plan
-session does not connect configured external MCP servers; switching to Build
-connects them on demand.
+## Mode and permissions are separate
 
-## Choose a permission profile
+The **mode** decides whether Meldra may change anything. The **permission
+profile** decides which changes still need your approval.
 
 | Profile | File changes | Project programs | External effects |
 | --- | --- | --- | --- |
@@ -56,7 +47,7 @@ connects them on demand.
 `workspace-edit` grants Meldra's own file tools inside the workspace. It still
 asks before running programs that execute project code, and it never
 auto-approves network reads. An automatic grant under this profile is recorded
-differently from a human approval, so the ledger always shows which one happened.
+differently from a human approval, so the task record always shows which one happened.
 
 ```sh wrap
 meldra --mode build --permissions workspace-edit
@@ -72,8 +63,12 @@ Approved programs run as your own OS user. Executable restrictions and filtered
 environment variables are not an OS sandbox: plan approvals accordingly, and
 review a command before you accept it.
 
+## Working elsewhere
+
+`meldra mcp serve --workspace /path/to/project --mode plan` applies the same
+rules when another MCP client drives Meldra's workspace tools.
+
 ## Related
 
 - [Project context](./project-context.md): scoped `AGENTS.md` files and `@` references.
 - [Sessions and controls](./controls.md): steer, queue, and stop a running turn.
-- [Task records and recovery](../reference/task-records.md): what an approval leaves behind.

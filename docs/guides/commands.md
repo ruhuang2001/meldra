@@ -50,8 +50,8 @@ meldra task resolve-process TASK_ID PROCESS_ID --reason 'Inspected the command e
 Recovery never restarts an unfinished process or signals a PID from an old record.
 Closing the terminal stops execution, so there is no background daemon. SIGKILL,
 power loss, and processes that escape their process group can still leave an
-unknown outcome; those need your own inspection. See
-[task records and recovery](../reference/task-records.md).
+unknown outcome; those need your own inspection. Reconcile them with
+`meldra task resolve` before starting new work in the task.
 
 ## Git checkpoints
 

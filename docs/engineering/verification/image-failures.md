@@ -3,7 +3,7 @@ title: "Image reference verification"
 description: "Failure cases for image submission, replay, retention, and rejection."
 ---
 
-**Available since v0.5.0.** Specified before implementation. Use the real-binary image E2E
+**Available since v0.5.0.** Use the real-binary image E2E
 suite with a new output directory. All provider traffic uses a loopback fixture.
 
 | Boundary | Failure to prevent | Required evidence |

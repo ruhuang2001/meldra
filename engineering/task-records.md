@@ -4,7 +4,7 @@ description: "What Meldra records for each run, how ownership works, and how to 
 ---
 
 
-From v0.5.0, [Stream JSON](./stream-json.md) can leave a clean foreground Run
+From v0.5.0, [Stream JSON](./stream-json.md) can leave a clean Run
 in `waiting_approval` after releasing its leases. Its operation is recorded as
 cancelled before admission; `task resume --approve-detail-hash` revalidates the
 exact recorded operation under a new lease. Crash-incomplete approvals remain
@@ -51,12 +51,12 @@ Web tools use the distinct `external_read` effect and approval
 operation. They retain source metadata and bounded artifacts, and require
 approval before network access. An interrupted external read after dispatch is
 unknown, unlike a local read; recovery never silently retries or resolves it as
-having no effects. See [Web tools](../integrations/web-tools.md) for backend disclosure and limits.
+having no effects. See [Web tools](../docs/integrations/web-tools.md) for backend disclosure and limits.
 
 | Record | Meaning |
 | --- | --- |
 | Task | User goal, canonical workspace, session identity, current status |
-| Run | One foreground attempt, configuration, owner label, timestamps and reason |
+| Run | One execution attempt, configuration, owner label, timestamps and reason |
 | ToolCall | Raw bounded arguments and digest, effect, execution phase and result |
 | Approval | Exact call/parameters, operation, workspace evidence and decision |
 | Event | Stable event ID, task-local sequence, schema, status/reason and associations |
@@ -260,12 +260,3 @@ source session ID plus SHA-256. Repeated import of an identical source is a
 no-op; a changed snapshot is associated with the same task identity rather than
 creating duplicate tasks. Original files are retained. The imported record
 explicitly marks missing historical tool evidence; no outcomes are fabricated.
-
-## Verification
-
-`go test -race ./internal/task ./internal/store` covers exhaustive Run/tool
-transitions, terminal immutability, approval binding and expiry, commit faults
-at the intent/start/result/Run boundaries, unknown-outcome gates, idempotent
-legacy import, corruption and limits, private paths, cross-store symlink aliases,
-actual subprocess lock competition and SIGKILL lock release. The application
-tests own signal propagation, file reconciliation and command process groups.

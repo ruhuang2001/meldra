@@ -16,15 +16,15 @@ Adjacent comment lines that shared a disposition were reviewed together. The inv
 
 ## Decisions
 
-- [ADR 0001 · Build provenance and verification isolation](../../adr/0001-build-and-verification.md)
-- [ADR 0002 · Foreground ownership and tool outcomes](../../adr/0002-foreground-ownership.md)
-- [ADR 0003 · Responses streaming and continuation](../../adr/0003-provider-streams.md)
-- [ADR 0004 · Context measurement and replay](../../adr/0004-context-and-history.md)
-- [ADR 0005 · Workspace policy and approval scope](../../adr/0005-workspace-policy.md)
-- [ADR 0006 · MCP transport and evidence](../../adr/0006-mcp-boundaries.md)
-- [ADR 0007 · Durable execution and recovery](../../adr/0007-durable-execution.md)
-- [ADR 0008 · Terminal ownership and bounded output](../../adr/0008-terminal-io.md)
-- [ADR 0009 · Configuration, credentials and network input](../../adr/0009-private-configuration.md)
+- [ADR 0001 · Build provenance and verification isolation](../../docs/adr/0001-build-and-verification.md)
+- [ADR 0002 · Foreground ownership and tool outcomes](../../docs/adr/0002-foreground-ownership.md)
+- [ADR 0003 · Responses streaming and continuation](../../docs/adr/0003-provider-streams.md)
+- [ADR 0004 · Context measurement and replay](../../docs/adr/0004-context-and-history.md)
+- [ADR 0005 · Workspace policy and approval scope](../../docs/adr/0005-workspace-policy.md)
+- [ADR 0006 · MCP transport and evidence](../../docs/adr/0006-mcp-boundaries.md)
+- [ADR 0007 · Durable execution and recovery](../../docs/adr/0007-durable-execution.md)
+- [ADR 0008 · Terminal ownership and bounded output](../../docs/adr/0008-terminal-io.md)
+- [ADR 0009 · Configuration, credentials and network input](../../docs/adr/0009-private-configuration.md)
 
 ## Workarounds
 
@@ -202,4 +202,4 @@ Ranges refer to the files as they existed before deletion. The source can be ins
 | `scripts/swe-bench-lite.py` | Tautology | 341 |
 | `scripts/web-e2e.py` | Decision Record · ADR 0001 | 155, 171, 371 |
 
-Run `make -s comment-inventory` for a fresh inventory of the current sources. [Comment policy and lint commands](../development.md#source-comments)
+Run `make -s comment-inventory` for a fresh inventory of the current sources. [Comment policy and lint commands](../../docs/engineering/development.md#source-comments)

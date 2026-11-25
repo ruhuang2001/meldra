@@ -6,12 +6,15 @@ Meldra is a local, serial foreground coding agent, not a daemon or scheduler.
 Read affected code and tests before editing, and check the authoritative docs:
 
 - [README.md](README.md): installation, configuration, commands, and development.
-- [docs/index.md](docs/index.md): the documentation site's home page and page map.
+- [docs/index.md](docs/index.md): the user-facing site's home page and page map.
 - [docs/guides/modes.md](docs/guides/modes.md), [docs/guides/controls.md](docs/guides/controls.md),
   and [docs/guides/project-context.md](docs/guides/project-context.md): user-facing
   behavior for execution modes, session controls, and project context.
-- [docs/reference/architecture.md](docs/reference/architecture.md): dependency direction and runtime boundaries.
-- [docs/reference/task-records.md](docs/reference/task-records.md): ledger, ownership, and recovery.
+- [engineering/architecture.md](engineering/architecture.md): dependency direction and runtime boundaries.
+- [engineering/task-records.md](engineering/task-records.md): ledger, ownership, and recovery.
+- [engineering/stream-json.md](engineering/stream-json.md): JSONL presentation protocol.
+
+`engineering/` is not published by Mintlify; `docs/` is the user-facing site.
 - [docs/integrations/mcp.md](docs/integrations/mcp.md) and [docs/integrations/skills.md](docs/integrations/skills.md): integration contracts.
 - [docs/engineering/development.md](docs/engineering/development.md): test gates, local checks, and CI.
 
