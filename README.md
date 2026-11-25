@@ -76,7 +76,8 @@ The same pages power the Mintlify site. Release highlights are in the
 
 ## Development
 
-Requires Go 1.26.11 and Python 3 for PTY integration tests. See the
+Building needs only Go 1.26.11. Local CI also requires Python 3.10+ and
+[uv](https://docs.astral.sh/uv/getting-started/installation/). See the
 [development guide](docs/engineering/development.md) for CI, hooks, and release workflows.
 
 ```sh

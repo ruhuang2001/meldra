@@ -19,8 +19,8 @@ VERSION_LDFLAGS := -X main.version=$(VERSION)
 .PHONY: fmt vet test test-race test-coverage build check check-fast check-staged check-local-ci release-check release-snapshot install-hooks clean comment-lint comment-lint-e2e comment-inventory
 
 $(COMMENT_ENV)/.ready: $(COMMENT_REQUIREMENTS)
-	python3 -m venv "$(COMMENT_ENV)"
-	"$(COMMENT_PYTHON)" -m pip install --disable-pip-version-check -r "$(COMMENT_REQUIREMENTS)" >&2
+	uv venv --clear --python "$$(command -v python3)" "$(COMMENT_ENV)"
+	uv pip sync --python "$(COMMENT_PYTHON)" "$(COMMENT_REQUIREMENTS)" >&2
 	touch "$@"
 
 comment-lint: $(COMMENT_ENV)/.ready

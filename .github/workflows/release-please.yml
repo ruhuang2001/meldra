@@ -85,6 +85,12 @@ jobs:
         with:
           go-version: "1.26.11"
 
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78
+        if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
+        with:
+          version: '0.10.9'
+          enable-cache: false
+
       - name: Validate release source
         if: ${{ github.event_name == 'workflow_dispatch' || steps.release.outputs.release_created == 'true' }}
         env:

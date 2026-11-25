@@ -4,7 +4,8 @@ title: "Development"
 
 ## Development
 
-Requires Go 1.26.11. Local CI uses the `python3` on your `PATH` (3.10 or
+Requires Go 1.26.11. Local CI uses [uv](https://docs.astral.sh/uv/getting-started/installation/)
+and the `python3` on your `PATH` (3.10 or
 newer); no specific minor version is required. Only the optional live browser
 checks need Python 3.11+ to read TOML credentials configuration. Building the
 binary itself requires only Go.
