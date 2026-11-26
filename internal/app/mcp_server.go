@@ -94,6 +94,13 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 	if err := workspace.configureWeb(settings); err != nil {
 		return err
 	}
+	hooks, err := loadHooks(paths)
+	if err != nil {
+		return err
+	}
+	workspace.hooks = hooks
+	workspace.hookSurface = "mcp"
+	workspace.hookNotify = func(text string) { _, _ = fmt.Fprintln(os.Stderr, sanitizeTerminalText(text)) }
 	workspace.projectContext = NewProjectContext(workspace)
 	definitions := workspace.ToolDefinitions()
 	definitions = append(definitions, workspace.projectContext.ContextTool())
@@ -103,66 +110,39 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 	}
 	var operation sync.Mutex
 	var undoGeneration uint64
-	var approvalMu sync.Mutex
-	pending := map[string]struct {
-		fingerprint string
-		expires     time.Time
-	}{}
-	invokeLocked := func(ctx context.Context, name string, raw json.RawMessage, approve ApprovalFunc, declined bool) (result tool.Result, err error) {
-		defer func() {
-			if result.Status == tool.Succeeded && (name == "edit_file" || name == "apply_patch" || name == "undo_last_change") {
-				undoGeneration++
-			}
-		}()
-		store := newTaskSessionStore(paths)
-		session, err := store.New(workspace.root)
-		if err != nil {
-			return result, err
+	pending := map[string]*mcpServerCall{}
+	expire := func(state string) error {
+		entry := pending[state]
+		delete(pending, state)
+		if entry == nil {
+			return nil
 		}
-		execution := &taskExecution{paths: paths, workspace: workspace, session: session, config: task.Config{Provider: "mcp", Workspace: workspace.root}}
-		workspace.SetApprovalFunc(approve)
-		workspace.approvalRecord = execution.approval
-		workspace.approvalPending = execution.pendingApproval
-		defer func() {
-			workspace.SetApprovalFunc(nil)
-			workspace.approvalRecord = nil
-			workspace.approvalPending = nil
-		}()
-		goal := "MCP server: " + name
-		if err := execution.begin(ctx, goal); err != nil {
-			return result, err
+		save, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := entry.reopen(save); err != nil {
+			return err
 		}
-		defer func() { err = errors.Join(err, execution.finish(ctx, err)) }()
-		session.appendMessage("user", goal)
-		session.LastRequestSequence = execution.requestSequence
-		if err := store.Save(session); err != nil {
-			return result, err
-		}
-		invocationRegistry := registry
-		if declined {
-			invocationRegistry, err = tool.New([]ToolDefinition{{Name: name, Function: workspace.bindTool(func(json.RawMessage) (string, error) {
-				request := ApprovalRequest{Kind: ApprovalCommand, Title: "Call " + name, Detail: string(raw)}
-				if toolEffect(name) == task.ExternalRead {
-					request = workspace.webApproval(name, raw)
-				}
-				workspace.requestApproval(request)
-				return "Declined; operation was not executed.", nil
-			})}})
-			if err != nil {
-				return result, err
-			}
-		}
-		result, err = execution.invoke(ctx, invocationRegistry, "", name, raw)
-		session.appendMessage("assistant", capText(result.Output))
-		err = errors.Join(err, store.Save(session))
-		return result, err
+		return entry.exec.finish(save, errors.New("MCP approval expired or invalidated"))
 	}
-	invoke := func(ctx context.Context, name string, raw json.RawMessage, approve ApprovalFunc, declined bool) (tool.Result, error) {
+	defer func() {
+		operation.Lock()
+		defer operation.Unlock()
+		for state := range pending {
+			if err := expire(state); err != nil {
+				workspace.hookNotify(err.Error())
+			}
+		}
+	}()
+	invoke := func(ctx context.Context, name string, raw json.RawMessage) (tool.Result, error) {
 		if !operation.TryLock() {
 			return tool.Result{}, ErrWorkspaceBusy
 		}
 		defer operation.Unlock()
-		return invokeLocked(ctx, name, raw, approve, declined)
+		call, err := planMCPServerCall(ctx, paths, workspace, name, raw)
+		if err != nil {
+			return tool.Result{}, err
+		}
+		return call.invoke(ctx, registry, nil)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "meldra", Version: version}, &mcp.ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	for _, definition := range definitions {
@@ -194,16 +174,12 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 			}
 			defer operation.Unlock()
 			var approve ApprovalFunc
-			declined := false
+			var call *mcpServerCall
 			policyGrantsEdit := permissions == PermissionWorkspaceEdit && classifyOperation(definition.Name, req.Params.Arguments) == operationWrite
 			if !autoApprove && !policyGrantsEdit && toolEffect(definition.Name) != task.Read && req.ProtocolVersion() >= "2026-07-28" {
 				instructionDigest, err := workspace.mcpApprovalContextDigest(definition.Name, req.Params.Arguments)
 				if err != nil {
-					if req.Params.RequestState != "" {
-						approvalMu.Lock()
-						delete(pending, req.Params.RequestState)
-						approvalMu.Unlock()
-					}
+					err = errors.Join(err, expire(req.Params.RequestState))
 					return mcpServeResult(err.Error()+"; read_project_context for affected paths before requesting approval", true), nil
 				}
 				fingerprintData := append([]byte(definition.Name), req.Params.Arguments...)
@@ -213,9 +189,7 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					workspace.SetContext(ctx)
 					commitPreview, err = workspace.prepareGitCommit(req.Params.Arguments)
 					if err != nil {
-						approvalMu.Lock()
-						delete(pending, req.Params.RequestState)
-						approvalMu.Unlock()
+						err = errors.Join(err, expire(req.Params.RequestState))
 						return mcpServeResult(err.Error(), true), nil
 					}
 					fingerprintData = append(fingerprintData, commitPreview.request.WorkspaceState...)
@@ -225,19 +199,14 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					fingerprintData = fmt.Appendf(fingerprintData, "\nundo generation: %d", undoGeneration)
 				}
 				fingerprint := digest(fingerprintData)
-				approvalMu.Lock()
 				for token, entry := range pending {
-					if time.Now().After(entry.expires) {
-						delete(pending, token)
+					if !time.Now().Before(entry.expires) {
+						if err := expire(token); err != nil {
+							return mcpServeResult(err.Error(), true), nil
+						}
 					}
 				}
-				answer, hasAnswer := req.Params.InputResponses["approval"].(*mcp.ElicitResult)
 				if len(req.Params.InputResponses) == 0 && req.Params.RequestState == "" {
-					if len(pending) >= 128 {
-						approvalMu.Unlock()
-						return mcpServeResult("too many pending approvals", true), nil
-					}
-					state := rand.Text()
 					message := "Allow " + definition.Name + " with arguments " + string(req.Params.Arguments) + "?"
 					if commitPreview != nil {
 						message = commitPreview.request.Detail + "\nCommit these files?"
@@ -248,31 +217,46 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					if definition.Name == "undo_last_change" {
 						changes, ok := workspace.pendingUndo()
 						if !ok {
-							approvalMu.Unlock()
 							return mcpServeResult("no successful change to undo", true), nil
 						}
 						diff, err := workspace.diff(changes, true)
 						if err != nil {
-							approvalMu.Unlock()
 							return mcpServeResult(err.Error(), true), nil
 						}
 						message += "\n" + diff
 					}
-					pending[state] = struct {
-						fingerprint string
-						expires     time.Time
-					}{fingerprint, time.Now().Add(5 * time.Minute)}
-					approvalMu.Unlock()
+					if len(pending) >= 128 {
+						return mcpServeResult("too many pending approvals", true), nil
+					}
+					call, err := planMCPServerCall(ctx, paths, workspace, definition.Name, req.Params.Arguments)
+					if err != nil {
+						return mcpServeResult(err.Error(), true), nil
+					}
+					if call.pre.blocked {
+						return mcpInvocationResult(call.invoke(ctx, registry, nil)), nil
+					}
+					if err := call.challenge(ctx, message); err != nil {
+						return mcpServeResult(err.Error(), true), nil
+					}
+					state := rand.Text()
+					call.fingerprint, call.expires = fingerprint, time.Now().Add(5*time.Minute)
+					pending[state] = call
 					return &mcp.CallToolResult{InputRequests: mcp.InputRequestMap{"approval": mcpServeApproval(message)}, RequestState: state}, nil
 				}
-				entry, issued := pending[req.Params.RequestState]
+				answer, hasAnswer := req.Params.InputResponses["approval"].(*mcp.ElicitResult)
+				call = pending[req.Params.RequestState]
+				if call == nil || call.fingerprint != fingerprint || !hasAnswer || answer == nil {
+					err := errors.Join(errors.New("approval is invalid, expired, or already used; request a new approval"), expire(req.Params.RequestState))
+					return mcpServeResult(err.Error(), true), nil
+				}
 				delete(pending, req.Params.RequestState)
-				approvalMu.Unlock()
-				if !issued || entry.fingerprint != fingerprint || !hasAnswer || answer == nil {
-					return mcpServeResult("approval is invalid, expired, or already used; request a new approval", true), nil
+				if err := call.reopen(ctx); err != nil {
+					return mcpServeResult(err.Error(), true), nil
 				}
 				accepted, _ := answer.Content["approve"].(bool)
-				declined = answer.Action != "accept" || !accepted
+				if answer.Action != "accept" || !accepted {
+					return mcpInvocationResult(call.decline(ctx)), nil
+				}
 				approve = func(_ context.Context, request ApprovalRequest) bool {
 					if commitPreview != nil && (string(request.WorkspaceState) != string(commitPreview.request.WorkspaceState) || request.Detail != commitPreview.request.Detail) {
 						return false
@@ -291,19 +275,22 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 					return accepted
 				}
 			}
-			result, err := invokeLocked(ctx, definition.Name, req.Params.Arguments, approve, declined)
-			output := result.Output
-			if result.Error != "" {
-				output += "\n" + result.Error
+			if call == nil {
+				planned, err := planMCPServerCall(ctx, paths, workspace, definition.Name, req.Params.Arguments)
+				if err != nil {
+					return mcpServeResult(err.Error(), true), nil
+				}
+				call = planned
 			}
-			if err != nil && err.Error() != result.Error {
-				output += "\n" + err.Error()
+			result, err := call.invoke(ctx, registry, approve)
+			if result.Status == tool.Succeeded && (definition.Name == "edit_file" || definition.Name == "apply_patch" || definition.Name == "undo_last_change") {
+				undoGeneration++
 			}
-			return mcpServeResult(output, err != nil || result.Status != tool.Succeeded), nil
+			return mcpInvocationResult(result, err), nil
 		})
 	}
 	server.AddResource(&mcp.Resource{URI: "meldra://workspace", Name: "workspace", Description: "Bounded listing of workspace files", MIMEType: "text/plain"}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		result, err := invoke(ctx, "list_files", json.RawMessage(`{"path":null}`), nil, false)
+		result, err := invoke(ctx, "list_files", json.RawMessage(`{"path":null}`))
 		if err != nil {
 			return nil, err
 		}
@@ -319,7 +306,7 @@ func runMCPServe(ctx context.Context, args []string, input io.Reader, output io.
 		if err != nil {
 			return nil, err
 		}
-		result, err := invoke(ctx, "read_file", raw, nil, false)
+		result, err := invoke(ctx, "read_file", raw)
 		if err != nil {
 			return nil, err
 		}
@@ -346,6 +333,17 @@ func mcpServeApproval(message string) *mcp.ElicitParams {
 
 func mcpServeResult(text string, failed bool) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}, IsError: failed}
+}
+
+func mcpInvocationResult(result tool.Result, err error) *mcp.CallToolResult {
+	output := result.Output
+	if result.Error != "" {
+		output += "\n" + result.Error
+	}
+	if err != nil && err.Error() != result.Error {
+		output += "\n" + err.Error()
+	}
+	return mcpServeResult(output, err != nil || result.Status != tool.Succeeded)
 }
 
 type mcpProtocolWriter struct{ io.Writer }

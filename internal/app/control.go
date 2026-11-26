@@ -331,14 +331,14 @@ func (a *Agent) emitNotice(text string) {
 	}
 }
 
-func (a *Agent) finishSelected() error {
+func (a *Agent) settleSelected(event string) error {
 	c := a.initControl()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.selected == nil {
 		return nil
 	}
-	if err := c.record("control.applied", *c.selected); err != nil {
+	if err := c.record(event, *c.selected); err != nil {
 		return err
 	}
 	c.selected = nil

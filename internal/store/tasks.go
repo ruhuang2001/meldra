@@ -65,6 +65,26 @@ func (s *Store) EnsureTask(ctx context.Context, t task.Task) (task.Task, error) 
 func (s *Store) GetTask(ctx context.Context, id string) (task.Task, error) {
 	return getRecord[task.Task](ctx, s.db, "SELECT record FROM tasks WHERE id=?", id)
 }
+
+func (s *Store) AdmitRequest(ctx context.Context, lease *Lease, event task.Event, goal string) error {
+	return s.owned(ctx, lease, event.TaskID, func(tx *sql.Tx) error {
+		t, err := getRecord[task.Task](ctx, tx, "SELECT record FROM tasks WHERE id=?", event.TaskID)
+		if err != nil {
+			return err
+		}
+		if t.GoalPending {
+			t.Goal, t.GoalPending = goal, false
+			if err := validateTask(t); err != nil {
+				return err
+			}
+			if err := saveTask(ctx, tx, t); err != nil {
+				return err
+			}
+		}
+		return s.appendEvent(ctx, tx, event)
+	})
+}
+
 func (s *Store) GetRun(ctx context.Context, id string) (task.Run, error) {
 	return getRecord[task.Run](ctx, s.db, "SELECT record FROM runs WHERE id=?", id)
 }

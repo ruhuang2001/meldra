@@ -6,6 +6,7 @@ title: "Configuration"
 ~/.meldra/config.toml       # model, provider URL, and limits
 ~/.meldra/credentials.env   # OPENAI_API_KEY
 ~/.meldra/mcp.json          # optional trusted MCP server configuration
+~/.meldra/hooks.json        # optional trusted lifecycle command hooks (unreleased)
 ~/.meldra/commands/         # optional custom slash commands
 ~/.meldra/skills/           # optional skills
 ```

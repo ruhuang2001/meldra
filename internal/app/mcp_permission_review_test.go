@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -172,5 +173,84 @@ func TestMCPInteractiveStillRequiresEditApproval(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(w.root, "hello.txt"))
 	if err != nil || string(data) != "old" {
 		t.Fatalf("unapproved interactive edit modified file: %q %v", data, err)
+	}
+}
+
+func TestMCPReviewHooksShareOneRecordedCall(t *testing.T) {
+	for _, denyAt := range []string{"PreToolUse", "PermissionRequest", "accept"} {
+		t.Run(denyAt, func(t *testing.T) {
+			paths := mustConfigPaths(t)
+			t.Setenv(MeldraHomeEnv, paths.Home)
+			dir := t.TempDir()
+			log := filepath.Join(dir, "events.jsonl")
+			script := writeHookScript(t, dir, "observe.sh", `cat >> "`+log+`"; echo >> "`+log+`"
+if [ "$1" = "`+denyAt+`" ]; then exit 2; fi
+if [ "$1" = PreToolUse ]; then echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"challenge-context"}}'; fi`)
+			groups := map[string]any{}
+			for _, name := range []string{"PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "RunEnd"} {
+				groups[name] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command", "command": script, "args": []string{name}}}}}
+			}
+			cfg, err := json.Marshal(map[string]any{"hooks": groups})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeHooksConfig(t, paths, string(cfg))
+			w := contextWorkspace(t)
+			writeContextFixture(t, w, "target", "old")
+			c := newPermissionReviewMCP(t, w.root, true, PermissionInteractive)
+			args := map[string]any{"path": "target", "old_str": "old", "new_str": "new"}
+			result := c.call("edit_file", args)
+			db := openTaskDB(t, paths)
+			records, err := db.ListTasks(t.Context(), w.root, 10)
+			if err != nil || len(records) != 1 {
+				t.Fatalf("expected a durable task at first response: %+v %v", records, err)
+			}
+			wantText, wantStatus := "old", task.ToolDeclined
+			wantEvents := []string{"PreToolUse"}
+			if denyAt != "PreToolUse" {
+				wantEvents = append(wantEvents, "PermissionRequest")
+			}
+			if denyAt == "accept" {
+				if result["resultType"] != "input_required" || records[0].Status != task.WaitingApproval {
+					t.Fatalf("challenge: %+v %+v", result, records[0])
+				}
+				result = c.request("tools/call", map[string]any{"name": "edit_file", "arguments": args, "requestState": result["requestState"], "inputResponses": map[string]any{"approval": map[string]any{"action": "accept", "content": map[string]any{"approve": true}}}})
+				encoded, err := json.Marshal(result["content"])
+				if err != nil || result["isError"] == true || strings.Count(string(encoded), "challenge-context") != 1 {
+					t.Fatalf("redemption: %+v %v", result, err)
+				}
+				wantEvents = append(wantEvents, "RunEnd", "PostToolUse")
+				wantText, wantStatus = "new", task.ToolSucceeded
+			} else if result["isError"] != true || result["requestState"] != nil {
+				t.Fatalf("expected denial without challenge: %+v", result)
+			}
+			wantEvents = append(wantEvents, "RunEnd")
+			data, err := os.ReadFile(filepath.Join(w.root, "target"))
+			if err != nil || string(data) != wantText {
+				t.Fatalf("file=%q err=%v", data, err)
+			}
+			calls, err := db.ToolCalls(t.Context(), records[0].ID)
+			if err != nil || len(calls) != 1 || calls[0].Status != wantStatus || calls[0].StartedAt.IsZero() != (wantStatus == task.ToolDeclined) {
+				t.Fatalf("calls=%+v err=%v", calls, err)
+			}
+			data, err = os.ReadFile(log)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gotEvents []string
+			for line := range strings.SplitSeq(strings.TrimSpace(string(data)), "\n") {
+				var p hookPayload
+				if err := json.Unmarshal([]byte(line), &p); err != nil {
+					t.Fatal(err)
+				}
+				if p.SessionID != records[0].ID || p.Meldra.TaskID != records[0].ID || p.Meldra.RunID != calls[0].RunID || p.HookEventName != "RunEnd" && p.ToolUseID != calls[0].ID {
+					t.Fatalf("uncorrelated hook: %+v", p)
+				}
+				gotEvents = append(gotEvents, p.HookEventName)
+			}
+			if !slices.Equal(gotEvents, wantEvents) {
+				t.Fatalf("hooks=%v want=%v", gotEvents, wantEvents)
+			}
+		})
 	}
 }

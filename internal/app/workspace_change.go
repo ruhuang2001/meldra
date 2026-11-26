@@ -298,9 +298,23 @@ func (w *Workspace) requestApproval(request ApprovalRequest) (approved bool) {
 		w.ctx = ctx
 		defer func() { w.ctx = previous }()
 	}
+	if w.approvalPending == nil && request.Source == "human" && !(w.approvalGrant != nil && w.approvalGrant()) && w.hooks != nil && w.contextErr() == nil {
+		if blocked, reason := w.checkPermissionHook(w.ctx, request); blocked {
+			tool.Observe(w.ctx, func(o *tool.Observation) {
+				o.Result.Status = tool.Declined
+				o.Err = fmt.Errorf("declined by PermissionRequest hook: %s", reason)
+			})
+			return false
+		}
+	}
 	if w.approvalPending != nil && w.contextErr() == nil {
 		if err := w.approvalPending(w.ctx, request); err != nil {
-			tool.Observe(w.ctx, func(o *tool.Observation) { o.Err = err })
+			tool.Observe(w.ctx, func(o *tool.Observation) {
+				o.Err = err
+				if _, blocked := errors.AsType[*hookBlockedError](err); blocked {
+					o.Result.Status = tool.Declined
+				}
+			})
 			return false
 		}
 	}

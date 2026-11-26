@@ -1274,6 +1274,7 @@ func runTUIChat(ctx context.Context, stdin *os.File, stdout *os.File, paths Conf
 	}
 	defer runtime.deleteEmptyNewSession()
 	defer runtime.mcp.close()
+	runtime.setHookSurface("tui")
 	runtime.workspace.mcpInput = controller.mcpInput
 	controller.commands = append(append([]slashCommand(nil), builtinSlashCommands...), runtime.agent.commands.Commands...)
 	controller.submitControl = runtime.agent.SubmitControl
