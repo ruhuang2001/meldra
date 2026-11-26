@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -191,6 +192,7 @@ func TestPluginManifestValidationAndConformance(t *testing.T) {
 		{"wrong keywords type", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo","keywords":["ok",123]}`},
 		{"author unknown field", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo","author":{"name":"a","extra":"x"}}`},
 		{"author non-object", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo","author":"alice"}`},
+		{"invalid UTF-8", fmt.Sprintf(`{"$schema":%q,"name":"demo","description":"%s"}`, agentPluginsManifestSchema, "\xff")},
 		{"trailing json", `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"demo"}{}`},
 		{"not object", `[]`},
 	}
@@ -317,6 +319,12 @@ func TestPluginContainmentAndFailureIsolation(t *testing.T) {
 		}
 		if _, err := catalog.read(t.Context(), toolInput(t, map[string]any{"name": "linked", "path": "references/escape.txt"})); err == nil {
 			t.Fatal("escaping symlink resource was unexpectedly allowed")
+		}
+		if err := os.Link(outsideRef, filepath.Join(dir, "skills", "linked", "references", "alias.txt")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := catalog.read(t.Context(), toolInput(t, map[string]any{"name": "linked", "path": "references/alias.txt"})); err == nil {
+			t.Fatal("hard-linked resource was unexpectedly allowed")
 		}
 		if _, err := catalog.read(t.Context(), toolInput(t, map[string]any{"name": "linked", "path": "../good/SKILL.md"})); err == nil {
 			t.Fatal("relative traversal resource was unexpectedly allowed")
@@ -482,6 +490,32 @@ func TestPluginNonRecursivePlaceholderExpansion(t *testing.T) {
 	}
 }
 
+func TestPluginSkillFrontmatterAndFilesystemResolution(t *testing.T) {
+	paths := testPluginPaths(t)
+	dir := t.TempDir()
+	writeFileMode(t, filepath.Join(dir, "plugin.json"), fmt.Sprintf(`{"$schema":%q,"name":"portable"}`, agentPluginsManifestSchema), 0o600)
+	for name, extra := range map[string]string{"指南": "metadata: {lang: zh}", "bad": "metadata: {version: 1}", "too-long": "compatibility: " + strings.Repeat("a", 501)} {
+		writeFileMode(t, filepath.Join(dir, "skills", name, "SKILL.md"), "---\nname: "+name+"\ndescription: guide\n"+extra+"\n---\nBody\n", 0o600)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "tools", "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("tools/sub", filepath.Join(dir, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	writeFileMode(t, filepath.Join(dir, "mcp.json"), fmt.Sprintf(`{"$schema":%q,"mcpServers":{"run":{"type":"stdio","command":"./alias/../server","cwd":"${PLUGIN_ROOT}/alias/.."}}}`, agentPluginsMCPSchema), 0o600)
+	loaded, err := loadPluginFromDir(t.Context(), paths, dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.Warnings) != 2 || len(loaded.Skills) != 1 || loaded.Skills[0].Name != "指南" {
+		t.Fatalf("skills=%v warnings=%v", loaded.Skills, loaded.Warnings)
+	}
+	if len(loaded.MCPServers) != 1 || loaded.MCPServers[0].CWD != filepath.Join(loaded.Root, "tools") || loaded.MCPServers[0].Command != filepath.Join(loaded.Root, "tools", "server") {
+		t.Fatalf("paths no longer follow filesystem resolution: %+v", loaded.MCPServers)
+	}
+}
+
 func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX script fixture")
@@ -614,7 +648,16 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 		t.Fatalf("PLUGIN_DATA marker missing: %v", err)
 	}
 
+	cached, _, err := loadAllMCPConfigs(t.Context(), paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pluginMCPServerID("stdio.fixture", "local")
 	writeFileMode(t, scriptPath, testPluginStdioServerScript+"\n# modified\n", 0o700)
+	if session, _, err := connectMCPServer(t.Context(), paths, id, cached[id], w); err == nil {
+		session.Close()
+		t.Fatal("a cached config started a changed executable")
+	}
 	tamperedConn, err := connectMCP(t.Context(), paths, w, "")
 	if err != nil {
 		t.Fatal(err)
@@ -623,7 +666,7 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	if len(tamperedConn.tools) != 0 {
 		t.Fatal("modified plugin executable was allowed to run without re-approval")
 	}
-	if len(tamperedConn.warnings) == 0 || !strings.Contains(tamperedConn.warnings[0], "changed since approval") {
+	if !strings.Contains(strings.Join(tamperedConn.warnings, "\n"), "changed since approval") {
 		t.Fatalf("expected stale-approval warning, got %v", tamperedConn.warnings)
 	}
 
@@ -821,6 +864,11 @@ func TestPluginCLIListRevokeAndProtectedHomeRejection(t *testing.T) {
 	if err := runPluginsCommand(t.Context(), []string{"enable", paths.Home}, &out); err == nil {
 		t.Fatal("expected registering MELDRA_HOME itself as a plugin to fail")
 	}
+	ancestor := filepath.Dir(paths.Home)
+	writeFileMode(t, filepath.Join(ancestor, "plugin.json"), fmt.Sprintf(`{"$schema":%q,"name":"overlap"}`, agentPluginsManifestSchema), 0o600)
+	if err := runPluginsCommand(t.Context(), []string{"enable", ancestor}, &out); err == nil {
+		t.Fatal("registered a plugin containing private state")
+	}
 
 	allowedDir := filepath.Join(paths.Home, "plugins", "local-pack")
 	writeFileMode(t, filepath.Join(allowedDir, "plugin.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"local-pack","version":"0.1.0"}`, 0o600)
@@ -906,6 +954,9 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 	if got := mcpCatalogName("resources", serverID); len(got) > 64 || !mcpNamePart.MatchString(got) {
 		t.Fatalf("invalid catalog tool name %q", got)
 	}
+	if mcpToolName(serverID, "search__all") == mcpToolName(serverID+"__search", "all") {
+		t.Fatal("distinct server/tool pairs have the same wire name")
+	}
 
 	out.Reset()
 	ws := t.TempDir()
@@ -914,6 +965,70 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "plugin://doc/1") {
 		t.Fatalf("catalog CLI output = %q", out.String())
+	}
+}
+
+func TestPluginRegistryConcurrentUpdates(t *testing.T) {
+	paths := testPluginPaths(t)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := range 8 {
+		dir := t.TempDir()
+		writeFileMode(t, filepath.Join(dir, "plugin.json"), fmt.Sprintf(`{"$schema":%q,"name":"pack-%d"}`, agentPluginsManifestSchema, i), 0o600)
+		wg.Go(func() {
+			<-start
+			if err := runPluginsCommand(t.Context(), []string{"enable", dir}, io.Discard); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+	reg, err := loadPluginRegistry(paths)
+	if err != nil || len(reg.Plugins) != 8 {
+		t.Fatalf("lost a concurrent registration: got %d plugins, error %v", len(reg.Plugins), err)
+	}
+}
+
+func TestPluginDataPurgeRemainsInPrivateStorage(t *testing.T) {
+	paths := testPluginPaths(t)
+	dir := t.TempDir()
+	writeFileMode(t, filepath.Join(dir, "plugin.json"), fmt.Sprintf(`{"$schema":%q,"name":"demo"}`, agentPluginsManifestSchema), 0o600)
+	if err := runPluginsCommand(t.Context(), []string{"enable", dir}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	if err := os.Symlink(other, filepath.Join(paths.Home, pluginDataDirName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensurePluginDataDir(paths, "demo"); err == nil {
+		t.Fatal("accepted a redirected data root")
+	}
+	marker := filepath.Join(other, "demo", "unrelated")
+	writeFileMode(t, marker, "keep", 0o600)
+	if err := runPluginsCommand(t.Context(), []string{"disable", "demo", "--purge-data"}, io.Discard); err == nil {
+		t.Fatal("purge accepted a redirected data root")
+	}
+	if text, err := os.ReadFile(marker); err != nil || string(text) != "keep" {
+		t.Fatalf("unrelated file changed: %q %v", text, err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"disable", "demo"}, io.Discard); err != nil {
+		t.Fatalf("registration was lost after failed purge: %v", err)
+	}
+}
+
+func TestPluginNativeMCPCompatibility(t *testing.T) {
+	paths := testPluginPaths(t)
+	writeFileMode(t, filepath.Join(paths.Home, "mcp.json"), `{"mcpServers":{"native":{"url":"https://example.test/mcp"}}}`, 0o600)
+	writeFileMode(t, filepath.Join(paths.Home, pluginsRegistryFile), `not json`, 0o600)
+	servers, warnings, err := loadAllMCPConfigs(t.Context(), paths)
+	if err != nil || len(warnings) == 0 || len(servers) != 1 || servers["native"].URL == "" {
+		t.Fatalf("native MCP lost: servers=%v warnings=%v err=%v", servers, warnings, err)
+	}
+	const beforePlugins = `{"Config":{"url":"https://example.test/mcp"},"Executable":"","ExecutableDigest":"","Environment":null,"OAuthGeneration":""}`
+	binding, err := mcpConnectionBinding(t.Context(), paths, "native", servers["native"], nil)
+	if err != nil || binding != digest([]byte(beforePlugins)) {
+		t.Fatalf("native connection no longer matches its pending approval: %s, %v", binding, err)
 	}
 }
 

@@ -11,9 +11,9 @@ import (
 	"time"
 )
 
-type mcpOAuthLock struct{ file *os.File }
+type privateLock struct{ file *os.File }
 
-func acquireMCPOAuthLock(ctx context.Context, path string) (*mcpOAuthLock, error) {
+func acquirePrivateLock(ctx context.Context, path string) (*privateLock, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -24,7 +24,7 @@ func acquireMCPOAuthLock(ctx context.Context, path string) (*mcpOAuthLock, error
 	held, err := file.Stat()
 	if err != nil || !held.Mode().IsRegular() {
 		file.Close()
-		return nil, fmt.Errorf("OAuth lock must be a regular file")
+		return nil, fmt.Errorf("lock must be a regular file")
 	}
 	if err = file.Chmod(0o600); err != nil {
 		file.Close()
@@ -40,9 +40,9 @@ func acquireMCPOAuthLock(ctx context.Context, path string) (*mcpOAuthLock, error
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				return nil, fmt.Errorf("OAuth lock was replaced")
+				return nil, fmt.Errorf("lock was replaced")
 			}
-			return &mcpOAuthLock{file: file}, nil
+			return &privateLock{file: file}, nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EAGAIN) {
 			file.Close()
@@ -56,7 +56,7 @@ func acquireMCPOAuthLock(ctx context.Context, path string) (*mcpOAuthLock, error
 		}
 	}
 }
-func (l *mcpOAuthLock) Close() error {
+func (l *privateLock) Close() error {
 	if l == nil || l.file == nil {
 		return nil
 	}

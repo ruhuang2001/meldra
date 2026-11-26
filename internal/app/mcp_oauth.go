@@ -209,7 +209,7 @@ func (s *mcpOAuthPendingTokenSource) Token() (*oauth2.Token, error) {
 	if _, err := verifyConfigHome(s.paths); err != nil {
 		return nil, err
 	}
-	lock, err := acquireMCPOAuthLock(s.ctx, mcpOAuthLockPath(s.paths, s.name))
+	lock, err := acquirePrivateLock(s.ctx, mcpOAuthLockPath(s.paths, s.name))
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func (s *mcpOAuthTokenSource) Token() (*oauth2.Token, error) {
 	if _, err := verifyConfigHome(s.paths); err != nil {
 		return nil, err
 	}
-	lock, err := acquireMCPOAuthLock(s.ctx, mcpOAuthLockPath(s.paths, s.name))
+	lock, err := acquirePrivateLock(s.ctx, mcpOAuthLockPath(s.paths, s.name))
 	if err != nil {
 		return nil, fmt.Errorf("OAuth cache lock: %w", err)
 	}
@@ -348,7 +348,7 @@ func saveMCPToken(ctx context.Context, paths ConfigPaths, name, generation strin
 	if _, err := verifyConfigHome(paths); err != nil {
 		return nil, err
 	}
-	lock, err := acquireMCPOAuthLock(ctx, mcpOAuthLockPath(paths, name))
+	lock, err := acquirePrivateLock(ctx, mcpOAuthLockPath(paths, name))
 	if err != nil {
 		return nil, err
 	}
@@ -425,7 +425,7 @@ func newMCPOAuth(ctx context.Context, paths ConfigPaths, name string, config mcp
 		redirect = "http://" + listener.Addr().String() + "/callback"
 	}
 	path := mcpOAuthPath(paths, name)
-	lock, err := acquireMCPOAuthLock(ctx, mcpOAuthLockPath(paths, name))
+	lock, err := acquirePrivateLock(ctx, mcpOAuthLockPath(paths, name))
 	if err != nil {
 		return nil, cleanup, err
 	}
@@ -603,7 +603,7 @@ func runMCPLogout(ctx context.Context, paths ConfigPaths, name string) error {
 	if exists, err := verifyConfigHome(paths); err != nil || !exists {
 		return err
 	}
-	lock, err := acquireMCPOAuthLock(ctx, mcpOAuthLockPath(paths, name))
+	lock, err := acquirePrivateLock(ctx, mcpOAuthLockPath(paths, name))
 	if err != nil {
 		return err
 	}

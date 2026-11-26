@@ -126,11 +126,11 @@ must first be copied in with approval. Skills do not add an operating-system
 sandbox.
 
 Packages outside the workspace are read through the same protected-path checks as
-configuration and task storage. Traversal, symlinks, hard links, binary files, and
-oversized resources are rejected, and a package cannot open configuration or
-credential files by a relative path.
+configuration and task storage. Traversal, hard links, binary files, and oversized
+resources are rejected. Standalone skills cannot use symlinks. A skill supplied
+by an Agent Plugin can link to a shared file inside that plugin's root, but not
+outside the plugin or into protected state.
 
 Compaction can discard guidance loaded earlier, so the instructions require
 rereading a skill when it is still needed. That is a prompt-level rule, not proof
 that a model always complies.
-

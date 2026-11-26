@@ -52,6 +52,7 @@ type mcpServerConfig struct {
 	pluginName         string
 	pluginRoot         string
 	pluginData         string
+	pluginExecDigest   string
 	fromPlugin         bool
 }
 
@@ -166,7 +167,10 @@ func loadAllMCPConfigs(ctx context.Context, paths ConfigPaths) (map[string]mcpSe
 	}
 	pluginServers, warnings, err := loadApprovedPluginMCPConfigs(ctx, paths)
 	if err != nil {
-		return nil, nil, err
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+		return native, []string{"Warning: plugin MCP servers unavailable: " + sanitizeTerminalText(err.Error())}, nil
 	}
 	combined := make(map[string]mcpServerConfig, len(native)+len(pluginServers))
 	maps.Copy(combined, native)
@@ -323,6 +327,11 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 	client := mcp.NewClient(&mcp.Implementation{Name: "meldra", Version: version}, mcpClientOptions(workspace, name, config))
 	session, err := client.Connect(startupCtx, transport, nil)
 	if err != nil && config.Command != "" && startupCtx.Err() == nil && errors.Is(err, mcp.ErrConnectionClosed) {
+		if config.fromPlugin {
+			if current, err := mcpConnectionBinding(startupCtx, paths, name, config, workspace); err != nil || current != binding {
+				return nil, nil, fmt.Errorf("plugin MCP connection changed before retry")
+			}
+		}
 		legacy := mcpCommandTransport{command: newMCPCommand(config, workspace)}
 		session, err = client.Connect(startupCtx, legacy, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	}
@@ -435,6 +444,9 @@ func sanitizeMCPNamePrefix(server string, maxLen int) string {
 }
 
 func mcpToolName(server, name string) string {
+	if strings.HasPrefix(server, pluginServerIDPrefix) {
+		return "mcp__" + sanitizeMCPNamePrefix(server, 20) + "__" + digest([]byte(server + "\x00" + name))[:32]
+	}
 	combined := "mcp__" + server + "__" + name
 	if len(combined) <= 64 && mcpNamePart.MatchString(server) && mcpNamePart.MatchString(name) {
 		return combined
@@ -599,7 +611,7 @@ func (t mcpHTTPTransport) RoundTrip(request *http.Request) (*http.Response, erro
 			request.Header.Set(key, t.headers[key])
 		}
 	}
-	if t.token != "" {
+	if sameOrigin && t.token != "" {
 		request.Header.Set("Authorization", "Bearer "+t.token)
 	}
 	response, err := http.DefaultTransport.RoundTrip(request)

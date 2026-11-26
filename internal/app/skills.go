@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
@@ -107,6 +108,7 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 		}
 		if len(children) > maxSkillEntries-entries {
 			catalog.warn(directory, fmt.Errorf("discovery limit of %d entries exceeded; this and later roots skipped", maxSkillEntries))
+			entries = maxSkillEntries
 			break
 		}
 		entries += len(children)
@@ -132,7 +134,7 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 				catalog.warn(path, err)
 				continue
 			}
-			item, err := parseSkill(contents, path)
+			item, err := parseSkill(contents, path, false)
 			if err != nil {
 				catalog.warn(path, err)
 				continue
@@ -152,8 +154,8 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 		}
 	}
 	if catalog.meldraHome != "" {
-		pluginPaths := ConfigPaths{Home: catalog.meldraHome}
-		if reg, regErr := loadPluginRegistry(pluginPaths); regErr != nil {
+		remaining := maxSkillEntries - entries
+		if reg, regErr := loadPluginRegistry(ConfigPaths{Home: catalog.meldraHome}); regErr != nil {
 			catalog.warn(filepath.Join(catalog.meldraHome, pluginsRegistryFile), regErr)
 		} else {
 			for _, pluginName := range slices.Sorted(maps.Keys(reg.Plugins)) {
@@ -164,23 +166,26 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 				if !entry.Enabled {
 					continue
 				}
+				if remaining == 0 {
+					catalog.warn(entry.Path, fmt.Errorf("discovery limit of %d entries reached; remaining plugins skipped", maxSkillEntries))
+					break
+				}
 				canonicalRoot, rootErr := resolvePluginRoot(entry.Path)
 				if rootErr != nil {
 					catalog.warn(entry.Path, rootErr)
 					continue
 				}
-				pluginSkills, pluginWarnings, loadErr := loadPluginSkillsOnly(ctx, canonicalRoot, pluginName, catalog.checkPath)
+				if err := checkPluginRootAllowed(paths, canonicalRoot); err != nil {
+					catalog.warn(entry.Path, err)
+					continue
+				}
+				pluginSkills, pluginWarnings, loadErr := loadPluginSkillsOnly(ctx, canonicalRoot, pluginName, catalog.checkPath, &remaining)
 				if loadErr != nil {
 					catalog.warn(canonicalRoot, loadErr)
 					continue
 				}
 				catalog.Warnings = append(catalog.Warnings, pluginWarnings...)
 				for _, item := range pluginSkills {
-					if entries >= maxSkillEntries {
-						catalog.warn(item.Path, fmt.Errorf("discovery limit of %d entries exceeded; remaining plugin skills skipped", maxSkillEntries))
-						break
-					}
-					entries++
 					if seenNames[item.Name] {
 						catalog.warn(item.Path, fmt.Errorf("duplicate skill %q from plugin %q shadowed by higher-priority source", item.Name, item.Plugin))
 						continue
@@ -311,7 +316,7 @@ func canonicalSkillHome(path string) (string, error) {
 	return canonical, err
 }
 
-func parseSkill(contents []byte, path string) (skill, error) {
+func parseSkill(contents []byte, path string, portable bool) (skill, error) {
 	text := strings.ReplaceAll(strings.TrimPrefix(string(contents), "\ufeff"), "\r\n", "\n")
 	text, found := strings.CutPrefix(text, "---\n")
 	if !found {
@@ -329,13 +334,53 @@ func parseSkill(contents []byte, path string) (skill, error) {
 		return skill{}, fmt.Errorf("invalid YAML frontmatter: %w", err)
 	}
 	name, description := metadata["name"], metadata["description"]
-	if name.Kind != yaml.ScalarNode || name.Tag != "!!str" || len(name.Value) > 64 || !skillNamePattern.MatchString(name.Value) || name.Value != filepath.Base(filepath.Dir(path)) {
+	if name.Kind != yaml.ScalarNode || name.Tag != "!!str" || name.Value != filepath.Base(filepath.Dir(path)) {
+		return skill{}, fmt.Errorf("name must be a string matching the skill directory")
+	}
+	if portable {
+		if err := validatePortableSkillMetadata(name.Value, metadata); err != nil {
+			return skill{}, err
+		}
+	} else if len(name.Value) > 64 || !skillNamePattern.MatchString(name.Value) {
 		return skill{}, fmt.Errorf("name must match its directory and contain 1..64 lowercase ASCII letters, digits or single hyphens")
 	}
 	if description.Kind != yaml.ScalarNode || description.Tag != "!!str" || strings.TrimSpace(description.Value) == "" || utf8.RuneCountInString(description.Value) > 1024 {
 		return skill{}, fmt.Errorf("description must be a nonempty string of at most 1024 characters")
 	}
 	return skill{Name: name.Value, Description: description.Value, Path: path}, nil
+}
+
+func validatePortableSkillMetadata(name string, fields map[string]yaml.Node) error {
+	if name == "" || utf8.RuneCountInString(name) > 64 || strings.ToLower(name) != name || strings.HasPrefix(name, "-") || strings.HasSuffix(name, "-") || strings.Contains(name, "--") || strings.IndexFunc(name, func(r rune) bool {
+		return r != '-' && !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	}) >= 0 {
+		return fmt.Errorf("invalid portable skill name %q", name)
+	}
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
+		n := fields[key]
+		switch key {
+		case "name", "description":
+		case "compatibility", "license", "allowed-tools":
+			if n.Kind != yaml.ScalarNode || n.Tag != "!!str" {
+				return fmt.Errorf("%s must be a string", key)
+			}
+			if key == "compatibility" && (strings.TrimSpace(n.Value) == "" || utf8.RuneCountInString(n.Value) > 500) {
+				return fmt.Errorf("compatibility must be 1..500 characters")
+			}
+		case "metadata":
+			if n.Kind != yaml.MappingNode {
+				return fmt.Errorf("metadata must be a string-to-string mapping")
+			}
+			for _, item := range n.Content {
+				if item.Kind != yaml.ScalarNode || item.Tag != "!!str" {
+					return fmt.Errorf("metadata must contain only string keys and values")
+				}
+			}
+		default:
+			return fmt.Errorf("unknown portable skill field %q", key)
+		}
+	}
+	return nil
 }
 
 func openSkillDirectory(path string) (*os.Root, error) {
@@ -486,14 +531,7 @@ func (c *skillCatalog) read(ctx context.Context, raw json.RawMessage) (string, e
 	var contents []byte
 	var err error
 	if item.pluginRoot != "" {
-		resolved, resErr := resolveContainedPath(item.pluginRoot, path)
-		if resErr != nil {
-			return "", resErr
-		}
-		if err := c.checkPath(resolved); err != nil {
-			return "", err
-		}
-		contents, err = readPluginSkillFile(item.pluginRoot, filepath.Dir(item.Path), in.Path)
+		contents, err = readPluginSkillFile(item.pluginRoot, filepath.Dir(item.Path), in.Path, c.checkPath)
 	} else {
 		contents, err = readSkillFile(filepath.Dir(item.Path), in.Path)
 	}
@@ -501,7 +539,7 @@ func (c *skillCatalog) read(ctx context.Context, raw json.RawMessage) (string, e
 		return "", err
 	}
 	if filepath.Clean(in.Path) == "SKILL.md" {
-		current, err := parseSkill(contents, item.Path)
+		current, err := parseSkill(contents, item.Path, item.pluginRoot != "")
 		if err != nil {
 			return "", err
 		}

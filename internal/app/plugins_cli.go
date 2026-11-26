@@ -9,7 +9,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -61,20 +60,20 @@ func checkPluginRootAllowed(paths ConfigPaths, canonicalRoot string) error {
 		return err
 	}
 	allowedPluginsDir := filepath.Join(meldraHome, "plugins")
-	if withinFold(meldraHome, canonicalRoot) && !withinFold(allowedPluginsDir, canonicalRoot) {
-		return fmt.Errorf("plugin directory cannot be inside Meldra private state %s (place local plugins under %s or outside Meldra home)", meldraHome, allowedPluginsDir)
+	if within(canonicalRoot, meldraHome) || withinFold(canonicalRoot, meldraHome) || (withinFold(meldraHome, canonicalRoot) && !within(allowedPluginsDir, canonicalRoot)) {
+		return fmt.Errorf("plugin directory cannot overlap Meldra private state %s (place local plugins under %s or outside Meldra home)", meldraHome, allowedPluginsDir)
 	}
 	return nil
 }
 
-func pluginMCPStatus(entry pluginRegistryEntry, loaded *loadedPlugin) string {
+func pluginMCPStatus(ctx context.Context, entry pluginRegistryEntry, loaded *loadedPlugin) string {
 	if loaded == nil || loaded.MCPDisabled || len(loaded.MCPServers) == 0 {
 		return "none"
 	}
 	if !entry.MCPApproved {
 		return "not-approved"
 	}
-	currentDigest, err := pluginMCPApprovalDigest(loaded)
+	currentDigest, err := reviewPluginMCP(ctx, loaded)
 	if err != nil || entry.MCPDigest == "" || currentDigest != entry.MCPDigest {
 		return "approval-stale"
 	}
@@ -139,7 +138,7 @@ func runPluginsList(ctx context.Context, args []string, output io.Writer) error 
 			Path:    entry.Path,
 			Enabled: entry.Enabled,
 		}
-		loaded, loadErr := loadPluginFromDir(ctx, paths, entry.Path, nil)
+		loaded, loadErr := loadPluginFromDir(ctx, paths, entry.Path, func(candidate string) error { return checkPluginRootAllowed(paths, candidate) })
 		if loadErr != nil {
 			item.Error = loadErr.Error()
 			item.MCPStatus = "unavailable"
@@ -149,8 +148,8 @@ func runPluginsList(ctx context.Context, args []string, output io.Writer) error 
 		item.Version = loaded.Manifest.Version
 		item.Description = loaded.Manifest.Description
 		item.SkillsCount = len(loaded.Skills)
+		item.MCPStatus = pluginMCPStatus(ctx, entry, loaded)
 		item.MCPCount = len(loaded.MCPServers)
-		item.MCPStatus = pluginMCPStatus(entry, loaded)
 		item.Extensions = loaded.Manifest.Extensions
 		item.Warnings = loaded.Warnings
 		if loaded.Manifest.Name != name {
@@ -336,10 +335,11 @@ func runPluginsEnable(ctx context.Context, args []string, output io.Writer) erro
 	if err != nil {
 		return err
 	}
-	reg, err := loadPluginRegistry(paths)
+	reg, unlock, err := lockPluginRegistry(ctx, paths)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	if existing, exists := reg.Plugins[loaded.Manifest.Name]; exists && existing.Path != loaded.Root {
 		return fmt.Errorf("plugin %q is already registered from %s; run \"meldra plugins disable %s\" first", loaded.Manifest.Name, existing.Path, loaded.Manifest.Name)
 	}
@@ -350,19 +350,20 @@ func runPluginsEnable(ctx context.Context, args []string, output io.Writer) erro
 		Path:    loaded.Root,
 		Enabled: true,
 	}
+	status := pluginMCPStatus(ctx, entry, loaded)
 	if allowMCP && !loaded.MCPDisabled && len(loaded.MCPServers) > 0 {
-		mcpDigest, err := pluginMCPApprovalDigest(loaded)
+		mcpDigest, err := reviewPluginMCP(ctx, loaded)
 		if err != nil {
 			return err
 		}
 		entry.MCPApproved = true
 		entry.MCPDigest = mcpDigest
+		status = "approved"
 	}
 	reg.Plugins[loaded.Manifest.Name] = entry
 	if err := savePluginRegistry(paths, reg); err != nil {
 		return err
 	}
-	status := pluginMCPStatus(entry, loaded)
 	summary := pluginEnableOutput{
 		Name:        loaded.Manifest.Name,
 		Version:     loaded.Manifest.Version,
@@ -422,30 +423,37 @@ func runPluginsDisable(ctx context.Context, args []string, output io.Writer) err
 	if err != nil {
 		return err
 	}
-	reg, err := loadPluginRegistry(paths)
+	reg, unlock, err := lockPluginRegistry(ctx, paths)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	if _, exists := reg.Plugins[name]; !exists {
 		return fmt.Errorf("plugin %q is not configured", name)
-	}
-	delete(reg.Plugins, name)
-	if err := savePluginRegistry(paths, reg); err != nil {
-		return err
 	}
 	if purgeData {
 		dataDir, err := pluginDataPath(paths, name)
 		if err != nil {
 			return err
 		}
-		if _, err := os.Lstat(dataDir); err == nil {
-			if err := os.RemoveAll(dataDir); err != nil {
+		root, err := openSkillDirectory(filepath.Dir(dataDir))
+		if err == nil {
+			defer root.Close()
+			if err := root.RemoveAll(name); err != nil {
 				return fmt.Errorf("remove plugin data directory: %w", err)
 			}
-			_ = syncDirectory(filepath.Dir(dataDir))
+			if err := syncDirectory(root.Name()); err != nil {
+				return err
+			}
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
+	}
+	delete(reg.Plugins, name)
+	if err := savePluginRegistry(paths, reg); err != nil {
+		return err
+	}
+	if purgeData {
 		_, err = fmt.Fprintf(output, "Disabled plugin %s and removed its data directory.\n", name)
 		return err
 	}
@@ -480,10 +488,11 @@ func runPluginsAllowMCP(ctx context.Context, args []string, output io.Writer) er
 	if err != nil {
 		return err
 	}
-	reg, err := loadPluginRegistry(paths)
+	reg, unlock, err := lockPluginRegistry(ctx, paths)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	entry, exists := reg.Plugins[name]
 	if !exists || !entry.Enabled {
 		return fmt.Errorf("plugin %q is not enabled", name)
@@ -500,7 +509,7 @@ func runPluginsAllowMCP(ctx context.Context, args []string, output io.Writer) er
 	if loaded.MCPDisabled || len(loaded.MCPServers) == 0 {
 		return fmt.Errorf("plugin %q has no valid MCP servers to approve", name)
 	}
-	mcpDigest, err := pluginMCPApprovalDigest(loaded)
+	mcpDigest, err := reviewPluginMCP(ctx, loaded)
 	if err != nil {
 		return err
 	}
@@ -564,10 +573,11 @@ func runPluginsRevokeMCP(ctx context.Context, args []string, output io.Writer) e
 	if err != nil {
 		return err
 	}
-	reg, err := loadPluginRegistry(paths)
+	reg, unlock, err := lockPluginRegistry(ctx, paths)
 	if err != nil {
 		return err
 	}
+	defer unlock()
 	entry, exists := reg.Plugins[name]
 	if !exists {
 		return fmt.Errorf("plugin %q is not configured", name)

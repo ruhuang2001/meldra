@@ -76,7 +76,8 @@ Meldra follows the Agent Plugins 1.0.0 specification:
   are discovered without recursion. Invalid skills are skipped individually and
   do not block sibling skills or MCP servers. Plugin skills follow workspace and
   user skill directories in precedence, appear in `meldra skills`, and are read
-  through `read_skill`.
+  through `read_skill`. Plugin skills follow the portable Agent Skills frontmatter
+  rules, including Unicode names and a string-to-string `metadata` map.
 - **MCP servers (`mcp.json`):** Validated in two stages. Top-level errors or a
   mismatched `$schema` disable MCP for that plugin without affecting skills.
   Invalid server entries or runtime startup failures skip only that server.
@@ -98,14 +99,25 @@ Meldra follows the Agent Plugins 1.0.0 specification:
 ## Security and approval model
 
 Plugin registration lives in private `$MELDRA_HOME/plugins.json` (`0600`).
-Plugins cannot be registered from Meldra's private state directory itself,
-except under `$MELDRA_HOME/plugins/`.
+Keep plugin directories separate from Meldra's private state: do not register
+`MELDRA_HOME`, a directory containing it, or any of its subdirectories except
+`$MELDRA_HOME/plugins/` and packages inside it.
 
 Plugin MCP servers appear as `plugin/<plugin-name>/<server-name>` in approvals,
-task records, and `meldra mcp` catalog commands. `meldra plugins allow-mcp`
-records a digest of the validated MCP server configuration and any bundled
-`./...` executables; modifying `mcp.json` or a bundled executable invalidates
-that approval and blocks startup until you inspect and re-approve it.
+task records, and `meldra mcp` catalog commands. The last segment is URL-escaped;
+copy the server ID from `meldra plugins inspect` for names containing slashes,
+spaces, or non-ASCII characters. `meldra plugins allow-mcp`
+records a digest of the effective server configuration and the contents of
+bundled `./...` commands. Changing either blocks the next startup until you
+inspect and re-approve the plugin. Whitespace-only edits do not invalidate
+approval. A bundled command that cannot be read is skipped, not approved.
+
+This is startup approval, not a sandbox or a signature over the package.
+Commands run as your OS user. Scripts passed as arguments to an interpreter,
+dependencies, and programs resolved through `PATH` are not pinned by this
+approval. Enable MCP only for packages you trust; keep their files and runtime
+dependencies out of directories writable by untrusted users. Revocation
+prevents future connections; close an existing session to stop its servers.
 
 Plan mode, external MCP call approvals, connection-binding checks, and task
 records apply to plugin MCP servers identically to servers configured in

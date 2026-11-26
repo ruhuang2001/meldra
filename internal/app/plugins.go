@@ -3,8 +3,6 @@ package app
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +17,6 @@ import (
 	"runtime"
 	"slices"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -69,6 +66,7 @@ type pluginMCPServer struct {
 	Headers    map[string]string `json:"headers,omitempty"`
 	PluginRoot string            `json:"plugin_root,omitempty"`
 	PluginData string            `json:"plugin_data,omitempty"`
+	execDigest string
 }
 
 type loadedPlugin struct {
@@ -101,7 +99,7 @@ func validatePluginName(name string) error {
 }
 
 func pluginMCPServerID(pluginName, serverName string) string {
-	return pluginServerIDPrefix + pluginName + "/" + serverName
+	return pluginServerIDPrefix + pluginName + "/" + url.PathEscape(serverName)
 }
 
 func isValidPluginMCPServerID(id string) bool {
@@ -110,10 +108,11 @@ func isValidPluginMCPServerID(id string) bool {
 		return false
 	}
 	pluginName, serverName, ok := strings.Cut(rest, "/")
-	if !ok || serverName == "" || validatePluginName(pluginName) != nil {
+	if !ok || validatePluginName(pluginName) != nil {
 		return false
 	}
-	return strings.IndexFunc(serverName, func(r rune) bool { return unicode.IsControl(r) }) < 0
+	decoded, err := url.PathUnescape(serverName)
+	return err == nil && pluginMCPServerID(pluginName, decoded) == id
 }
 
 func pluginDataPath(paths ConfigPaths, pluginName string) (string, error) {
@@ -128,39 +127,35 @@ func pluginDataPath(paths ConfigPaths, pluginName string) (string, error) {
 }
 
 func ensurePluginDataDir(paths ConfigPaths, pluginName string) (string, error) {
+	dir, err := pluginDataPath(paths, pluginName)
+	if err != nil {
+		return "", err
+	}
 	if err := ensureConfigHome(paths); err != nil {
 		return "", err
 	}
-	dataRoot := filepath.Join(paths.Home, pluginDataDirName)
-	if err := makeDirectoryTreeDurable(dataRoot, privateDirPerm, syncDirectory); err != nil {
-		return "", fmt.Errorf("create plugin data root: %w", err)
-	}
-	canonicalRoot, err := filepath.EvalSymlinks(dataRoot)
-	if err != nil {
-		return "", fmt.Errorf("resolve plugin data root: %w", err)
-	}
-	if err := validatePluginName(pluginName); err != nil {
-		return "", err
-	}
-	dir := filepath.Join(canonicalRoot, pluginName)
-	if info, err := os.Lstat(dir); err == nil {
-		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-			return "", fmt.Errorf("plugin data path %s must be a directory", dir)
+	for _, directory := range []string{filepath.Dir(dir), dir} {
+		parent, err := openSkillDirectory(filepath.Dir(directory))
+		if err != nil {
+			return "", err
 		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", err
+		err = parent.Mkdir(filepath.Base(directory), privateDirPerm)
+		parent.Close()
+		if err != nil && !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+		if err == nil {
+			if err := syncDirectory(filepath.Dir(directory)); err != nil {
+				return "", err
+			}
+		}
 	}
-	if err := makeDirectoryTreeDurable(dir, privateDirPerm, syncDirectory); err != nil {
-		return "", fmt.Errorf("create plugin data directory: %w", err)
-	}
-	resolved, err := filepath.EvalSymlinks(dir)
+	root, err := openSkillDirectory(dir)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("open plugin data directory: %w", err)
 	}
-	if !within(canonicalRoot, resolved) {
-		return "", fmt.Errorf("plugin data directory escapes %s", canonicalRoot)
-	}
-	return resolved, nil
+	root.Close()
+	return dir, nil
 }
 
 func resolvePluginRoot(path string) (string, error) {
@@ -186,71 +181,38 @@ func resolvePluginRoot(path string) (string, error) {
 }
 
 func resolveContainedPath(canonicalRoot, candidate string) (string, error) {
-	return resolveContainedPathWithDepth(canonicalRoot, candidate, 0)
-}
-
-func resolveContainedPathWithDepth(canonicalRoot, candidate string, depth int) (string, error) {
-	if depth > 40 {
-		return "", fmt.Errorf("too many symbolic links")
-	}
-	abs, err := filepath.Abs(candidate)
-	if err != nil {
-		return "", err
-	}
-	cleaned := filepath.Clean(abs)
-	if !within(canonicalRoot, cleaned) {
-		return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
-	}
-	rel, err := filepath.Rel(canonicalRoot, cleaned)
-	if err != nil {
-		return "", err
-	}
-	if rel == "." {
+	if candidate == canonicalRoot {
 		return canonicalRoot, nil
 	}
+	rel, ok := strings.CutPrefix(candidate, strings.TrimSuffix(canonicalRoot, string(filepath.Separator))+string(filepath.Separator))
+	if !ok {
+		return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
+	}
 	current := canonicalRoot
-	parts := strings.Split(rel, string(filepath.Separator))
-	for i, part := range parts {
+	for part := range strings.SplitSeq(rel, string(filepath.Separator)) {
 		if part == "" || part == "." {
 			continue
 		}
-		if part == ".." {
+		current = filepath.Join(current, part)
+		if !within(canonicalRoot, current) {
 			return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
 		}
-		next := filepath.Join(current, part)
-		info, err := os.Lstat(next)
+		info, err := os.Lstat(current)
 		if errors.Is(err, fs.ErrNotExist) {
-			remaining := filepath.Join(append([]string{current}, parts[i:]...)...)
-			if !within(canonicalRoot, remaining) {
-				return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
-			}
-			return remaining, nil
+			continue
 		}
 		if err != nil {
 			return "", err
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(next)
+			current, err = filepath.EvalSymlinks(current)
 			if err != nil {
 				return "", err
 			}
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(current, target)
+			if !within(canonicalRoot, current) {
+				return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
 			}
-			rest := ""
-			if i+1 < len(parts) {
-				rest = filepath.Join(parts[i+1:]...)
-			}
-			combined := target
-			if rest != "" {
-				combined = filepath.Join(target, rest)
-			}
-			return resolveContainedPathWithDepth(canonicalRoot, combined, depth+1)
 		}
-		current = next
-	}
-	if !within(canonicalRoot, current) {
-		return "", fmt.Errorf("path escapes boundary %s", canonicalRoot)
 	}
 	return current, nil
 }
@@ -264,21 +226,18 @@ func hasGitPathSegment(rel string) bool {
 	return false
 }
 
-func readPluginRegularFile(canonicalRoot, candidate string, limit int64, requireUTF8 bool) ([]byte, error) {
-	resolved, err := resolveContainedPath(canonicalRoot, candidate)
-	if err != nil {
-		return nil, err
-	}
+func openPluginRegularFile(canonicalRoot, resolved string, limit int64) (*os.File, error) {
 	rel, err := filepath.Rel(canonicalRoot, resolved)
 	if err != nil || !filepath.IsLocal(rel) || hasGitPathSegment(rel) {
 		return nil, fmt.Errorf("path escapes plugin root or references .git")
 	}
-	root, err := os.OpenRoot(canonicalRoot)
+	root, err := openSkillDirectory(filepath.Dir(resolved))
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
-	info, err := root.Lstat(rel)
+	name := filepath.Base(resolved)
+	info, err := root.Lstat(name)
 	if err != nil {
 		return nil, err
 	}
@@ -288,18 +247,41 @@ func readPluginRegularFile(canonicalRoot, candidate string, limit int64, require
 	if info.Size() > limit {
 		return nil, fmt.Errorf("file exceeds %d byte limit", limit)
 	}
-	file, err := root.OpenFile(rel, skillReadFlags, 0)
+	file, err := root.OpenFile(name, skillReadFlags, 0)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		file.Close()
+		return nil, fmt.Errorf("file changed while opening")
+	}
+	if err := checkSkillLinkCount(opened); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func readPluginRegularFile(canonicalRoot, candidate string, limit int64, requireUTF8 bool, checkPath func(string) error) ([]byte, error) {
+	resolved, err := resolveContainedPath(canonicalRoot, candidate)
+	if err != nil {
+		return nil, err
+	}
+	if checkPath != nil {
+		if err := checkPath(resolved); err != nil {
+			return nil, err
+		}
+	}
+	file, err := openPluginRegularFile(canonicalRoot, resolved, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-		return nil, fmt.Errorf("file changed while opening")
-	}
 	contents, err := io.ReadAll(io.LimitReader(file, limit+1))
 	if err != nil {
 		return nil, err
@@ -313,7 +295,7 @@ func readPluginRegularFile(canonicalRoot, candidate string, limit int64, require
 	return contents, nil
 }
 
-func readPluginSkillFile(canonicalRoot, skillDir, relativePath string) ([]byte, error) {
+func readPluginSkillFile(canonicalRoot, skillDir, relativePath string, checkPath func(string) error) ([]byte, error) {
 	if !filepath.IsLocal(relativePath) || strings.Contains(relativePath, "\\") {
 		return nil, fmt.Errorf("skill path must be relative and stay inside its directory")
 	}
@@ -323,7 +305,7 @@ func readPluginSkillFile(canonicalRoot, skillDir, relativePath string) ([]byte, 
 		}
 	}
 	candidate := filepath.Join(skillDir, relativePath)
-	return readPluginRegularFile(canonicalRoot, candidate, maxSkillFileBytes, true)
+	return readPluginRegularFile(canonicalRoot, candidate, maxSkillFileBytes, true, checkPath)
 }
 
 type jsonObjectField struct {
@@ -332,6 +314,9 @@ type jsonObjectField struct {
 }
 
 func decodeStrictJSONObject(data []byte, rejectDuplicateKeys bool) ([]jsonObjectField, map[string]json.RawMessage, error) {
+	if !utf8.Valid(data) {
+		return nil, nil, fmt.Errorf("invalid UTF-8 in JSON")
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	tok, err := decoder.Token()
 	if err != nil {
@@ -427,7 +412,7 @@ func decodeStrictJSONStringMap(raw json.RawMessage, rejectDuplicateKeys bool) ([
 
 func loadPluginManifest(canonicalRoot string) (pluginManifest, []string, error) {
 	manifestPath := filepath.Join(canonicalRoot, "plugin.json")
-	data, err := readPluginRegularFile(canonicalRoot, manifestPath, maxPluginJSONBytes, false)
+	data, err := readPluginRegularFile(canonicalRoot, manifestPath, maxPluginJSONBytes, false, nil)
 	if err != nil {
 		return pluginManifest{}, nil, fmt.Errorf("plugin.json: %w", err)
 	}
@@ -566,7 +551,7 @@ func validatePluginCommand(canonicalRoot, command string) (string, error) {
 		if strings.Contains(command, "\\") {
 			return "", fmt.Errorf("plugin-relative command must use forward slashes")
 		}
-		candidate := filepath.Join(canonicalRoot, filepath.FromSlash(command))
+		candidate := canonicalRoot + string(filepath.Separator) + filepath.FromSlash(command)
 		resolved, err := resolveContainedPath(canonicalRoot, candidate)
 		if err != nil {
 			return "", fmt.Errorf("plugin-relative command escapes plugin root: %w", err)
@@ -593,7 +578,7 @@ func validatePluginCWD(canonicalRoot, canonicalData, rawCWD string) (string, err
 	switch {
 	case strings.HasPrefix(rawCWD, "./"):
 		expanded := expandPluginPlaceholders(rawCWD, canonicalRoot, canonicalData)
-		candidate := filepath.Join(canonicalRoot, filepath.FromSlash(expanded))
+		candidate := canonicalRoot + string(filepath.Separator) + filepath.FromSlash(expanded)
 		resolved, err := resolveContainedPath(canonicalRoot, candidate)
 		if err != nil {
 			return "", fmt.Errorf("cwd escapes plugin root: %w", err)
@@ -703,9 +688,6 @@ func validatePluginMCPHeaders(raw json.RawMessage) (map[string]string, error) {
 }
 
 func parsePluginMCPServer(canonicalRoot, canonicalData, pluginName, serverName string, raw json.RawMessage) (pluginMCPServer, error) {
-	if serverName == "" || strings.IndexFunc(serverName, func(r rune) bool { return unicode.IsControl(r) }) >= 0 {
-		return pluginMCPServer{}, fmt.Errorf("invalid server name")
-	}
 	_, fields, err := decodeStrictJSONObject(raw, false)
 	if err != nil {
 		return pluginMCPServer{}, err
@@ -837,7 +819,7 @@ func discoverPluginMCP(canonicalRoot, canonicalData, pluginName string) ([]plugi
 	if _, err := os.Lstat(mcpPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil
 	}
-	data, err := readPluginRegularFile(canonicalRoot, mcpPath, maxPluginJSONBytes, false)
+	data, err := readPluginRegularFile(canonicalRoot, mcpPath, maxPluginJSONBytes, false, nil)
 	if err != nil {
 		return nil, true, []string{fmt.Sprintf("%s: MCP disabled: %s", mcpPath, err)}
 	}
@@ -883,7 +865,7 @@ func discoverPluginMCP(canonicalRoot, canonicalData, pluginName string) ([]plugi
 	return servers, false, warnings
 }
 
-func discoverPluginSkills(ctx context.Context, canonicalRoot, pluginName string, checkPath func(string) error) ([]skill, bool, []string, error) {
+func discoverPluginSkills(ctx context.Context, canonicalRoot, pluginName string, checkPath func(string) error, remaining *int) ([]skill, bool, []string, error) {
 	skillsPath := filepath.Join(canonicalRoot, "skills")
 	if _, err := os.Lstat(skillsPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, false, nil, nil
@@ -901,20 +883,26 @@ func discoverPluginSkills(ctx context.Context, canonicalRoot, pluginName string,
 			return nil, true, []string{fmt.Sprintf("%s: skills disabled: %s", skillsPath, err)}, nil
 		}
 	}
-	file, err := os.Open(resolvedSkillsDir)
+	root, err := openSkillDirectory(resolvedSkillsDir)
 	if err != nil {
 		return nil, true, []string{fmt.Sprintf("%s: skills disabled: %s", skillsPath, err)}, nil
 	}
-	children, readErr := file.ReadDir(maxSkillEntries + 1)
+	defer root.Close()
+	file, err := root.Open(".")
+	if err != nil {
+		return nil, true, []string{fmt.Sprintf("%s: skills disabled: %s", skillsPath, err)}, nil
+	}
+	children, readErr := file.ReadDir(*remaining + 1)
 	file.Close()
 	if readErr != nil && !errors.Is(readErr, io.EOF) {
 		return nil, true, []string{fmt.Sprintf("%s: skills disabled: %s", skillsPath, readErr)}, nil
 	}
 	var warnings []string
-	if len(children) > maxSkillEntries {
+	if len(children) > *remaining {
 		warnings = append(warnings, fmt.Sprintf("%s: discovery limit of %d entries exceeded; extra entries skipped", skillsPath, maxSkillEntries))
-		children = children[:maxSkillEntries]
+		children = children[:*remaining]
 	}
+	*remaining -= len(children)
 	slices.SortFunc(children, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	var skills []skill
 	for _, child := range children {
@@ -942,23 +930,12 @@ func discoverPluginSkills(ctx context.Context, canonicalRoot, pluginName string,
 			continue
 		}
 		logicalPath := filepath.Join(skillsPath, child.Name(), "SKILL.md")
-		if checkPath != nil {
-			resolvedFile, resErr := resolveContainedPath(canonicalRoot, skillFileCandidate)
-			if resErr != nil {
-				warnings = append(warnings, fmt.Sprintf("%s: %s", logicalPath, resErr))
-				continue
-			}
-			if err := checkPath(resolvedFile); err != nil {
-				warnings = append(warnings, fmt.Sprintf("%s: %s", logicalPath, err))
-				continue
-			}
-		}
-		contents, err := readPluginRegularFile(canonicalRoot, skillFileCandidate, maxSkillFileBytes, true)
+		contents, err := readPluginRegularFile(canonicalRoot, skillFileCandidate, maxSkillFileBytes, true, checkPath)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", logicalPath, err))
 			continue
 		}
-		item, err := parseSkill(contents, logicalPath)
+		item, err := parseSkill(contents, logicalPath, true)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %s", logicalPath, err))
 			continue
@@ -988,7 +965,7 @@ func loadPluginFromDir(ctx context.Context, paths ConfigPaths, dir string, check
 	if err != nil {
 		return nil, err
 	}
-	skills, skillsDisabled, skillWarnings, err := discoverPluginSkills(ctx, canonicalRoot, manifest.Name, checkPath)
+	skills, skillsDisabled, skillWarnings, err := discoverPluginSkills(ctx, canonicalRoot, manifest.Name, checkPath, new(maxSkillEntries))
 	if err != nil {
 		return nil, err
 	}
@@ -1018,27 +995,40 @@ func loadPluginFromDir(ctx context.Context, paths ConfigPaths, dir string, check
 	}, nil
 }
 
-func pluginExecutableDigest(canonicalRoot, path string) string {
-	data, err := readPluginRegularFile(canonicalRoot, path, 1<<30, false)
+func pluginExecutableDigest(ctx context.Context, canonicalRoot, path string) (string, error) {
+	file, err := openPluginRegularFile(canonicalRoot, path, 1<<30)
 	if err != nil {
-		return "unreadable:" + err.Error()
+		return "", err
 	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	defer file.Close()
+	return hashMCPExecutable(ctx, file)
 }
 
-func pluginMCPApprovalDigest(loaded *loadedPlugin) (string, error) {
+func reviewPluginMCP(ctx context.Context, loaded *loadedPlugin) (string, error) {
 	type serverDigestEntry struct {
 		Server     pluginMCPServer `json:"server"`
 		ExecDigest string          `json:"exec_digest,omitempty"`
 	}
-	entries := make([]serverDigestEntry, len(loaded.MCPServers))
-	for i, server := range loaded.MCPServers {
-		entry := serverDigestEntry{Server: server}
+	entries := make([]serverDigestEntry, 0, len(loaded.MCPServers))
+	accepted := loaded.MCPServers[:0]
+	for _, server := range loaded.MCPServers {
 		if server.Type == "stdio" && strings.HasPrefix(server.RawCommand, "./") {
-			entry.ExecDigest = pluginExecutableDigest(loaded.Root, server.Command)
+			var err error
+			server.execDigest, err = pluginExecutableDigest(ctx, loaded.Root, server.Command)
+			if err != nil {
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("server %q skipped: cannot inspect bundled executable: %s", server.Name, err))
+				continue
+			}
 		}
-		entries[i] = entry
+		accepted = append(accepted, server)
+		entries = append(entries, serverDigestEntry{server, server.execDigest})
+	}
+	loaded.MCPServers = accepted
+	if len(entries) == 0 {
+		return "", fmt.Errorf("plugin %q has no approvable MCP servers: %s", loaded.Manifest.Name, strings.Join(loaded.Warnings, "; "))
 	}
 	raw, err := json.Marshal(struct {
 		Root    string              `json:"root"`
@@ -1053,11 +1043,12 @@ func pluginMCPApprovalDigest(loaded *loadedPlugin) (string, error) {
 
 func pluginServerToMCPConfig(pluginName string, server pluginMCPServer) mcpServerConfig {
 	cfg := mcpServerConfig{
-		transport:  server.Type,
-		pluginName: pluginName,
-		pluginRoot: server.PluginRoot,
-		pluginData: server.PluginData,
-		fromPlugin: true,
+		transport:        server.Type,
+		pluginName:       pluginName,
+		pluginRoot:       server.PluginRoot,
+		pluginData:       server.PluginData,
+		pluginExecDigest: server.execDigest,
+		fromPlugin:       true,
 	}
 	if server.Type == "stdio" {
 		cfg.Command = server.Command
@@ -1169,7 +1160,26 @@ func savePluginRegistry(paths ConfigPaths, reg pluginRegistry) error {
 	return syncDirectory(paths.Home)
 }
 
-func loadPluginSkillsOnly(ctx context.Context, canonicalRoot, registeredName string, checkPath func(string) error) ([]skill, []string, error) {
+func lockPluginRegistry(ctx context.Context, paths ConfigPaths) (pluginRegistry, func(), error) {
+	if _, err := verifyConfigHome(paths); err != nil {
+		return pluginRegistry{}, nil, err
+	}
+	if err := ensureConfigHome(paths); err != nil {
+		return pluginRegistry{}, nil, err
+	}
+	lock, err := acquirePrivateLock(ctx, filepath.Join(paths.Home, pluginsRegistryFile+".lock"))
+	if err != nil {
+		return pluginRegistry{}, nil, err
+	}
+	reg, err := loadPluginRegistry(paths)
+	if err != nil {
+		lock.Close()
+		return pluginRegistry{}, nil, err
+	}
+	return reg, func() { lock.Close() }, nil
+}
+
+func loadPluginSkillsOnly(ctx context.Context, canonicalRoot, registeredName string, checkPath func(string) error, remaining *int) ([]skill, []string, error) {
 	if checkPath != nil {
 		if err := checkPath(canonicalRoot); err != nil {
 			return nil, nil, err
@@ -1182,7 +1192,7 @@ func loadPluginSkillsOnly(ctx context.Context, canonicalRoot, registeredName str
 	if registeredName != "" && manifest.Name != registeredName {
 		return nil, nil, fmt.Errorf("plugin manifest name %q differs from registered name %q", manifest.Name, registeredName)
 	}
-	skills, _, skillWarnings, err := discoverPluginSkills(ctx, canonicalRoot, manifest.Name, checkPath)
+	skills, _, skillWarnings, err := discoverPluginSkills(ctx, canonicalRoot, manifest.Name, checkPath, remaining)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1200,6 +1210,9 @@ func loadApprovedPluginMCPConfigs(ctx context.Context, paths ConfigPaths) (map[s
 	servers := map[string]mcpServerConfig{}
 	var warnings []string
 	for _, name := range slices.Sorted(maps.Keys(reg.Plugins)) {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		entry := reg.Plugins[name]
 		if !entry.Enabled || !entry.MCPApproved {
 			continue
@@ -1243,12 +1256,15 @@ func loadApprovedPluginMCPConfigs(ctx context.Context, paths ConfigPaths) (map[s
 			Manifest:   manifest,
 			MCPServers: mcpServers,
 		}
-		currentDigest, err := pluginMCPApprovalDigest(loaded)
+		currentDigest, err := reviewPluginMCP(ctx, loaded)
+		for _, w := range loaded.Warnings {
+			warnings = append(warnings, "Warning: "+sanitizeTerminalText(w))
+		}
 		if err != nil || entry.MCPDigest == "" || currentDigest != entry.MCPDigest {
 			warnings = append(warnings, fmt.Sprintf("Warning: plugin %s MCP configuration changed since approval; run \"meldra plugins allow-mcp %s\" after reviewing it", name, name))
 			continue
 		}
-		for _, server := range mcpServers {
+		for _, server := range loaded.MCPServers {
 			servers[server.ServerID] = pluginServerToMCPConfig(manifest.Name, server)
 		}
 	}
