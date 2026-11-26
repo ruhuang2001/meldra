@@ -78,6 +78,7 @@ Direct `<name>/SKILL.md` children of these directories, in order:
 2. Workspace `.agents/skills`
 3. `$MELDRA_HOME/skills`, default `~/.meldra/skills`
 4. `$HOME/.agents/skills`
+5. Enabled [Agent Plugins](./plugins.md) in `$MELDRA_HOME/plugins.json` (**Unreleased**), sorted by plugin name
 
 The first valid package wins a duplicate name; later copies are shadowed with a
 warning. The catalog is sorted by name. Missing directories are skipped, and one
@@ -125,11 +126,11 @@ must first be copied in with approval. Skills do not add an operating-system
 sandbox.
 
 Packages outside the workspace are read through the same protected-path checks as
-configuration and task storage. Traversal, symlinks, hard links, binary files, and
-oversized resources are rejected, and a package cannot open configuration or
-credential files by a relative path.
+configuration and task storage. Traversal, hard links, binary files, and oversized
+resources are rejected. Standalone skills cannot use symlinks. A skill supplied
+by an Agent Plugin can link to a shared file inside that plugin's root, but not
+outside the plugin or into protected state.
 
 Compaction can discard guidance loaded earlier, so the instructions require
 rereading a skill when it is still needed. That is a prompt-level rule, not proof
 that a model always complies.
-

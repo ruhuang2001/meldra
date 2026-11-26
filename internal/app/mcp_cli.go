@@ -62,7 +62,7 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 	if options.Mode == ModePlan {
 		return fmt.Errorf("MCP catalog operations are unavailable in local Plan mode")
 	}
-	if len(positional) < 2 || positional[1] == "" || len(positional[1]) > 64 || !mcpNamePart.MatchString(positional[1]) {
+	if len(positional) < 2 || positional[1] == "" || (!isValidPluginMCPServerID(positional[1]) && (len(positional[1]) > 64 || !mcpNamePart.MatchString(positional[1]))) {
 		return fmt.Errorf("MCP catalog command requires a configured server name")
 	}
 	command, name := positional[0], positional[1]
@@ -115,12 +115,24 @@ func runMCPCatalogCLI(ctx context.Context, args []string, input io.Reader, outpu
 	if err != nil {
 		return err
 	}
-	servers, err := loadMCPConfig(paths)
+	servers, warnings, err := loadAllMCPConfigs(ctx, paths)
 	if err != nil {
 		return err
 	}
 	config, found := servers[name]
 	if !found || config.Disabled {
+		if isValidPluginMCPServerID(name) {
+			plugin, _, _ := strings.Cut(strings.TrimPrefix(name, pluginServerIDPrefix), "/")
+			var details []string
+			for _, warning := range warnings {
+				if strings.HasPrefix(warning, "Warning: plugin "+plugin+" ") || strings.HasPrefix(warning, "Warning: plugin "+plugin+":") || strings.HasPrefix(warning, "Warning: plugin MCP servers unavailable:") {
+					details = append(details, warning)
+				}
+			}
+			if len(details) > 0 {
+				return fmt.Errorf("MCP server %s is missing or disabled\n%s", name, strings.Join(details, "\n"))
+			}
+		}
 		return fmt.Errorf("MCP server %s is missing or disabled", name)
 	}
 	if options.Workspace == "" {

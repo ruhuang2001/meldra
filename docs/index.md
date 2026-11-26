@@ -60,6 +60,7 @@ run, and avoid working in directories whose contents you cannot afford to lose.
 | --- | --- |
 | External tools, browsers, and data | [MCP servers](./integrations/mcp.md) |
 | Reusable checklists and workflows | [Skills](./integrations/skills.md) |
+| Portable Agent Plugins packages | [Agent Plugins](./integrations/plugins.md) |
 | Fetching and searching the web | [Web fetch and search](./integrations/web-tools.md) |
 | Every configuration key | [Configuration reference](./reference/configuration.md) |
 

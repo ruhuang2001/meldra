@@ -8,12 +8,12 @@ import (
 	"os"
 )
 
-type mcpOAuthLock struct{}
+type privateLock struct{}
 
-func acquireMCPOAuthLock(context.Context, string) (*mcpOAuthLock, error) {
-	return nil, fmt.Errorf("OAuth cache ownership is supported on Darwin and Linux only")
+func acquirePrivateLock(context.Context, string) (*privateLock, error) {
+	return nil, fmt.Errorf("private file locking is supported on Darwin and Linux only")
 }
-func (*mcpOAuthLock) Close() error { return nil }
+func (*privateLock) Close() error { return nil }
 func mcpOAuthLockPath(paths ConfigPaths, name string) string {
 	return paths.Home + string(os.PathSeparator) + "mcp-oauth-" + name + ".lock"
 }

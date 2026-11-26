@@ -240,6 +240,7 @@
         "pages": [
           "integrations/mcp",
           "integrations/skills",
+          "integrations/plugins",
           "integrations/web-tools"
         ]
       },

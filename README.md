@@ -64,7 +64,7 @@ The documentation site is organized by task:
   [context compaction](docs/guides/context-compaction.md), and
   [custom slash commands](docs/guides/slash-commands.md).
 - **Integrations:** [MCP](docs/integrations/mcp.md), [Skills](docs/integrations/skills.md),
-  and [web tools](docs/integrations/web-tools.md).
+  [Agent Plugins](docs/integrations/plugins.md), and [web tools](docs/integrations/web-tools.md).
 - **Reference:** [configuration](docs/reference/configuration.md),
   [providers](docs/reference/providers.md), and
   [upgrades](docs/reference/upgrading.md).

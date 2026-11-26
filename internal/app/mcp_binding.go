@@ -5,9 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -35,39 +37,31 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 		if err != nil {
 			return "", fmt.Errorf("MCP executable cannot be resolved")
 		}
-		info, err := os.Stat(executable)
-		if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<30 {
-			return "", fmt.Errorf("MCP executable must be a regular file within 1 GiB")
+		bundled := config.fromPlugin && filepath.IsAbs(config.Command)
+		var file *os.File
+		if bundled {
+			if executable != config.Command || config.pluginExecDigest == "" {
+				return "", fmt.Errorf("bundled MCP executable changed since approval")
+			}
+			file, err = openPluginRegularFile(config.pluginRoot, executable, 1<<30)
+		} else {
+			info, statErr := os.Stat(executable)
+			if statErr != nil || !info.Mode().IsRegular() || info.Size() > 1<<30 {
+				return "", fmt.Errorf("MCP executable must be a regular file within 1 GiB")
+			}
+			file, _, err = openCheckedRegularFile(executable, info)
 		}
-		file, _, err := openCheckedRegularFile(executable, info)
 		if err != nil {
 			return "", fmt.Errorf("MCP executable cannot be inspected")
 		}
-		hash := sha256.New()
-		reader := io.LimitReader(file, info.Size()+1)
-		buffer := make([]byte, 128<<10)
-		var total int64
-		var copyErr error
-		for {
-			if copyErr = ctx.Err(); copyErr != nil {
-				break
-			}
-			n, readErr := reader.Read(buffer)
-			total += int64(n)
-			_, _ = hash.Write(buffer[:n])
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				copyErr = readErr
-				break
-			}
-		}
+		executableDigest, err = hashMCPExecutable(ctx, file)
 		closeErr := file.Close()
-		if copyErr != nil || closeErr != nil || total != info.Size() {
+		if err != nil || closeErr != nil {
 			return "", fmt.Errorf("MCP executable cannot be inspected")
 		}
-		executableDigest = hex.EncodeToString(hash.Sum(nil))
+		if bundled && executableDigest != config.pluginExecDigest {
+			return "", fmt.Errorf("bundled MCP executable changed since approval")
+		}
 		environment = command.Env
 	} else {
 		if config.BearerTokenEnv != "" {
@@ -86,15 +80,93 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 	}
 	raw, err := json.Marshal(struct {
 		Config           mcpServerConfig
+		Transport        string            `json:",omitempty"`
+		CWD              string            `json:",omitempty"`
+		Headers          map[string]string `json:",omitempty"`
+		PluginRoot       string            `json:",omitempty"`
+		PluginData       string            `json:",omitempty"`
+		FromPlugin       bool              `json:",omitzero"`
 		Executable       string
 		ExecutableDigest string
 		Environment      []string
 		OAuthGeneration  string
-	}{config, executable, executableDigest, environment, oauthGeneration})
+	}{config, config.transport, config.cwd, config.headers, config.pluginRoot, config.pluginData, config.fromPlugin, executable, executableDigest, environment, oauthGeneration})
 	if err != nil {
 		return "", err
 	}
 	return digest(raw), nil
+}
+
+func hashMCPExecutable(ctx context.Context, file *os.File) (string, error) {
+	return copyAndHashMCPExecutable(ctx, file, io.Discard)
+}
+
+func copyAndHashMCPExecutable(ctx context.Context, file *os.File, dst io.Writer) (string, error) {
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<30 {
+		return "", fmt.Errorf("MCP executable must be a regular file within 1 GiB")
+	}
+	hash := sha256.New()
+	w := io.MultiWriter(dst, hash)
+	reader := io.LimitReader(file, info.Size()+1)
+	buffer := make([]byte, 128<<10)
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		n, err := reader.Read(buffer)
+		total += int64(n)
+		if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
+			return "", writeErr
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	if total != info.Size() {
+		return "", fmt.Errorf("MCP executable changed during inspection")
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func snapshotPluginCommand(ctx context.Context, home string, config mcpServerConfig) (path string, cleanup func() error, err error) {
+	if _, err := exec.LookPath(config.Command); err != nil {
+		return "", nil, err
+	}
+	src, err := openPluginRegularFile(config.pluginRoot, config.Command, 1<<30)
+	if err != nil {
+		return "", nil, err
+	}
+	defer src.Close()
+	if err := checkPluginSnapshotSource(src); err != nil {
+		return "", nil, err
+	}
+	dir, err := os.MkdirTemp(home, ".plugin-exec-*")
+	if err != nil {
+		return "", nil, err
+	}
+	defer func() {
+		if err != nil {
+			os.RemoveAll(dir)
+		}
+	}()
+	path = filepath.Join(dir, filepath.Base(config.Command))
+	dst, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o500)
+	if err != nil {
+		return "", nil, err
+	}
+	sum, err := copyAndHashMCPExecutable(ctx, src, dst)
+	if err := errors.Join(err, dst.Close()); err != nil {
+		return "", nil, err
+	}
+	if sum != config.pluginExecDigest {
+		return "", nil, fmt.Errorf("bundled MCP executable changed since approval")
+	}
+	return path, func() error { return os.RemoveAll(dir) }, nil
 }
 
 func checkApprovalConnections(ctx context.Context, paths ConfigPaths, options ChatOptions, workspace *Workspace) error {
@@ -135,7 +207,7 @@ func checkApprovalConnections(ctx context.Context, paths ConfigPaths, options Ch
 			}
 			return nil
 		}
-		servers, err := loadMCPConfig(paths)
+		servers, _, err := loadAllMCPConfigs(ctx, paths)
 		if err != nil {
 			return err
 		}
