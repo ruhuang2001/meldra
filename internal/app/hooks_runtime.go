@@ -31,7 +31,7 @@ func (a *Agent) hookBasePayload(eventName string) hookPayload {
 		sessionID = a.session.ID
 	}
 	runID := ""
-	if a.execution != nil {
+	if a.execution != nil && a.execution.run.TaskID == sessionID {
 		runID = a.execution.run.ID
 	}
 	return hookPayload{

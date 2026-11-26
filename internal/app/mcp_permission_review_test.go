@@ -176,6 +176,66 @@ func TestMCPInteractiveStillRequiresEditApproval(t *testing.T) {
 	}
 }
 
+func TestMCPApprovalUnderLeaseContention(t *testing.T) {
+	for _, name := range []string{"retry", "invalidate", "decline"} {
+		t.Run(name, func(t *testing.T) {
+			paths := mustConfigPaths(t)
+			t.Setenv(MeldraHomeEnv, paths.Home)
+			w := contextWorkspace(t)
+			writeContextFixture(t, w, "target", "old")
+			c := newPermissionReviewMCP(t, w.root, true, PermissionInteractive)
+			args := map[string]any{"path": "target", "old_str": "old", "new_str": "new"}
+			challenge := c.call("edit_file", args)
+			if challenge["resultType"] != "input_required" {
+				t.Fatalf("challenge: %v", challenge)
+			}
+			redeem := func(approve bool) map[string]any {
+				return c.request("tools/call", map[string]any{"name": "edit_file", "arguments": args, "requestState": challenge["requestState"], "inputResponses": map[string]any{"approval": map[string]any{"action": "accept", "content": map[string]any{"approve": approve}}}})
+			}
+			db := openTaskDB(t, paths)
+			lease, err := db.Acquire(t.Context(), "other-owner", w.root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			if name == "invalidate" {
+				args["new_str"] = "altered"
+			}
+			if got := redeem(name != "decline"); got["isError"] != true {
+				t.Fatalf("redeemed while busy: %v", got)
+			}
+			if err := lease.Close(); err != nil {
+				t.Fatal(err)
+			}
+			args["new_str"] = "new"
+			if got := redeem(true); (got["isError"] == true) != (name != "retry") {
+				t.Fatalf("redemption after lease release: %v", got)
+			}
+			if got := redeem(true); got["isError"] != true {
+				t.Fatalf("reused approval: %v", got)
+			}
+			records, err := db.ListTasks(t.Context(), w.root, 10)
+			if err != nil || len(records) != 1 {
+				t.Fatalf("records=%v err=%v", records, err)
+			}
+			calls, err := db.ToolCalls(t.Context(), records[0].ID)
+			if err != nil || len(calls) != 1 {
+				t.Fatalf("calls=%v err=%v", calls, err)
+			}
+			wantText, wantTask, wantCall := "new", task.Completed, task.ToolSucceeded
+			if name == "invalidate" {
+				wantText, wantTask, wantCall = "old", task.Failed, task.ToolCancelled
+			} else if name == "decline" {
+				wantText, wantCall = "old", task.ToolDeclined
+			}
+			data, err := os.ReadFile(filepath.Join(w.root, "target"))
+			if err != nil || string(data) != wantText || records[0].Status != wantTask || calls[0].Status != wantCall || calls[0].StartedAt.IsZero() != (name != "retry") {
+				t.Fatalf("file=%q task=%s call=%+v err=%v", data, records[0].Status, calls[0], err)
+			}
+		})
+	}
+}
+
 func TestMCPReviewHooksShareOneRecordedCall(t *testing.T) {
 	for _, denyAt := range []string{"PreToolUse", "PermissionRequest", "accept"} {
 		t.Run(denyAt, func(t *testing.T) {

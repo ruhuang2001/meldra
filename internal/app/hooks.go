@@ -429,8 +429,7 @@ func (r *hookRunner) dispatch(ctx context.Context, payload hookPayload, opts hoo
 	}
 
 	var outcome hookOutcome
-	var contexts []string
-	var contextBytes int
+	var contexts string
 	var continueReasons []string
 	emitNotice := func(text string) {
 		text = sanitizeTerminalText(strings.TrimSpace(text))
@@ -501,12 +500,7 @@ func (r *hookRunner) dispatch(ctx context.Context, payload hookPayload, opts hoo
 				emitNotice(fmt.Sprintf("Hook %s: %s", payload.HookEventName, parsed.stderrWarning))
 			}
 			if parsed.additionalContext != "" && spec.allowsContext {
-				remaining := maxHookEventContextBytes - contextBytes
-				if remaining > 0 {
-					piece := truncateUTF8(parsed.additionalContext, min(handler.additionalContextLimit, remaining), "\n[truncated]")
-					contexts = append(contexts, piece)
-					contextBytes += len(piece)
-				}
+				contexts = joinHookContext(contexts, parsed.additionalContext)
 			}
 			if spec.canBlock && parsed.blocked {
 				outcome.blocked = true
@@ -524,9 +518,7 @@ func (r *hookRunner) dispatch(ctx context.Context, payload hookPayload, opts hoo
 			}
 		}
 	}
-	if len(contexts) > 0 {
-		outcome.additionalContext = strings.Join(contexts, "\n\n")
-	}
+	outcome.additionalContext = contexts
 	if spec.canContinue && !outcome.stop && len(continueReasons) > 0 {
 		outcome.continueTurn = true
 		outcome.reason = truncateUTF8(strings.Join(continueReasons, "\n"), maxHookReasonBytes, "...")
@@ -807,6 +799,17 @@ func validateHookOutput(spec hookEventSpec, out hookCommandOutput) error {
 		}
 	}
 	return nil
+}
+
+func joinHookContext(current, next string) string {
+	separator := ""
+	if current != "" {
+		separator = "\n\n"
+	}
+	if remaining := maxHookEventContextBytes - len(current) - len(separator); remaining > 0 && next != "" {
+		return current + separator + truncateUTF8(next, remaining, "\n[truncated]")
+	}
+	return current
 }
 
 func frameHookContext(eventName, content string) string {

@@ -481,36 +481,40 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		metrics.ContextBytes = contextBytes
 	}
 	a.emitMetrics(metrics)
+	refreshSteering := func() (bool, error) {
+		correction, err := a.applySteering(ctx)
+		if err != nil || correction == "" {
+			return false, err
+		}
+		modelInput += correction
+		if a.session != nil {
+			modelInput, err = a.steeringContext(ctx, correction)
+			if err != nil {
+				return false, err
+			}
+		}
+		input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
+		if err != nil {
+			return false, err
+		}
+		if a.customProvider {
+			bounded, contextBytes, _, err := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
+			if err != nil {
+				return false, fmt.Errorf("steering custom-provider context: %w", err)
+			}
+			customBaseURLInput = bounded
+			metrics.ContextBytes = contextBytes
+			a.emitMetrics(metrics)
+		}
+		previousResponseID = ""
+		return true, nil
+	}
 	for {
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
-		if a.hasSteering() {
-			correction, controlErr := a.applySteering(ctx)
-			if controlErr != nil {
-				return controlErr
-			}
-			modelInput += correction
-			if a.session != nil {
-				modelInput, err = a.steeringContext(ctx, correction)
-				if err != nil {
-					return err
-				}
-			}
-			input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
-			if err != nil {
-				return err
-			}
-			if a.customProvider {
-				bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
-				if boundErr != nil {
-					return fmt.Errorf("steering custom-provider context: %w", boundErr)
-				}
-				customBaseURLInput = bounded
-				metrics.ContextBytes = contextBytes
-				a.emitMetrics(metrics)
-			}
-			previousResponseID = ""
+		if _, err := refreshSteering(); err != nil {
+			return err
 		}
 		if a.execution != nil {
 			if err := a.execution.event(ctx, "model.requested", "", nil); err != nil {
@@ -530,31 +534,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				return saveErr
 			}
 			if a.hasSteering() && ctx.Err() == nil {
-				correction, controlErr := a.applySteering(ctx)
-				if controlErr != nil {
-					return controlErr
-				}
-				modelInput += correction
-				if a.session != nil {
-					modelInput, err = a.steeringContext(ctx, correction)
-					if err != nil {
-						return err
-					}
-				}
-				input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
-				if err != nil {
-					return err
-				}
-				if a.customProvider {
-					bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
-					if boundErr != nil {
-						return fmt.Errorf("steering custom-provider context: %w", boundErr)
-					}
-					customBaseURLInput = bounded
-					metrics.ContextBytes = contextBytes
-					a.emitMetrics(metrics)
-				}
-				previousResponseID = ""
 				continue
 			}
 			if ctx.Err() != nil {
@@ -627,10 +606,12 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				a.emit(UIEvent{Kind: UIEventNotice, Text: "No text deltas received; the provider delivered this reply after completion."})
 			}
 		}
-		if requestedCalls == 0 && a.hasSteering() {
-			continue
-		}
 		if requestedCalls == 0 {
+			if applied, err := refreshSteering(); err != nil {
+				return err
+			} else if applied {
+				continue
+			}
 			if a.execution != nil {
 				if err := a.execution.event(ctx, "assistant.completed", "", map[string]string{"text": truncateSessionMessage(assistantText)}); err != nil {
 					return err
@@ -650,7 +631,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				if ctx.Err() != nil {
 					return a.handleInterruption(true)
 				}
-				if a.hasSteering() {
+				if applied, err := refreshSteering(); err != nil {
+					return err
+				} else if applied {
 					continue
 				}
 				if stopOutcome.continueTurn && !stopOutcome.stop {

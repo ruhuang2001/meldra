@@ -18,6 +18,7 @@ type mcpServerCall struct {
 	review      ApprovalRequest
 	fingerprint string
 	expires     time.Time
+	declined    bool
 }
 
 func planMCPServerCall(ctx context.Context, paths ConfigPaths, w *Workspace, name string, raw json.RawMessage) (*mcpServerCall, error) {
@@ -84,7 +85,7 @@ func (c *mcpServerCall) challenge(ctx context.Context, message string) error {
 	return e.closeWithRunEnd(ctx)
 }
 
-func (c *mcpServerCall) reopen(ctx context.Context) error {
+func (c *mcpServerCall) acquire(ctx context.Context) error {
 	e := c.exec
 	var err error
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
@@ -92,13 +93,34 @@ func (c *mcpServerCall) reopen(ctx context.Context) error {
 		return err
 	}
 	e.lease, err = e.db.Acquire(ctx, e.session.ID, e.workspace.root)
-	if err == nil {
-		err = e.db.SetToolReview(ctx, e.lease, c.call, false)
-	}
 	if err != nil {
 		return errors.Join(err, e.close())
 	}
 	return nil
+}
+
+func (c *mcpServerCall) resumeReview(ctx context.Context) error {
+	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	e := c.exec
+	if err := e.db.SetToolReview(ctx, e.lease, c.call, false); err != nil {
+		return errors.Join(err, e.close())
+	}
+	return nil
+}
+
+func (c *mcpServerCall) expire(ctx context.Context) error {
+	c.expires = time.Time{}
+	if err := c.acquire(ctx); err != nil {
+		return err
+	}
+	e := c.exec
+	run, err := e.db.GetRun(ctx, e.run.ID)
+	if err != nil || run.Status.Terminal() {
+		return errors.Join(err, e.close())
+	}
+	return e.finish(ctx, errors.New("MCP approval expired or invalidated"))
 }
 
 func (c *mcpServerCall) decline(ctx context.Context) (tool.Result, error) {

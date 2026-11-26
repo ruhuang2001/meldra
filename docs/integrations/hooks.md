@@ -133,7 +133,10 @@ fields).
   a matching `--approve-detail-hash` or answering an MCP approval request.
 - **Prompt checks see the full submitted text.** A prompt that `UserPromptSubmit`
   rejects is not used as the task goal, replayed on resume, or included in
-  compacted conversation history.
+  compacted conversation history. The same check runs once per live correction
+  (`/steer` or text entered while the TUI is busy). Rejecting a correction
+  leaves the original task in progress. Context from accepted prompt hooks
+  shares a 16,384-byte budget for that turn, including separators.
 - **No silent bypass of unsupported output.** Returning `updatedInput`,
   `updatedToolOutput`, `permissionDecision: "allow"`, `decision: "approve"`, or
   `hookSpecificOutput.decision.behavior: "allow"` is rejected explicitly (failing

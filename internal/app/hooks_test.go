@@ -6,13 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"meldra/internal/provider"
 	taskstore "meldra/internal/store"
@@ -113,6 +116,142 @@ func TestRejectedPromptNeverBecomesRecoveredOrCompactedInput(t *testing.T) {
 	}
 	if len(history.Requests) != 2 || history.Requests[0].Text != goal || history.Requests[1].Text != "continue accepted work" {
 		t.Fatalf("unexpected compactable history: %+v", history.Requests)
+	}
+}
+
+func TestLiveSteeringPromptAdmission(t *testing.T) {
+	const denied, allowed = "DENIED_CORRECTION", "admitted correction"
+	a, paths := recordedAgent(t, nil, nil)
+	dir := t.TempDir()
+	log := filepath.Join(dir, "prompts.jsonl")
+	script := writeHookScript(t, dir, "guard.sh", `input=$(cat); echo "$input" >> "`+log+`"
+case "$input" in *DENIED_CORRECTION*) echo 'not allowed' >&2; exit 2;; *'admitted correction'*) echo STEER_CONTEXT;; *) echo GOAL_CONTEXT;; esac`)
+	a.hooks = mustLoadHooks(t, paths, `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"`+script+`"}]}]}}`)
+	requests := 0
+	a.backend = inferenceFunc(func(ctx context.Context, r provider.Request, _ provider.Options, _ provider.Observer) (provider.Result, error) {
+		requests++
+		input := fmt.Sprintf("%+v", r.Input)
+		if strings.Contains(input, denied) || strings.Contains(r.Instructions, denied) {
+			t.Fatal("denied steering reached inference")
+		}
+		switch requests {
+		case 1:
+			for _, text := range []string{denied, allowed} {
+				if err := a.SubmitControl("steer", text); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return provider.Result{}, ctx.Err()
+		case 2:
+			if !strings.Contains(input, allowed) || !strings.Contains(r.Instructions, "STEER_CONTEXT") || !strings.Contains(r.Instructions, "GOAL_CONTEXT") {
+				t.Fatal("admitted correction or its turn context was lost")
+			}
+		}
+		return hookTestResult("done", "finished"), nil
+	})
+	if err := a.RunTurn(t.Context(), "original goal"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompts []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		var p hookPayload
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			t.Fatal(err)
+		}
+		prompts = append(prompts, p.Prompt)
+	}
+	if !slices.Equal(prompts, []string{"original goal", denied, allowed}) || requests != 2 {
+		t.Fatalf("prompts=%q requests=%d", prompts, requests)
+	}
+	session, err := loadSessionForResume(paths, a.session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.session, a.execution.session, a.execution.resume = session, session, true
+	if err := a.loadPendingControls(); err != nil || a.continueRecovered() {
+		t.Fatalf("unexpected pending controls on resume: %v", err)
+	}
+	if err := a.RunTurn(t.Context(), "resume"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.execution.startRun(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	defer a.execution.finish(t.Context(), nil)
+	history, err := a.compactionHistory(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, request := range history.Requests {
+		texts = append(texts, request.Text)
+	}
+	if !slices.Equal(texts, []string{"original goal", allowed, "resume"}) {
+		t.Fatalf("compactable requests: %q", texts)
+	}
+}
+
+func TestForkSessionHooksDoNotInheritParentRun(t *testing.T) {
+	a, paths := recordedAgent(t, inferenceFunc(func(context.Context, provider.Request, provider.Options, provider.Observer) (provider.Result, error) {
+		return hookTestResult("parent", "finished"), nil
+	}), nil)
+	if err := a.RunTurn(t.Context(), "parent goal"); err != nil {
+		t.Fatal(err)
+	}
+	parent := a.session.ID
+	dir := t.TempDir()
+	log := filepath.Join(dir, "events.jsonl")
+	script := writeHookScript(t, dir, "record.sh", `cat >> "`+log+`"; echo >> "`+log+`"`)
+	group := `[{"hooks":[{"type":"command","command":"` + script + `"}]}]`
+	a.hooks = mustLoadHooks(t, paths, `{"hooks":{"SessionStart":`+group+`,"SessionEnd":`+group+`}}`)
+	if err := a.handleSessionCommand(t.Context(), "fork", ""); err != nil {
+		t.Fatal(err)
+	}
+	a.endSessionHooks("completed")
+	raw, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
+		var p hookPayload
+		if err := json.Unmarshal([]byte(line), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Meldra.RunID != "" || p.SessionID != a.session.ID || p.Meldra.TaskID != p.SessionID || p.SessionID == parent {
+			t.Fatalf("fork hook identity: %+v", p)
+		}
+		events = append(events, p.HookEventName)
+	}
+	if !slices.Equal(events, []string{"SessionStart", "SessionEnd"}) {
+		t.Fatalf("events=%v", events)
+	}
+}
+
+func TestHookContextBudgetIncludesSeparators(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first")
+	second := filepath.Join(dir, "second")
+	if err := os.WriteFile(second, []byte("界"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := mustLoadHooks(t, mustConfigPaths(t), `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"cat","args":["`+first+`"],"additionalContextLimit":16384},{"type":"command","command":"cat","args":["`+second+`"]}]}]}}`)
+	for _, tc := range []struct {
+		free int
+		want string
+	}{{5, "\n\n界"}, {4, "\n\n\n["}, {2, ""}, {1, ""}, {0, ""}} {
+		prefix := strings.Repeat("x", 16384-tc.free)
+		if err := os.WriteFile(first, []byte(prefix), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got := runner.dispatch(t.Context(), hookPayload{HookEventName: hookEventSessionStart, Cwd: dir}, hookDispatchOptions{}).additionalContext
+		if len(got) > 16384 || !utf8.ValidString(got) || got != prefix+tc.want {
+			t.Errorf("%d bytes free: length=%d tail=%q", tc.free, len(got), strings.TrimPrefix(got, prefix))
+		}
 	}
 }
 
