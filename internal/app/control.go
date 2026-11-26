@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -197,13 +198,27 @@ func (a *Agent) hasSteering() bool {
 func (a *Agent) applySteering(ctx context.Context) (string, error) {
 	c := a.initControl()
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	pending := slices.Clone(c.pending)
+	c.mu.Unlock()
 	var text strings.Builder
-	remaining := make([]ControlRequest, 0, len(c.pending))
-	for _, r := range c.pending {
+	for _, r := range pending {
 		if r.Kind != "steer" {
-			remaining = append(remaining, r)
 			continue
+		}
+		outcome, err := a.runUserPromptHook(ctx, r.Text)
+		if err != nil {
+			blocked, ok := errors.AsType[*hookBlockedError](err)
+			if !ok {
+				return "", err
+			}
+			if err := c.settleSteer("control.cancelled", r); err != nil {
+				return "", err
+			}
+			a.emitNotice("Prompt blocked by hook: " + sanitizeTerminalText(blocked.reason))
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		augmented, refs, err := a.prepareControlReferences(ctx, r)
 		if err != nil {
@@ -222,14 +237,24 @@ func (a *Agent) applySteering(ctx context.Context) (string, error) {
 			}
 			augmented = r.Text
 		}
-		if err := c.record("control.applied", r); err != nil {
+		if err := c.settleSteer("control.applied", r); err != nil {
 			return "", err
 		}
+		a.turnHookContext = joinHookContext(a.turnHookContext, outcome.additionalContext)
 		fmt.Fprintf(&text, "\nUser correction:\n%s\n", augmented)
 		a.emit(UIEvent{Kind: UIEventUserMessage, Text: r.Text})
 	}
-	c.pending = remaining
 	return text.String(), nil
+}
+
+func (c *turnControl) settleSteer(event string, r ControlRequest) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.record(event, r); err != nil {
+		return err
+	}
+	c.pending = slices.DeleteFunc(c.pending, func(p ControlRequest) bool { return p.ID == r.ID })
+	return nil
 }
 
 func parseControlText(text string) (kind, value string, ok bool) {
@@ -331,14 +356,14 @@ func (a *Agent) emitNotice(text string) {
 	}
 }
 
-func (a *Agent) finishSelected() error {
+func (a *Agent) settleSelected(event string) error {
 	c := a.initControl()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.selected == nil {
 		return nil
 	}
-	if err := c.record("control.applied", *c.selected); err != nil {
+	if err := c.record(event, *c.selected); err != nil {
 		return err
 	}
 	c.selected = nil

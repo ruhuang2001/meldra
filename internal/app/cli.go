@@ -62,6 +62,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			return runCommandsCommand(ctx, args[1:], stdout)
 		case "skills":
 			return runSkillsCommand(ctx, args[1:], stdout)
+		case "hooks":
+			return runHooksCommand(ctx, args[1:], stdout)
 		case "mcp":
 			if len(args) >= 2 {
 				switch args[1] {
@@ -779,6 +781,10 @@ func newChatRuntime(
 	if err != nil {
 		return nil, err
 	}
+	hooks, err := loadHooks(paths)
+	if err != nil {
+		return nil, err
+	}
 	external := &mcpConnections{}
 	if err := checkApprovalConnections(ctx, paths, options, workspace); err != nil {
 		return nil, err
@@ -811,6 +817,12 @@ func newChatRuntime(
 	}
 	agent.commands = commands
 	agent.skills = skills
+	agent.hooks = hooks
+	if options.Resume != "" {
+		agent.sessionStartSource = "resume"
+	} else {
+		agent.sessionStartSource = "startup"
+	}
 	agent.policy = policy
 	agent.workspace = workspace
 	agent.projectContext = workspace.projectContext
@@ -831,13 +843,24 @@ func newChatRuntime(
 	agent.output = output
 	agent.session = session
 	agent.store = store
-	agent.execution = &taskExecution{paths: paths, workspace: workspace, session: session, resume: options.Resume != "", config: task.Config{Model: settings.Model, Provider: providerIdentity(settings.BaseURL), Workspace: workspace.root}}
+	agent.execution = &taskExecution{
+		paths:      paths,
+		workspace:  workspace,
+		session:    session,
+		resume:     options.Resume != "",
+		config:     task.Config{Model: settings.Model, Provider: providerIdentity(settings.BaseURL), Workspace: workspace.root},
+		hooks:      hooks,
+		hookStatus: func(text string) { agent.emit(UIEvent{Kind: UIEventStatus, Text: text}) },
+		hookNotify: func(text string) { agent.emitNotice(text) },
+	}
 	agent.execution.approveDetailHash = options.ApproveDetailHash
 	if options.Resume != "" && session.taskSnapshot {
 		if err := agent.loadPendingControls(); err != nil {
 			return nil, err
 		}
 	}
+	workspace.hooks = hooks
+	workspace.hookNotify = func(text string) { agent.emitNotice(text) }
 	workspace.approvalRecord = agent.execution.approval
 	workspace.approvalPending = agent.execution.pendingApproval
 	workspace.approvalGrant = func() bool { return agent.execution.approvalMatched }
@@ -859,6 +882,14 @@ func (runtime *chatRuntime) deleteEmptyNewSession() {
 
 func (runtime *chatRuntime) preserveSession() {
 	runtime.newSession = false
+}
+
+func (runtime *chatRuntime) setHookSurface(surface string) {
+	runtime.agent.hookSurface = surface
+	runtime.workspace.hookSurface = surface
+	if runtime.agent.execution != nil {
+		runtime.agent.execution.hookSurface = surface
+	}
 }
 
 func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options ChatOptions) error {
@@ -930,6 +961,7 @@ func runChat(ctx context.Context, stdin io.Reader, stdout io.Writer, options Cha
 	if err != nil {
 		return err
 	}
+	runtime.setHookSurface("line")
 	controller := newLineController(ctx, input, runtime.agent, stdout)
 	defer controller.close()
 	runtime.workspace.mcpInput = controller.humanInput
@@ -1081,6 +1113,7 @@ const usageText = `Usage:
   meldra sessions                List saved sessions.
   meldra commands [--json]       List custom slash commands; accepts --workspace PATH.
   meldra skills [--json]         List skills; accepts --workspace PATH.
+  meldra hooks [--json]          Validate and list configured lifecycle hooks.
   meldra tasks [--json]           List recorded tasks.
   meldra task show ID [--json]    Inspect task runs, tools, processes, and approvals.
   meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.

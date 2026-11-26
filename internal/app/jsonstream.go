@@ -143,6 +143,11 @@ func runJSONChat(ctx context.Context, stdout io.Writer, options ChatOptions) (er
 		var taskID, runID string
 		if runtime != nil {
 			taskID, runID = runtime.session.ID, runtime.agent.execution.run.ID
+			sessionEndReason := reason
+			if status == "waiting_approval" {
+				sessionEndReason = "waiting_approval"
+			}
+			runtime.agent.endSessionHooks(sessionEndReason)
 		}
 		stream.write("session_end", taskID, runID, "", struct {
 			Status     string `json:"status"`
@@ -177,6 +182,7 @@ func runJSONChat(ctx context.Context, stdout io.Writer, options ChatOptions) (er
 	}
 	defer runtime.deleteEmptyNewSession()
 	defer runtime.mcp.close()
+	runtime.setHookSurface("stream-json")
 	runtime.agent.events = stream
 	runtime.agent.completeMessages = true
 	runtime.agent.turnEvents = true
@@ -197,6 +203,7 @@ func runJSONChat(ctx context.Context, stdout io.Writer, options ChatOptions) (er
 			runtime.agent.emitNotice(skillDisplayLine(warning))
 		}
 	}
+	runtime.agent.startSessionHooks(ctx, runtime.agent.sessionStartSource)
 	if err := stream.failure(); err != nil {
 		return err
 	}

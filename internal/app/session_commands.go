@@ -161,6 +161,7 @@ func (a *Agent) handleSessionCommand(ctx context.Context, kind, value string) (e
 			a.workspace.undoHistory = nil
 		}
 		a.emitNotice(fmt.Sprintf("Forked session %s from %s. Workspace files are shared, not copied or rewound.", next.ID, next.ParentSessionID))
+		a.startSessionHooks(ctx, "fork")
 	}
 	data, _ := json.Marshal(map[string]string{"model": a.modelName(), "session_id": next.ID})
 	if _, lookupErr := e.db.GetTask(ctx, sourceID); lookupErr == nil {

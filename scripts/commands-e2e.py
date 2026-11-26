@@ -234,6 +234,8 @@ def session_controls(binary, output):
                 time.sleep(0.2)
                 client.send('Explore alternative')
                 client.wait('BRANCH_READY')
+                if terminal_mode:
+                    client.wait('Ready', after=client.transcript.index(b'BRANCH_READY'))
                 client.finish()
             snapshots = [json.loads(path.read_text()) for path in (case.state / 'tasks/sessions').glob('*.json')]
             assert len(snapshots) == 2, snapshots

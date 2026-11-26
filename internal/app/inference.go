@@ -46,6 +46,7 @@ func (a *Agent) runInference(ctx context.Context, input provider.Input, previous
 			}
 		}
 	}
+	instructions += a.hookContextInstructions()
 	return a.backend.Infer(ctx, provider.Request{Model: a.modelName(), Instructions: instructions, Input: input, PreviousResponseID: previousResponseID, Tools: tools},
 		provider.Options{CustomProvider: a.customProvider, IdleTimeout: a.streamIdleTimeout, MaxResponseBytes: a.maxProviderResponseBytes},
 		provider.Observer{Status: func(text string) { a.emit(UIEvent{Kind: UIEventStatus, Text: text}) }, Text: a.emitAssistantDelta, FilterText: sanitizeTerminalText})

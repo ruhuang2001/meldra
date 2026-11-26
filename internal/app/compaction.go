@@ -168,6 +168,13 @@ func (a *Agent) compactContext(ctx context.Context, trigger, focus, request stri
 	if a.backend == nil {
 		return false, fmt.Errorf("compaction requires an inference provider")
 	}
+	if preCompact := a.runPreCompactHook(ctx, trigger, focus); preCompact.blocked {
+		a.compactionNotice("Compaction blocked by PreCompact hook: " + sanitizeTerminalText(preCompact.reason))
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	a.emit(UIEvent{Kind: UIEventStatus, Text: "Compacting context"})
 	inferCtx, cancel := a.inferenceContext(ctx)
 	result, err := a.backend.Infer(inferCtx, provider.Request{Model: a.modelName(), Instructions: compactionInstructions, Input: provider.UserInput(string(raw)), MaxOutputTokens: 1024},
@@ -239,6 +246,7 @@ func (a *Agent) compactContext(ctx context.Context, trigger, focus, request stri
 		return false, failure
 	}
 	a.compactionNotice(fmt.Sprintf("Compacted turns %d–%d into a summary (%d bytes → %d bytes). Inspect: meldra task show %s", artifact.SourceTurns.FirstSequence, artifact.SourceTurns.LastSequence, artifact.FromBytes, artifact.ToBytes, a.session.ID))
+	a.runPostCompactHook(ctx, trigger, summary, artifact.FromBytes, artifact.ToBytes, keep)
 	return true, nil
 }
 

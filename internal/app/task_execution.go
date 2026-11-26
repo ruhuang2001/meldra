@@ -27,6 +27,7 @@ type taskExecution struct {
 	resumeApproval     *task.Approval
 	resumeCall         *task.ToolCall
 	approvalMatched    bool
+	permissionReviewed bool
 	requestControlID   string
 	requestControlRefs []ReferenceSnapshot
 	requestSequence    int64
@@ -46,6 +47,10 @@ type taskExecution struct {
 	replayScope        string
 	legacyReplayScope  string
 	legacyProvider     string
+	hooks              *hookRunner
+	hookSurface        string
+	hookStatus         func(string)
+	hookNotify         func(string)
 }
 
 type executionContextKey struct{}
@@ -63,29 +68,33 @@ func providerIdentity(base string) string {
 	return parsed.Scheme + "://" + parsed.Host + parsed.EscapedPath()
 }
 
-func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
+func (e *taskExecution) begin(ctx context.Context, goal string) error {
+	if err := validateUserRequest(goal); err != nil {
+		return err
+	}
+	if err := e.startRun(ctx, goal); err != nil {
+		return err
+	}
+	if err := e.recordRequest(ctx, goal); err != nil {
+		return errors.Join(err, e.finish(ctx, err))
+	}
+	return nil
+}
+
+func (e *taskExecution) startRun(ctx context.Context, goal string) (err error) {
 	e.err = nil
+	e.requestSequence = 0
 	e.paused = false
 	e.waitingApproval = false
 	e.approvalMatched = false
 	e.current = nil
 	e.context = ""
-	started := false
 	e.db, err = taskstore.Open(taskDirectory(e.paths))
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if err != nil {
-			if started {
-				saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				status := task.RunInterrupted
-				if ctx.Err() != nil {
-					status = task.RunCancelled
-				}
-				err = errors.Join(err, e.db.FinishRun(saveCtx, e.lease, e.run.ID, status, truncateSessionMessage(err.Error())))
-				cancel()
-			}
 			err = errors.Join(err, e.close())
 		}
 	}()
@@ -94,6 +103,10 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		return err
 	}
 	record := task.Task{ID: e.session.ID, SessionID: e.session.ID, Goal: truncateSessionMessage(goal), Workspace: e.workspace.root}
+	if goal == "" {
+		record.Goal = "Awaiting an admitted request"
+		record.GoalPending = true
+	}
 	existing, lookupErr := e.db.GetTask(ctx, e.session.ID)
 	if lookupErr == nil {
 		record = existing
@@ -112,6 +125,7 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		for _, message := range e.session.Messages {
 			if message.Role == "user" && strings.TrimSpace(message.Content) != "" {
 				record.Goal = message.Content
+				record.GoalPending = false
 				break
 			}
 		}
@@ -159,10 +173,20 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 	}
 	e.resume = false
 	e.session.taskSnapshot = true
-	started = true
-	if !utf8.ValidString(goal) {
-		return e.recordingError(ctx, fmt.Errorf("user request must contain valid UTF-8"))
+	return nil
+}
+
+func validateUserRequest(goal string) error {
+	if len(goal) > taskstore.MaxArtifactBytes {
+		return task.ErrArtifactLimit
 	}
+	if !utf8.ValidString(goal) {
+		return errors.New("user request must contain valid UTF-8")
+	}
+	return nil
+}
+
+func (e *taskExecution) recordRequest(ctx context.Context, goal string) error {
 	request := recordedUserRequest{Request: truncateSessionMessage(goal), ControlID: e.requestControlID, References: e.requestControlRefs}
 	if len(goal) > maxSessionMessageBytes {
 		ref, artifactErr := e.db.PutArtifact(ctx, e.lease, e.session.ID, "user-request.txt", []byte(goal))
@@ -171,10 +195,15 @@ func (e *taskExecution) begin(ctx context.Context, goal string) (err error) {
 		}
 		request.RequestArtifact = &ref
 	}
-	if err = e.event(ctx, "turn.started", "", request); err != nil {
-		return err
+	data, err := json.Marshal(request)
+	if err != nil {
+		return e.recordingError(ctx, err)
 	}
-	event, err := e.db.LatestRequestEvent(ctx, record.ID)
+	err = e.db.AdmitRequest(ctx, e.lease, task.Event{TaskID: e.session.ID, RunID: e.run.ID, Kind: "turn.started", Data: data}, request.Request)
+	if err != nil {
+		return e.recordingError(ctx, err)
+	}
+	event, err := e.db.LatestRequestEvent(ctx, e.session.ID)
 	if err != nil {
 		return err
 	}
@@ -193,15 +222,24 @@ func (e *taskExecution) close() error {
 	}
 	return err
 }
+func (e *taskExecution) closeWithRunEnd(ctx context.Context) error {
+	snapshot, snapErr := e.readRunEndSnapshot(ctx)
+	closeErr := e.close()
+	if snapErr == nil && closeErr == nil && snapshot != nil {
+		e.emitRunEndHook(*snapshot)
+	}
+	return closeErr
+}
+
 func (e *taskExecution) finish(ctx context.Context, runErr error) error {
 	if e.db == nil {
 		return nil
 	}
-	if e.waitingApproval && e.err == nil && onlyError(runErr, errApprovalRequired) {
-		return e.close()
-	}
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if e.waitingApproval && e.err == nil && onlyError(runErr, errApprovalRequired) {
+		return e.closeWithRunEnd(saveCtx)
+	}
 	status := task.RunSucceeded
 	reason := "completed"
 	if ctx.Err() != nil {
@@ -219,8 +257,10 @@ func (e *taskExecution) finish(ctx context.Context, runErr error) error {
 		status = task.RunInterrupted
 		reason = e.err.Error()
 	}
-	err := e.db.FinishRun(saveCtx, e.lease, e.run.ID, status, truncateSessionMessage(reason))
-	return errors.Join(err, e.close())
+	if err := e.db.FinishRun(saveCtx, e.lease, e.run.ID, status, truncateSessionMessage(reason)); err != nil {
+		return errors.Join(err, e.close())
+	}
+	return e.closeWithRunEnd(saveCtx)
 }
 func (e *taskExecution) event(ctx context.Context, kind, status string, data any) error {
 	if e == nil || e.db == nil {
@@ -313,16 +353,56 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 			return result, nil
 		}
 	}
-	call, err := e.db.PlanTool(ctx, e.lease, task.ToolCall{TaskID: e.session.ID, RunID: e.run.ID, ProviderCallID: callID, ReplayScope: e.replayScope, Name: name, Arguments: input, ParameterHash: digest(input), Effect: toolEffect(name)})
+	call, err := e.planCall(ctx, callID, name, input)
 	if err != nil {
-		return tool.Result{}, e.recordingError(ctx, err)
+		return tool.Result{}, err
 	}
+	preHook := e.runPreToolHook(ctx, call)
+	return e.invokePlanned(ctx, registry, call, preHook)
+}
+
+func (e *taskExecution) planCall(ctx context.Context, callID, name string, input json.RawMessage) (task.ToolCall, error) {
+	call, err := e.db.PlanTool(ctx, e.lease, task.ToolCall{TaskID: e.session.ID, RunID: e.run.ID, ProviderCallID: callID, ReplayScope: e.replayScope, Name: name, Arguments: input, Effect: toolEffect(name)})
+	if err != nil {
+		return call, e.recordingError(ctx, err)
+	}
+	return call, nil
+}
+
+func (e *taskExecution) declinePlanned(ctx context.Context, call task.ToolCall, output string) (tool.Result, error) {
+	result := tool.Result{Status: tool.Declined, Output: output}
+	if err := e.db.FinishTool(ctx, e.lease, call.ID, task.Result{Status: task.ToolDeclined, Output: capText(output)}); err != nil {
+		return result, e.recordingError(ctx, err)
+	}
+	return result, nil
+}
+
+func (e *taskExecution) invokePlanned(ctx context.Context, registry *tool.Registry, call task.ToolCall, preHook hookOutcome) (tool.Result, error) {
 	e.current = &call
 	defer func() { e.current = nil }()
-	if err = e.db.StartTool(ctx, e.lease, call.ID); err != nil {
+	if ctx.Err() != nil {
+		cancelCtx, cancelSave := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelSave()
+		if finishErr := e.db.FinishTool(cancelCtx, e.lease, call.ID, task.Result{Status: task.ToolCancelled, Output: "Cancelled before execution.", Error: truncateSessionMessage(ctx.Err().Error())}); finishErr != nil {
+			e.err = &persistenceError{finishErr}
+			return tool.Result{Status: tool.Cancelled, Error: ctx.Err().Error()}, e.err
+		}
+		return tool.Result{Status: tool.Cancelled, Error: ctx.Err().Error()}, ctx.Err()
+	}
+	if preHook.blocked {
+		if err := e.event(ctx, "hook.pre_tool_denied", string(task.ToolDeclined), map[string]string{"name": call.Name, "reason": truncateSessionMessage(preHook.reason)}); err != nil {
+			return tool.Result{}, err
+		}
+		declinedOutput := "Declined by PreToolUse hook: " + preHook.reason
+		saveCtx, saveCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer saveCancel()
+		return e.declinePlanned(saveCtx, call, declinedOutput)
+	}
+	if err := e.db.StartTool(ctx, e.lease, call.ID); err != nil {
 		return tool.Result{}, e.recordingError(ctx, err)
 	}
-	result, callErr := registry.Invoke(context.WithValue(ctx, executionContextKey{}, e), name, input)
+	name := call.Name
+	result, callErr := registry.Invoke(context.WithValue(ctx, executionContextKey{}, e), name, call.Arguments)
 
 	if e.err != nil {
 		return result, e.err
@@ -366,7 +446,7 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	}
 	resultCtx, resultCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer resultCancel()
-	if err = e.db.FinishTool(resultCtx, e.lease, call.ID, stored); err != nil {
+	if err := e.db.FinishTool(resultCtx, e.lease, call.ID, stored); err != nil {
 		e.err = &persistenceError{err}
 		return result, e.err
 	}
@@ -381,6 +461,15 @@ func (e *taskExecution) invoke(ctx context.Context, registry *tool.Registry, cal
 	if stored.Status == task.ToolUnknown {
 		e.err = fmt.Errorf("tool %s has an unknown outcome; inspect task %s before resuming", call.ID, e.session.ID)
 		return result, e.err
+	}
+	if !e.waitingApproval && ctx.Err() == nil && (stored.Status == task.ToolSucceeded || stored.Status == task.ToolFailed) {
+		postHook := e.runPostToolHook(ctx, call, stored)
+		appendHookToolContext(&result, hookEventPreToolUse, preHook.additionalContext)
+		postEvent := hookEventPostToolUse
+		if stored.Status == task.ToolFailed {
+			postEvent = hookEventPostToolUseFailure
+		}
+		appendHookToolContext(&result, postEvent, postHook.additionalContext)
 	}
 	return result, callErr
 }
@@ -424,6 +513,10 @@ func (e *taskExecution) pendingApproval(ctx context.Context, request ApprovalReq
 		e.approvalMatched = true
 		preview.Source = "detail-hash"
 		preview.ApprovedDetailHash = e.approveDetailHash
+	} else if request.Source == "human" && !e.permissionReviewed {
+		if blocked, reason := e.workspace.checkPermissionHook(ctx, request); blocked {
+			return &hookBlockedError{event: hookEventPermissionRequest, reason: reason}
+		}
 	}
 	detail, _ := json.Marshal(preview)
 	approval, err := e.db.RecordApproval(ctx, e.lease, task.Approval{TaskID: e.session.ID, RunID: e.run.ID, ToolCallID: e.current.ID, Operation: string(request.Kind), ParameterHash: e.current.ParameterHash, WorkspaceState: request.WorkspaceState, Detail: detail, Decision: task.Pending, Scope: "single_call"})

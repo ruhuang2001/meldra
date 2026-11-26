@@ -65,6 +65,7 @@ var (
 type Task struct {
 	ID                   string    `json:"id"`
 	Goal                 string    `json:"goal"`
+	GoalPending          bool      `json:"goal_pending,omitzero"`
 	Workspace            string    `json:"workspace"`
 	SessionID            string    `json:"session_id"`
 	Status               Status    `json:"status"`

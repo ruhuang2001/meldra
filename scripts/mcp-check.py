@@ -175,8 +175,10 @@ def main():
             summary['omitted_checks'].append('web E2E race fixture')
         if Path('scripts/compaction-e2e.py').exists():
             scripts += ('compaction-e2e',)
+        if Path('scripts/hooks-e2e.py').exists():
+            scripts += ('hooks-e2e',)
         priority = ('compaction-e2e', 'capability-e2e', 'stream-review-e2e',
-                    'images-e2e', 'commands-e2e', 'web-e2e',
+                    'images-e2e', 'commands-e2e', 'hooks-e2e', 'web-e2e',
                     'mcp-oauth-regression-e2e', 'mcp-e2e')
         scripts = sorted(scripts, key=lambda script: priority.index(script)
                          if script in priority else len(priority))

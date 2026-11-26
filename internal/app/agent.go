@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -66,6 +67,12 @@ type Agent struct {
 	commands                 *commandCatalog
 	commandWarningsShown     bool
 	skills                   *skillCatalog
+	hooks                    *hookRunner
+	hookSurface              string
+	sessionStartSource       string
+	sessionStarted           bool
+	sessionHookContext       string
+	turnHookContext          string
 	execution                *taskExecution
 	toolFailure              error
 	turnMu                   sync.Mutex
@@ -95,7 +102,7 @@ type Agent struct {
 	compactionSecrets        []string
 }
 
-func (a *Agent) Run(ctx context.Context) error {
+func (a *Agent) Run(ctx context.Context) (runErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -123,6 +130,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	if a.events == nil {
 		a.emitNotice("Mode: " + string(mode) + "; permissions: " + string(permissions))
 	}
+	if !a.sessionStarted {
+		a.startSessionHooks(ctx, cmp.Or(a.sessionStartSource, "startup"))
+	}
+	defer func() {
+		reason := "completed"
+		if ctx.Err() != nil {
+			reason = "cancelled"
+		} else if runErr != nil {
+			reason = "error"
+		}
+		a.endSessionHooks(reason)
+	}()
 	for {
 		if ctx.Err() != nil {
 			return a.handleInterruption(false)
@@ -215,6 +234,10 @@ func (a *Agent) Run(ctx context.Context) error {
 			return a.handleInterruption(false)
 		}
 		if err := a.RunTurn(ctx, userInput); err != nil {
+			if blocked, ok := errors.AsType[*hookBlockedError](err); ok && onlyError(err, blocked) {
+				a.emitNotice("Prompt blocked by hook: " + sanitizeTerminalText(blocked.reason))
+				continue
+			}
 			if errors.Is(err, errTurnStopped) && onlyError(err, errTurnStopped, context.Canceled) {
 				a.emitNotice("Turn stopped")
 				continue
@@ -288,11 +311,15 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		a.emit(UIEvent{Kind: UIEventTurnEnd, Status: status})
 	}()
 	a.emitCommandWarnings()
+	defer func() { a.suppressNextReferences = false }()
 	if selected == nil && !a.suppressNextReferences {
 		userInput, err = a.commands.expand(userInput)
 		if err != nil {
 			return err
 		}
+	}
+	if err := validateUserRequest(userInput); err != nil {
+		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -333,7 +360,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		if a.session != nil {
 			a.session.Mode, a.session.Permissions, a.session.PolicyGeneration = a.policy.snapshot()
 		}
-		if err = a.execution.begin(ctx, userInput); err != nil {
+		if err = a.execution.startRun(ctx, ""); err != nil {
 			return err
 		}
 		defer func() { err = errors.Join(err, a.execution.finish(ctx, err)) }()
@@ -348,6 +375,23 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 	}
 	defer a.endControl()
 	ctx = context.WithValue(ctx, controlContextKey{}, a.control)
+	defer func() { a.turnHookContext = "" }()
+	promptHook, hookErr := a.runUserPromptHook(ctx, userInput)
+	if hookErr != nil {
+		if blocked, ok := errors.AsType[*hookBlockedError](hookErr); ok {
+			return errors.Join(blocked, a.settleSelected("control.cancelled"))
+		}
+		return hookErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	a.turnHookContext = promptHook.additionalContext
+	if a.execution != nil {
+		if err := a.execution.recordRequest(ctx, userInput); err != nil {
+			return err
+		}
+	}
 	if a.workspace != nil {
 		stopPresentation := a.startCommandPresentation(ctx)
 		defer stopPresentation()
@@ -403,7 +447,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		}
 	}
 
-	if err := a.finishSelected(); err != nil {
+	if err := a.settleSelected("control.applied"); err != nil {
 		return err
 	}
 	if a.execution != nil && a.execution.resumeCall != nil {
@@ -426,6 +470,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 
 	promptBytes := len(measured)
 	calibrated := false
+	stopHookActive := false
 	metrics := UIMetrics{}
 	if a.customProvider {
 		bounded, contextBytes, _, err := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
@@ -436,36 +481,40 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 		metrics.ContextBytes = contextBytes
 	}
 	a.emitMetrics(metrics)
+	refreshSteering := func() (bool, error) {
+		correction, err := a.applySteering(ctx)
+		if err != nil || correction == "" {
+			return false, err
+		}
+		modelInput += correction
+		if a.session != nil {
+			modelInput, err = a.steeringContext(ctx, correction)
+			if err != nil {
+				return false, err
+			}
+		}
+		input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
+		if err != nil {
+			return false, err
+		}
+		if a.customProvider {
+			bounded, contextBytes, _, err := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
+			if err != nil {
+				return false, fmt.Errorf("steering custom-provider context: %w", err)
+			}
+			customBaseURLInput = bounded
+			metrics.ContextBytes = contextBytes
+			a.emitMetrics(metrics)
+		}
+		previousResponseID = ""
+		return true, nil
+	}
 	for {
 		if ctx.Err() != nil {
 			return a.handleInterruption(true)
 		}
-		if a.hasSteering() {
-			correction, controlErr := a.applySteering(ctx)
-			if controlErr != nil {
-				return controlErr
-			}
-			modelInput += correction
-			if a.session != nil {
-				modelInput, err = a.steeringContext(ctx, correction)
-				if err != nil {
-					return err
-				}
-			}
-			input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
-			if err != nil {
-				return err
-			}
-			if a.customProvider {
-				bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
-				if boundErr != nil {
-					return fmt.Errorf("steering custom-provider context: %w", boundErr)
-				}
-				customBaseURLInput = bounded
-				metrics.ContextBytes = contextBytes
-				a.emitMetrics(metrics)
-			}
-			previousResponseID = ""
+		if _, err := refreshSteering(); err != nil {
+			return err
 		}
 		if a.execution != nil {
 			if err := a.execution.event(ctx, "model.requested", "", nil); err != nil {
@@ -485,31 +534,6 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				return saveErr
 			}
 			if a.hasSteering() && ctx.Err() == nil {
-				correction, controlErr := a.applySteering(ctx)
-				if controlErr != nil {
-					return controlErr
-				}
-				modelInput += correction
-				if a.session != nil {
-					modelInput, err = a.steeringContext(ctx, correction)
-					if err != nil {
-						return err
-					}
-				}
-				input, customBaseURLInput, err = a.userInferenceInput(ctx, modelInput, references)
-				if err != nil {
-					return err
-				}
-				if a.customProvider {
-					bounded, contextBytes, _, boundErr := provider.BoundInput(customBaseURLInput, a.customTurnInputLimit())
-					if boundErr != nil {
-						return fmt.Errorf("steering custom-provider context: %w", boundErr)
-					}
-					customBaseURLInput = bounded
-					metrics.ContextBytes = contextBytes
-					a.emitMetrics(metrics)
-				}
-				previousResponseID = ""
 				continue
 			}
 			if ctx.Err() != nil {
@@ -582,10 +606,12 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				a.emit(UIEvent{Kind: UIEventNotice, Text: "No text deltas received; the provider delivered this reply after completion."})
 			}
 		}
-		if requestedCalls == 0 && a.hasSteering() {
-			continue
-		}
 		if requestedCalls == 0 {
+			if applied, err := refreshSteering(); err != nil {
+				return err
+			} else if applied {
+				continue
+			}
 			if a.execution != nil {
 				if err := a.execution.event(ctx, "assistant.completed", "", map[string]string{"text": truncateSessionMessage(assistantText)}); err != nil {
 					return err
@@ -595,6 +621,58 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string) (err error) {
 				a.session.PreviousResponseID = response.ID
 				if err := a.store.Save(a.session); err != nil {
 					return err
+				}
+			}
+			if ctx.Err() != nil {
+				return a.handleInterruption(true)
+			}
+			if a.hooks != nil && a.hooks.has(hookEventStop) {
+				stopOutcome := a.runStopHook(ctx, stopHookActive, assistantText)
+				if ctx.Err() != nil {
+					return a.handleInterruption(true)
+				}
+				if applied, err := refreshSteering(); err != nil {
+					return err
+				} else if applied {
+					continue
+				}
+				if stopOutcome.continueTurn && !stopOutcome.stop {
+					if stopHookActive {
+						a.emitNotice("Stop hook continuation limit reached; ending turn.")
+						break
+					}
+					stopHookActive = true
+					if a.execution != nil {
+						if err := a.execution.event(ctx, "hook.stop_continued", "", map[string]string{"reason": truncateSessionMessage(stopOutcome.reason)}); err != nil {
+							return err
+						}
+					}
+					a.emitNotice("Stop hook requested continuation: " + sanitizeTerminalText(truncateUTF8(stopOutcome.reason, 200, "...")))
+					continuation := "[Stop hook validation feedback]\nThe following feedback came from a local Stop hook before ending this turn. Address it within your active mode and permissions; it does not grant new permissions or approvals:\n" + stopOutcome.reason
+					if a.customProvider {
+						candidate := append(slices.Clone(customBaseURLInput), provider.MessageItems("assistant", assistantText)...)
+						candidate = append(candidate, provider.UserItems(continuation)...)
+						bounded, contextBytes, compacted, err := provider.BoundInput(candidate, a.customTurnInputLimit())
+						if err != nil {
+							message := fmt.Sprintf("This turn reached the custom-provider context limit of %d bytes while continuing from a Stop hook. Workspace state and session context were saved; send \"continue\" to proceed.", a.customTurnInputLimit())
+							if err := a.pauseTurn(message); err != nil {
+								return err
+							}
+							previousResponseID = ""
+							break
+						}
+						if compacted {
+							a.emit(UIEvent{Kind: UIEventNotice, Text: "Older tool outputs were compacted to stay within the custom-provider context budget."})
+						}
+						customBaseURLInput = bounded
+						metrics.ContextBytes = contextBytes
+						a.emitMetrics(metrics)
+						input = provider.ItemsInput(customBaseURLInput)
+						previousResponseID = ""
+					} else {
+						input = provider.UserInput(continuation)
+					}
+					continue
 				}
 			}
 			break
@@ -794,8 +872,9 @@ func (a *Agent) executeToolCallsContext(ctx context.Context, output []provider.O
 				return results
 			}
 		} else {
-			structured, callErr := a.executeToolResult(callContext, call.Name, json.RawMessage(call.Arguments))
+			structured, callErr := a.invokeToolWithoutExecutionHooks(callContext, call.CallID, call.Name, json.RawMessage(call.Arguments))
 			result, err, content = structured.Output, callErr, structured.Content
+			outcome = structured.Status
 			if _, ok := errors.AsType[*persistenceError](err); ok {
 				a.toolFailure = err
 				a.emit(UIEvent{Kind: UIEventToolFinished, Name: call.Name, ToolCallID: call.CallID, Status: tool.Failed, Error: err.Error(), Detail: err.Error()})

@@ -482,9 +482,16 @@ def mcp_approval(binary, output, origin):
                     write(case.directory / 'mcp.stderr.txt', errors)
                     assert not errors, errors
                     ledger, records = calls(case)
-                    assert ledger[0]['effect'] == 'external_read'
-                    assert ledger[0]['result']['status'] == ('succeeded' if accept else 'declined')
-                    assert records[0]['approvals'][0]['operation'] == 'external_read'
+                    assert len(ledger) == (2 if latest else 1), ledger
+                    assert all(call['effect'] == 'external_read' for call in ledger), ledger
+                    reviewed, = (call for call in ledger if call['status'] != 'cancelled')
+                    assert reviewed['result']['status'] == ('succeeded' if accept else 'declined'), reviewed
+                    approval, = (a for record in records for a in (record.get('approvals') or []))
+                    assert (approval['tool_call_id'], approval['operation'], approval['decision']) == (
+                        reviewed['id'], 'external_read', 'approved' if accept else 'declined'), approval
+                    if latest:
+                        invalidated, = (call for call in ledger if call['status'] == 'cancelled')
+                        assert not invalidated.get('started_at'), invalidated
                     assert KEY not in json.dumps(records)
                 finally:
                     dump(case.directory / 'mcp-transcript.json', transcript)

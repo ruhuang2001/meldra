@@ -63,6 +63,9 @@ type Workspace struct {
 	approve            ApprovalFunc
 	approvalRecord     func(context.Context, ApprovalRequest, bool) error
 	approvalPending    func(context.Context, ApprovalRequest) error
+	hooks              *hookRunner
+	hookSurface        string
+	hookNotify         func(string)
 	approvalGrant      func() bool
 	present            ApprovalPresenter
 	ctx                context.Context

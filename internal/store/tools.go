@@ -78,6 +78,30 @@ func saveTool(ctx context.Context, tx *sql.Tx, c task.ToolCall) error {
 	return err
 }
 
+func (s *Store) SetToolReview(ctx context.Context, l *Lease, call task.ToolCall, waiting bool) error {
+	return s.owned(ctx, l, call.TaskID, func(tx *sql.Tx) error {
+		c, err := getRecord[task.ToolCall](ctx, tx, "SELECT record FROM tool_calls WHERE id=?", call.ID)
+		if err != nil {
+			return err
+		}
+		r, err := activeRun(ctx, tx, c.RunID, call.TaskID)
+		if err != nil {
+			return err
+		}
+		if c.Status != task.ToolPlanned || c.RunID != call.RunID || (r.Status == task.RunRunning) != waiting {
+			return task.ErrTransition
+		}
+		if err := s.setWaiting(ctx, tx, r.ID, waiting); err != nil {
+			return err
+		}
+		kind := "tool.review_resumed"
+		if waiting {
+			kind = "tool.review_requested"
+		}
+		return s.appendEvent(ctx, tx, task.Event{TaskID: c.TaskID, RunID: r.ID, ToolCallID: c.ID, Kind: kind})
+	})
+}
+
 func (s *Store) StartTool(ctx context.Context, l *Lease, id string) error {
 	if l == nil {
 		return task.ErrLease
