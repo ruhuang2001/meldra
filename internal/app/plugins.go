@@ -55,19 +55,20 @@ type pluginManifest struct {
 }
 
 type pluginMCPServer struct {
-	Name       string            `json:"name"`
-	ServerID   string            `json:"server_id"`
-	Type       string            `json:"type"`
-	RawCommand string            `json:"raw_command,omitempty"`
-	Command    string            `json:"command,omitempty"`
-	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	CWD        string            `json:"cwd,omitempty"`
-	URL        string            `json:"url,omitempty"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	PluginRoot string            `json:"plugin_root,omitempty"`
-	PluginData string            `json:"plugin_data,omitempty"`
-	execDigest string
+	Name           string            `json:"name"`
+	ServerID       string            `json:"server_id"`
+	Type           string            `json:"type"`
+	RawCommand     string            `json:"raw_command,omitempty"`
+	Command        string            `json:"command,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	CWD            string            `json:"cwd,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	PluginRoot     string            `json:"plugin_root,omitempty"`
+	PluginData     string            `json:"plugin_data,omitempty"`
+	execDigest     string
+	approvalDigest string
 }
 
 type loadedPlugin struct {
@@ -82,10 +83,11 @@ type loadedPlugin struct {
 }
 
 type pluginRegistryEntry struct {
-	Path        string `json:"path"`
-	Enabled     bool   `json:"enabled"`
-	MCPApproved bool   `json:"mcp_approved"`
-	MCPDigest   string `json:"mcp_digest,omitempty"`
+	Path            string   `json:"path"`
+	Enabled         bool     `json:"enabled"`
+	MCPApproved     bool     `json:"mcp_approved"`
+	MCPDigest       string   `json:"mcp_digest,omitempty"`
+	ApprovedServers []string `json:"approved_servers,omitempty"`
 }
 
 type pluginRegistry struct {
@@ -1009,12 +1011,8 @@ func pluginExecutableDigest(ctx context.Context, canonicalRoot, path string) (st
 	return hashMCPExecutable(ctx, file)
 }
 
-func reviewPluginMCP(ctx context.Context, loaded *loadedPlugin) (string, error) {
-	type serverDigestEntry struct {
-		Server     pluginMCPServer `json:"server"`
-		ExecDigest string          `json:"exec_digest,omitempty"`
-	}
-	entries := make([]serverDigestEntry, 0, len(loaded.MCPServers))
+func reviewPluginMCP(ctx context.Context, loaded *loadedPlugin) ([]string, error) {
+	var approvals []string
 	accepted := loaded.MCPServers[:0]
 	for _, server := range loaded.MCPServers {
 		if server.Type == "stdio" && strings.HasPrefix(server.RawCommand, "./") {
@@ -1022,28 +1020,28 @@ func reviewPluginMCP(ctx context.Context, loaded *loadedPlugin) (string, error) 
 			server.execDigest, err = pluginExecutableDigest(ctx, loaded.Root, server.Command)
 			if err != nil {
 				if ctx.Err() != nil {
-					return "", ctx.Err()
+					return nil, ctx.Err()
 				}
 				loaded.Warnings = append(loaded.Warnings, fmt.Sprintf("server %q skipped: cannot inspect bundled executable: %s", server.Name, err))
 				continue
 			}
 		}
+		raw, err := json.Marshal(struct {
+			Server           pluginMCPServer
+			ExecutableDigest string
+		}{server, server.execDigest})
+		if err != nil {
+			return nil, err
+		}
+		server.approvalDigest = digest(raw)
 		accepted = append(accepted, server)
-		entries = append(entries, serverDigestEntry{server, server.execDigest})
+		approvals = append(approvals, server.approvalDigest)
 	}
 	loaded.MCPServers = accepted
-	if len(entries) == 0 {
-		return "", fmt.Errorf("plugin %q has no approvable MCP servers: %s", loaded.Manifest.Name, strings.Join(loaded.Warnings, "; "))
+	if len(approvals) == 0 {
+		return nil, fmt.Errorf("plugin %q has no approvable MCP servers: %s", loaded.Manifest.Name, strings.Join(loaded.Warnings, "; "))
 	}
-	raw, err := json.Marshal(struct {
-		Root    string              `json:"root"`
-		Name    string              `json:"name"`
-		Servers []serverDigestEntry `json:"servers"`
-	}{loaded.Root, loaded.Manifest.Name, entries})
-	if err != nil {
-		return "", err
-	}
-	return digest(raw), nil
+	return approvals, nil
 }
 
 func pluginServerToMCPConfig(pluginName string, server pluginMCPServer) mcpServerConfig {
@@ -1053,6 +1051,7 @@ func pluginServerToMCPConfig(pluginName string, server pluginMCPServer) mcpServe
 		pluginRoot:       server.PluginRoot,
 		pluginData:       server.PluginData,
 		pluginExecDigest: server.execDigest,
+		pluginApproval:   server.approvalDigest,
 		fromPlugin:       true,
 	}
 	if server.Type == "stdio" {
@@ -1135,7 +1134,7 @@ func localPluginCatalog(ctx context.Context, paths ConfigPaths) (map[string][]pl
 		return nil, nil, err
 	}
 	if len(children) > maxPluginDiscoveryEntries {
-		return nil, nil, fmt.Errorf("%s exceeds discovery limit of %d entries; use an explicit plugin path", dir, maxPluginDiscoveryEntries)
+		return catalog, append(warnings, fmt.Sprintf("%s exceeds discovery limit of %d entries; showing registered plugins only; use explicit paths for other packages", dir, maxPluginDiscoveryEntries)), nil
 	}
 	slices.SortFunc(children, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
 	for _, child := range children {
@@ -1328,10 +1327,10 @@ func loadApprovedPluginMCPConfigs(ctx context.Context, paths ConfigPaths) (map[s
 		}
 		mcpServers, mcpDisabled, mcpWarnings := discoverPluginMCP(canonicalRoot, dataDir, manifest.Name)
 		for _, w := range manifestWarnings {
-			warnings = append(warnings, "Warning: "+sanitizeTerminalText(w))
+			warnings = append(warnings, "Warning: plugin "+name+": "+sanitizeTerminalText(w))
 		}
 		for _, w := range mcpWarnings {
-			warnings = append(warnings, "Warning: "+sanitizeTerminalText(w))
+			warnings = append(warnings, "Warning: plugin "+name+": "+sanitizeTerminalText(w))
 		}
 		if mcpDisabled || len(mcpServers) == 0 {
 			continue
@@ -1342,16 +1341,23 @@ func loadApprovedPluginMCPConfigs(ctx context.Context, paths ConfigPaths) (map[s
 			Manifest:   manifest,
 			MCPServers: mcpServers,
 		}
-		currentDigest, err := reviewPluginMCP(ctx, loaded)
+		_, err = reviewPluginMCP(ctx, loaded)
 		for _, w := range loaded.Warnings {
-			warnings = append(warnings, "Warning: "+sanitizeTerminalText(w))
+			warnings = append(warnings, "Warning: plugin "+name+": "+sanitizeTerminalText(w))
 		}
-		if err != nil || entry.MCPDigest == "" || currentDigest != entry.MCPDigest {
-			warnings = append(warnings, fmt.Sprintf("Warning: plugin %s MCP configuration changed since approval; run \"meldra plugins allow-mcp %s\" after reviewing it", name, name))
-			continue
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
 		}
+		stale := err != nil
 		for _, server := range loaded.MCPServers {
+			if !slices.Contains(entry.ApprovedServers, server.approvalDigest) {
+				stale = true
+				continue
+			}
 			servers[server.ServerID] = pluginServerToMCPConfig(manifest.Name, server)
+		}
+		if stale {
+			warnings = append(warnings, fmt.Sprintf("Warning: plugin %s MCP configuration changed since approval; run \"meldra plugins allow-mcp %s\" after reviewing it", name, name))
 		}
 	}
 	return servers, warnings, nil

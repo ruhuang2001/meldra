@@ -55,14 +55,21 @@ meldra plugins allow-mcp my-plugin
 meldra plugins revoke-mcp my-plugin
 ```
 
-Disable a plugin while preserving its persistent `PLUGIN_DATA` directory across
-updates, or remove both the registration and `PLUGIN_DATA`. A package still in
-the discovery directory returns to the available state, without MCP approval:
+Disable a plugin and keep its persistent `PLUGIN_DATA` directory for later:
 
 ```sh wrap
 meldra plugins disable my-plugin
+```
+
+Alternatively, to remove the registration and its data:
+
+```sh wrap
 meldra plugins disable my-plugin --purge-data
 ```
+
+Disabling removes startup approval first. You can retry `--purge-data` after a
+cleanup failure, or use it later on preserved data, without re-enabling the
+plugin. A package still in the discovery directory remains available.
 
 ## Conformance and package boundaries
 
@@ -112,18 +119,27 @@ Keep plugin directories separate from Meldra's private state: do not register
 Plugin MCP servers appear as `plugin/<plugin-name>/<server-name>` in approvals,
 task records, and `meldra mcp` catalog commands. The last segment is URL-escaped;
 copy the server ID from `meldra plugins inspect` for names containing slashes,
-spaces, or non-ASCII characters. `meldra plugins allow-mcp`
-records a digest of the effective server configuration and the contents of
-bundled `./...` commands. Changing either blocks the next startup until you
-inspect and re-approve the plugin. Whitespace-only edits do not invalidate
-approval. A bundled command that cannot be read is skipped, not approved.
+spaces, or non-ASCII characters. Quote that ID in shell commands, e.g.
+`meldra mcp resources 'plugin/my-plugin/reports&metrics'`.
+
+`meldra plugins allow-mcp` approves the currently valid servers individually.
+Changing a server's effective configuration or bundled `./...` command requires
+fresh approval for that server, not for unchanged siblings. New servers are not
+automatically approved. Whitespace-only edits do not invalidate approval. If you
+used a prerelease with whole-plugin digests, review the plugin and run `allow-mcp`
+once to establish its per-server approvals.
+
+Meldra starts a bundled command from a private copy verified against its approved
+digest. Use `PLUGIN_ROOT` to locate package files, not the running executable's
+directory. A bundled command that cannot be read is skipped, not approved.
 
 This is startup approval, not a sandbox or a signature over the package.
 Commands run as your OS user. Scripts passed as arguments to an interpreter,
 dependencies, and programs resolved through `PATH` are not pinned by this
 approval. Enable MCP only for packages you trust; keep their files and runtime
-dependencies out of directories writable by untrusted users. Revocation
-prevents future connections; close an existing session to stop its servers.
+dependencies out of directories writable by untrusted users. Meldra checks approval
+before admitting each connection or startup retry. Revocation does not cancel
+an already admitted connection; close the session to stop its servers.
 
 Plan mode, external MCP call approvals, connection-binding checks, and task
 records apply to plugin MCP servers identically to servers configured in

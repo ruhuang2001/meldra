@@ -53,6 +53,7 @@ type mcpServerConfig struct {
 	pluginRoot         string
 	pluginData         string
 	pluginExecDigest   string
+	pluginApproval     string
 	fromPlugin         bool
 }
 
@@ -325,7 +326,13 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 		}
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "meldra", Version: version}, mcpClientOptions(workspace, name, config))
-	session, err := client.Connect(startupCtx, transport, nil)
+	connect := func(t mcp.Transport, options *mcp.ClientSessionOptions) (*mcp.ClientSession, error) {
+		if config.fromPlugin {
+			t = approvedPluginTransport{t, paths, config}
+		}
+		return client.Connect(startupCtx, t, options)
+	}
+	session, err := connect(transport, nil)
 	if err != nil && config.Command != "" && startupCtx.Err() == nil && errors.Is(err, mcp.ErrConnectionClosed) {
 		if config.fromPlugin {
 			if current, err := mcpConnectionBinding(startupCtx, paths, name, config, workspace); err != nil || current != binding {
@@ -333,7 +340,7 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 			}
 		}
 		legacy := mcpCommandTransport{command: newMCPCommand(config, workspace)}
-		session, err = client.Connect(startupCtx, legacy, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
+		session, err = connect(legacy, &mcp.ClientSessionOptions{ProtocolVersion: "2025-11-25"})
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("connection or initialization failed (%s)", mcpErrorKind(err))
@@ -499,6 +506,9 @@ func mcpErrorKind(err error) string {
 	if errors.Is(err, errMCPAuth) {
 		return errMCPAuth.Error()
 	}
+	if errors.Is(err, errPluginMCPRevoked) {
+		return errPluginMCPRevoked.Error()
+	}
 	if errors.Is(err, mcp.ErrConnectionClosed) {
 		return "connection closed"
 	}
@@ -506,6 +516,7 @@ func mcpErrorKind(err error) string {
 }
 
 var errMCPAuth = errors.New("authentication rejected; configure bearer_token_env or OAuth login")
+var errPluginMCPRevoked = errors.New("plugin MCP startup is no longer approved")
 
 type mcpHTTPTransport struct {
 	token     string
@@ -515,6 +526,42 @@ type mcpHTTPTransport struct {
 }
 
 type mcpCommandTransport struct{ command *exec.Cmd }
+
+type approvedPluginTransport struct {
+	mcp.Transport
+	paths  ConfigPaths
+	config mcpServerConfig
+}
+
+func (t approvedPluginTransport) Connect(ctx context.Context) (mcp.Connection, error) {
+	var cleanup func() error
+	if cmd, ok := t.Transport.(mcpCommandTransport); ok && filepath.IsAbs(t.config.Command) {
+		path, remove, err := snapshotPluginCommand(ctx, t.paths.Home, t.config)
+		if err != nil {
+			return nil, err
+		}
+		cmd.command.Path = path
+		cleanup = remove
+	}
+	reg, err := loadPluginRegistry(t.paths)
+	entry := reg.Plugins[t.config.pluginName]
+	if err == nil && (!entry.Enabled || !entry.MCPApproved || entry.Path != t.config.pluginRoot || t.config.pluginApproval == "" || !slices.Contains(entry.ApprovedServers, t.config.pluginApproval)) {
+		err = errPluginMCPRevoked
+	}
+	var conn mcp.Connection
+	if err == nil {
+		conn, err = t.Transport.Connect(ctx)
+	}
+	if cleanup == nil {
+		return conn, err
+	}
+	if err != nil {
+		return nil, errors.Join(err, cleanup())
+	}
+	return &mcpCommandConnection{Connection: conn, close: sync.OnceValue(func() error {
+		return errors.Join(conn.Close(), cleanup())
+	})}, nil
+}
 
 type mcpSSETransport struct {
 	endpoint string

@@ -69,6 +69,7 @@ for line in sys.stdin:
             marker = marker_path
         payload = {
             "cwd": os.getcwd(),
+            "executable_file": os.path.abspath(__file__),
             "argv": sys.argv[1:],
             "plugin_root": os.environ.get("PLUGIN_ROOT", ""),
             "plugin_data": data_dir,
@@ -626,6 +627,7 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	}
 	var probe struct {
 		CWD            string   `json:"cwd"`
+		ExecutableFile string   `json:"executable_file"`
 		Argv           []string `json:"argv"`
 		PluginRoot     string   `json:"plugin_root"`
 		PluginData     string   `json:"plugin_data"`
@@ -643,6 +645,9 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	}
 	if probe.PluginRoot != inspected.Root || probe.PluginData != inspected.DataDir {
 		t.Fatalf("plugin env mismatch: %+v", probe)
+	}
+	if !within(paths.Home, probe.ExecutableFile) || within(probe.PluginData, probe.ExecutableFile) {
+		t.Fatalf("expected bundled server to run from a private snapshot: %q", probe.ExecutableFile)
 	}
 	if probe.Custom != "from-plugin" || probe.ConfigPath != inspected.Root+"/config.json" || probe.LiteralUnknown != "${HOME}" {
 		t.Fatalf("env expansion mismatch: %+v", probe)
@@ -663,6 +668,13 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	}
 	id := pluginMCPServerID("stdio.fixture", "local")
 	writeFileMode(t, scriptPath, testPluginStdioServerScript+"\n# modified\n", 0o700)
+	if data, err := os.ReadFile(probe.ExecutableFile); err != nil || string(data) != testPluginStdioServerScript {
+		t.Fatalf("running executable did not retain approved contents: %v", err)
+	}
+	approvedConn.close()
+	if _, err := os.Stat(probe.ExecutableFile); !os.IsNotExist(err) {
+		t.Fatalf("closed session left private executable: %v", err)
+	}
 	if session, _, err := connectMCPServer(t.Context(), paths, id, cached[id], w); err == nil {
 		session.Close()
 		t.Fatal("a cached config started a changed executable")
@@ -825,9 +837,9 @@ func TestPluginRemoteTransportsStreamableHTTPAndSSEAndHeaderOriginGuards(t *test
 }
 
 func TestPluginHTTPTransportStripsHeadersOnCrossOriginRequest(t *testing.T) {
-	var seenHeader string
+	seenHeader := make(chan string, 1)
 	otherOrigin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenHeader = r.Header.Get("X-Plugin-Header")
+		seenHeader <- r.Header.Get("X-Plugin-Header")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer otherOrigin.Close()
@@ -850,8 +862,8 @@ func TestPluginHTTPTransportStripsHeadersOnCrossOriginRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if seenHeader != "" {
-		t.Fatalf("cross-origin request leaked configured header: %q", seenHeader)
+	if header := <-seenHeader; header != "" {
+		t.Fatalf("cross-origin request leaked configured header: %q", header)
 	}
 }
 
@@ -1019,10 +1031,23 @@ func TestPluginDiscoveryNameConflictsAndScope(t *testing.T) {
 	if err := runPluginsCommand(t.Context(), []string{"inspect", "cwd-plugin"}, &out); err != nil || !strings.Contains(out.String(), "Plugin: cwd-plugin") {
 		t.Fatalf("registered external plugin not found by name: %s, %v", out.String(), err)
 	}
+	for i := range maxPluginDiscoveryEntries {
+		writeFileMode(t, filepath.Join(base, fmt.Sprint(i)), "", 0o600)
+	}
+	out.Reset()
+	if err := runPluginsCommand(t.Context(), []string{"list", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil || len(list.Plugins) != 2 || !list.Plugins[0].Enabled || !list.Plugins[1].Enabled || !strings.Contains(strings.Join(list.Warnings, " "), "discovery limit") {
+		t.Fatalf("over-limit discovery hid registrations: %s, %v", out.String(), err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"inspect", "cwd-plugin"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPluginCatalogCLIAndToolNames(t *testing.T) {
-	testPluginPaths(t)
+	paths := testPluginPaths(t)
 	server := mcp.NewServer(&mcp.Implementation{Name: "catalog-fixture", Version: "1"}, nil)
 	server.AddResource(&mcp.Resource{URI: "plugin://doc/1", Name: "doc1", MIMEType: "text/plain"}, func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: "plugin://doc/1", Text: "hello resource"}}}, nil
@@ -1032,10 +1057,12 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 
 	dir := t.TempDir()
 	writeFileMode(t, filepath.Join(dir, "plugin.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"acme.docs"}`, 0o600)
-	writeFileMode(t, filepath.Join(dir, "mcp.json"), fmt.Sprintf(`{
+	config := fmt.Sprintf(`{
 		"$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
-		"mcpServers": {"docs.api": {"type": "streamable-http", "url": %q}}
-	}`, endpoint.URL), 0o600)
+		"mcpServers": {"docs.api": {"type": "streamable-http", "url": %q}, "sibling": {"type": "stdio", "command": "./sibling"}}
+	}`, endpoint.URL)
+	writeFileMode(t, filepath.Join(dir, "sibling"), "fixture", 0o700)
+	writeFileMode(t, filepath.Join(dir, "mcp.json"), config, 0o600)
 
 	var out bytes.Buffer
 	enableAndApproveTestPlugin(t, dir, "acme.docs")
@@ -1049,6 +1076,15 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 	if mcpToolName(serverID, "search__all") == mcpToolName(serverID+"__search", "all") {
 		t.Fatal("distinct server/tool pairs have the same wire name")
 	}
+	if err := os.Remove(filepath.Join(dir, "sibling")); err != nil {
+		t.Fatal(err)
+	}
+	config = strings.Replace(config, `"sibling":`, `"new": {"type":"streamable-http","url":"https://example.test/new"}, "sibling":`, 1)
+	writeFileMode(t, filepath.Join(dir, "mcp.json"), config, 0o600)
+	err := runMCPCatalogCLI(t.Context(), []string{"resources", pluginMCPServerID("acme.docs", "new")}, strings.NewReader(""), &out)
+	if err == nil || !strings.Contains(err.Error(), "allow-mcp acme.docs") || out.Len() != 0 {
+		t.Fatalf("unapproved server not diagnosed: %v, stdout=%s", err, &out)
+	}
 
 	out.Reset()
 	ws := t.TempDir()
@@ -1057,6 +1093,18 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "plugin://doc/1") {
 		t.Fatalf("catalog CLI output = %q", out.String())
+	}
+	cached, _, err := loadAllMCPConfigs(t.Context(), paths)
+	if err != nil || len(cached) != 1 || cached[serverID].URL != endpoint.URL {
+		t.Fatalf("expected only the unchanged approved sibling: %v, %v", cached, err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"revoke-mcp", "acme.docs"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	w, _ := testWorkspace(t, ws, "", true)
+	if session, _, err := connectMCPServer(t.Context(), paths, serverID, cached[serverID], w); err == nil {
+		session.Close()
+		t.Fatal("started a cached server after revocation")
 	}
 }
 
@@ -1104,8 +1152,34 @@ func TestPluginDataPurgeRemainsInPrivateStorage(t *testing.T) {
 	if text, err := os.ReadFile(marker); err != nil || string(text) != "keep" {
 		t.Fatalf("unrelated file changed: %q %v", text, err)
 	}
-	if err := runPluginsCommand(t.Context(), []string{"disable", "demo"}, io.Discard); err != nil {
-		t.Fatalf("registration was lost after failed purge: %v", err)
+	reg, err := loadPluginRegistry(paths)
+	if err != nil || len(reg.Plugins) != 0 {
+		t.Fatalf("registration survived failed purge: %+v %v", reg, err)
+	}
+	if err := os.Remove(filepath.Join(paths.Home, pluginDataDirName)); err != nil {
+		t.Fatal(err)
+	}
+	marker = filepath.Join(paths.Home, pluginDataDirName, "demo", "state")
+	writeFileMode(t, marker, "saved", 0o600)
+	if err := runPluginsCommand(t.Context(), []string{"disable", "demo", "--purge-data"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("purge retry did not remove data: %v", err)
+	}
+}
+
+func TestPluginPurgePreservesDataOnRegistrySaveFailure(t *testing.T) {
+	paths := testPluginPaths(t)
+	registry := `{"plugins":{"demo":{"path":"/demo","enabled":true},"other":{"path":"/other","enabled":true,"mcp_digest":"` + strings.Repeat("&", maxPluginJSONBytes/4) + `"}}}`
+	writeFileMode(t, filepath.Join(paths.Home, pluginsRegistryFile), registry, 0o600)
+	marker := filepath.Join(paths.Home, pluginDataDirName, "demo", "state")
+	writeFileMode(t, marker, "keep", 0o600)
+	if err := runPluginsCommand(t.Context(), []string{"disable", "demo", "--purge-data"}, io.Discard); err == nil || !strings.Contains(err.Error(), "exceeds 1 MiB") {
+		t.Fatalf("expected registry save failure: %v", err)
+	}
+	if got, err := os.ReadFile(marker); err != nil || string(got) != "keep" {
+		t.Fatalf("data lost on save failure: %q, %v", got, err)
 	}
 }
 
@@ -1333,16 +1407,14 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 
 	serverID := pluginMCPServerID("plan-guard", "local")
 	mcpTool := mcpToolName(serverID, "env_probe")
-	sawSkillBody := false
-	sawMCPToolInPlan := false
-	sawMCPOutputInBuild := false
+	var sawSkillBody, sawMCPToolInPlan, sawMCPOutputInBuild atomic.Bool
 
 	providerServer := startScriptedResponsesServer(t, func(step int, body map[string]any) (string, []map[string]any) {
 		rawBody, _ := json.Marshal(body)
 		switch step {
 		case 0:
 			if strings.Contains(string(rawBody), mcpTool) {
-				sawMCPToolInPlan = true
+				sawMCPToolInPlan.Store(true)
 			}
 			return "resp_plan_1", []map[string]any{{
 				"type":      "function_call",
@@ -1352,7 +1424,7 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 			}}
 		case 1:
 			if strings.Contains(string(rawBody), "PLAN_CHECKLIST_SECRET_BODY") {
-				sawSkillBody = true
+				sawSkillBody.Store(true)
 			}
 			return "resp_plan_2", []map[string]any{{
 				"type":    "message",
@@ -1370,7 +1442,7 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 			}}
 		default:
 			if strings.Contains(string(rawBody), "probe-marker.txt") {
-				sawMCPOutputInBuild = true
+				sawMCPOutputInBuild.Store(true)
 			}
 			return "resp_build_2", []map[string]any{{
 				"type":    "message",
@@ -1387,10 +1459,10 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 	if err := runCLIContext(t.Context(), []string{"--mode", "plan", "--workspace", wsDir, "--output-format", "stream-json", "--prompt", "inspect checklist"}, strings.NewReader(""), &out); err != nil {
 		t.Fatalf("plan turn failed: %v\noutput=%s", err, out.String())
 	}
-	if !sawSkillBody {
+	if !sawSkillBody.Load() {
 		t.Fatal("Plan mode did not return plugin skill body")
 	}
-	if sawMCPToolInPlan {
+	if sawMCPToolInPlan.Load() {
 		t.Fatal("Plan mode unexpectedly advertised plugin MCP tool")
 	}
 	if _, err := os.Stat(startedMarker); !os.IsNotExist(err) {
@@ -1404,7 +1476,7 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 	if _, err := os.Stat(startedMarker); err != nil {
 		t.Fatalf("Build mode did not start plugin MCP subprocess: %v", err)
 	}
-	if !sawMCPOutputInBuild {
+	if !sawMCPOutputInBuild.Load() {
 		t.Fatal("Build mode did not receive plugin MCP tool output")
 	}
 }
@@ -1565,8 +1637,7 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 
 	serverID := pluginMCPServerID("combo", "local")
 	mcpTool := mcpToolName(serverID, "env_probe")
-	sawRef := false
-	sawProbe := false
+	var sawRef, sawProbe atomic.Bool
 
 	providerServer := startScriptedResponsesServer(t, func(step int, body map[string]any) (string, []map[string]any) {
 		rawBody, _ := json.Marshal(body)
@@ -1580,7 +1651,7 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 			}}
 		case 1:
 			if strings.Contains(string(rawBody), "STEP_ONE_VERIFY_PLUGIN") {
-				sawRef = true
+				sawRef.Store(true)
 			}
 			return "resp_combo_2", []map[string]any{{
 				"type":      "function_call",
@@ -1590,7 +1661,7 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 			}}
 		default:
 			if strings.Contains(string(rawBody), "combo-ok") {
-				sawProbe = true
+				sawProbe.Store(true)
 			}
 			return "resp_combo_3", []map[string]any{{
 				"type":    "message",
@@ -1607,8 +1678,8 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 	if err := runCLIContext(t.Context(), []string{"--mode", "build", "--workspace", wsDir, "--prompt", "use $ops and probe"}, strings.NewReader("y\n"), &out); err != nil {
 		t.Fatalf("combo chat failed: %v\noutput=%s", err, out.String())
 	}
-	if !sawRef || !sawProbe {
-		t.Fatalf("expected both skill ref and MCP probe output: sawRef=%v sawProbe=%v", sawRef, sawProbe)
+	if !sawRef.Load() || !sawProbe.Load() {
+		t.Fatalf("expected both skill ref and MCP probe output: sawRef=%v sawProbe=%v", sawRef.Load(), sawProbe.Load())
 	}
 	if !strings.Contains(out.String(), serverID) || !strings.Contains(out.String(), "combo complete") {
 		t.Fatalf("chat output missing approval server ID or final answer:\n%s", out.String())

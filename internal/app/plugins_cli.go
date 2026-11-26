@@ -76,9 +76,21 @@ func pluginMCPStatus(ctx context.Context, entry pluginRegistryEntry, loaded *loa
 	if !entry.MCPApproved {
 		return "not-approved"
 	}
-	currentDigest, err := reviewPluginMCP(ctx, loaded)
-	if err != nil || entry.MCPDigest == "" || currentDigest != entry.MCPDigest {
+	current, err := reviewPluginMCP(ctx, loaded)
+	if err != nil {
 		return "approval-stale"
+	}
+	approved := 0
+	for _, id := range current {
+		if slices.Contains(entry.ApprovedServers, id) {
+			approved++
+		}
+	}
+	if approved == 0 {
+		return "approval-stale"
+	}
+	if approved < len(current) {
+		return "partially-approved"
 	}
 	return "approved"
 }
@@ -437,7 +449,12 @@ func runPluginsDisable(ctx context.Context, args []string, output io.Writer) err
 		return err
 	}
 	defer unlock()
-	if _, exists := reg.Plugins[name]; !exists {
+	if _, exists := reg.Plugins[name]; exists {
+		delete(reg.Plugins, name)
+		if err := savePluginRegistry(paths, reg); err != nil {
+			return err
+		}
+	} else if !purgeData {
 		return fmt.Errorf("plugin %q is not configured", name)
 	}
 	if purgeData {
@@ -457,12 +474,6 @@ func runPluginsDisable(ctx context.Context, args []string, output io.Writer) err
 		} else if !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
-	}
-	delete(reg.Plugins, name)
-	if err := savePluginRegistry(paths, reg); err != nil {
-		return err
-	}
-	if purgeData {
 		_, err = fmt.Fprintf(output, "Disabled plugin %s and removed its data directory.\n", name)
 		return err
 	}
@@ -518,12 +529,13 @@ func runPluginsAllowMCP(ctx context.Context, args []string, output io.Writer) er
 	if loaded.MCPDisabled || len(loaded.MCPServers) == 0 {
 		return fmt.Errorf("plugin %q has no valid MCP servers to approve", name)
 	}
-	mcpDigest, err := reviewPluginMCP(ctx, loaded)
+	approved, err := reviewPluginMCP(ctx, loaded)
 	if err != nil {
 		return err
 	}
 	entry.MCPApproved = true
-	entry.MCPDigest = mcpDigest
+	entry.ApprovedServers = approved
+	entry.MCPDigest = ""
 	reg.Plugins[name] = entry
 	if err := savePluginRegistry(paths, reg); err != nil {
 		return err
@@ -593,6 +605,7 @@ func runPluginsRevokeMCP(ctx context.Context, args []string, output io.Writer) e
 	}
 	entry.MCPApproved = false
 	entry.MCPDigest = ""
+	entry.ApprovedServers = nil
 	reg.Plugins[name] = entry
 	if err := savePluginRegistry(paths, reg); err != nil {
 		return err
