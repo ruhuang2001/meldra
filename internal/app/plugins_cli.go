@@ -16,11 +16,14 @@ import (
 
 const pluginsUsageText = `Usage:
   meldra plugins [list] [--json]
-  meldra plugins inspect <path> [--json]
-  meldra plugins enable <path> [--allow-mcp] [--json]
+  meldra plugins inspect <name|path> [--json]
+  meldra plugins enable <name|path> [--json]
   meldra plugins disable <name> [--purge-data]
   meldra plugins allow-mcp <name> [--json]
   meldra plugins revoke-mcp <name>
+
+List discovers packages in $MELDRA_HOME/plugins/. Enable by manifest name,
+or use an explicit path such as ./my-plugin. Enable never grants MCP approval.
 `
 
 type pluginListItem struct {
@@ -126,39 +129,52 @@ func runPluginsList(ctx context.Context, args []string, output io.Writer) error 
 	if err != nil {
 		return err
 	}
-	reg, err := loadPluginRegistry(paths)
+	catalog, warnings, err := localPluginCatalog(ctx, paths)
 	if err != nil {
 		return err
 	}
-	result := pluginListOutput{Plugins: []pluginListItem{}, Warnings: []string{}}
-	for _, name := range slices.Sorted(maps.Keys(reg.Plugins)) {
-		entry := reg.Plugins[name]
-		item := pluginListItem{
-			Name:    name,
-			Path:    entry.Path,
-			Enabled: entry.Enabled,
+	result := pluginListOutput{Plugins: []pluginListItem{}, Warnings: warnings}
+	for _, name := range slices.Sorted(maps.Keys(catalog)) {
+		entries := catalog[name]
+		if len(entries) > 1 {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("multiple packages named %q; use an explicit path", name))
 		}
-		loaded, loadErr := loadPluginFromDir(ctx, paths, entry.Path, func(candidate string) error { return checkPluginRootAllowed(paths, candidate) })
-		if loadErr != nil {
-			item.Error = loadErr.Error()
-			item.MCPStatus = "unavailable"
+		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			item := pluginListItem{
+				Name:    name,
+				Path:    entry.Path,
+				Enabled: entry.Enabled,
+			}
+			loaded, loadErr := loadPluginAtRoot(ctx, paths, entry.Path, func(candidate string) error { return checkPluginRootAllowed(paths, candidate) })
+			if loadErr != nil {
+				item.Error = loadErr.Error()
+				item.MCPStatus = "unavailable"
+				result.Plugins = append(result.Plugins, item)
+				continue
+			}
+			item.Version = loaded.Manifest.Version
+			item.Description = loaded.Manifest.Description
+			item.SkillsCount = len(loaded.Skills)
+			item.MCPStatus = pluginMCPStatus(ctx, entry, loaded)
+			item.MCPCount = len(loaded.MCPServers)
+			item.Extensions = loaded.Manifest.Extensions
+			item.Warnings = loaded.Warnings
+			if loaded.Manifest.Name != name {
+				item.Warnings = append(item.Warnings, fmt.Sprintf("manifest name %q differs from registered name %q", loaded.Manifest.Name, name))
+			}
 			result.Plugins = append(result.Plugins, item)
-			continue
 		}
-		item.Version = loaded.Manifest.Version
-		item.Description = loaded.Manifest.Description
-		item.SkillsCount = len(loaded.Skills)
-		item.MCPStatus = pluginMCPStatus(ctx, entry, loaded)
-		item.MCPCount = len(loaded.MCPServers)
-		item.Extensions = loaded.Manifest.Extensions
-		item.Warnings = loaded.Warnings
-		if loaded.Manifest.Name != name {
-			item.Warnings = append(item.Warnings, fmt.Sprintf("manifest name %q differs from registered name %q", loaded.Manifest.Name, name))
-		}
-		result.Plugins = append(result.Plugins, item)
 	}
 	if *asJSON {
 		return json.NewEncoder(output).Encode(result)
+	}
+	for _, warning := range result.Warnings {
+		if _, err := fmt.Fprintf(output, "Warning: %s\n", skillDisplayLine(warning)); err != nil {
+			return err
+		}
 	}
 	if len(result.Plugins) == 0 {
 		_, err := fmt.Fprintln(output, "No plugins configured.")
@@ -168,6 +184,11 @@ func runPluginsList(ctx context.Context, args []string, output io.Writer) error 
 		header := item.Name
 		if item.Version != "" {
 			header += " " + skillDisplayLine(item.Version)
+		}
+		if item.Enabled {
+			header += " [enabled]"
+		} else {
+			header += " [available]"
 		}
 		if item.Error != "" {
 			if _, err := fmt.Fprintf(output, "%s\terror: %s\n  %s\n", header, skillDisplayLine(item.Error), skillDisplayLine(item.Path)); err != nil {
@@ -193,7 +214,7 @@ func runPluginsInspect(ctx context.Context, args []string, output io.Writer) err
 	for _, arg := range args {
 		switch arg {
 		case "--help", "-h":
-			_, err := fmt.Fprintln(output, "Usage: meldra plugins inspect <path> [--json]")
+			_, err := fmt.Fprintln(output, "Usage: meldra plugins inspect <name|path> [--json]")
 			return err
 		case "--json":
 			asJSON = true
@@ -202,19 +223,19 @@ func runPluginsInspect(ctx context.Context, args []string, output io.Writer) err
 				return fmt.Errorf("unknown plugins inspect flag %q", arg)
 			}
 			if path != "" {
-				return fmt.Errorf("plugins inspect accepts one plugin directory path")
+				return fmt.Errorf("plugins inspect accepts one plugin name or path")
 			}
 			path = arg
 		}
 	}
 	if path == "" {
-		return fmt.Errorf("plugins inspect requires a plugin directory path")
+		return fmt.Errorf("plugins inspect requires a plugin name or path")
 	}
 	paths, err := ResolveConfigPaths()
 	if err != nil {
 		return err
 	}
-	loaded, err := loadPluginFromDir(ctx, paths, path, nil)
+	loaded, err := loadPluginArgument(ctx, paths, path, nil)
 	if err != nil {
 		return err
 	}
@@ -301,15 +322,12 @@ func writePluginMCPServerSummary(output io.Writer, server pluginMCPServer) error
 
 func runPluginsEnable(ctx context.Context, args []string, output io.Writer) error {
 	var path string
-	allowMCP := false
 	asJSON := false
 	for _, arg := range args {
 		switch arg {
 		case "--help", "-h":
-			_, err := fmt.Fprintln(output, "Usage: meldra plugins enable <path> [--allow-mcp] [--json]")
+			_, err := fmt.Fprintln(output, "Usage: meldra plugins enable <name|path> [--json]")
 			return err
-		case "--allow-mcp":
-			allowMCP = true
 		case "--json":
 			asJSON = true
 		default:
@@ -317,19 +335,19 @@ func runPluginsEnable(ctx context.Context, args []string, output io.Writer) erro
 				return fmt.Errorf("unknown plugins enable flag %q", arg)
 			}
 			if path != "" {
-				return fmt.Errorf("plugins enable accepts one plugin directory path")
+				return fmt.Errorf("plugins enable accepts one plugin name or path")
 			}
 			path = arg
 		}
 	}
 	if path == "" {
-		return fmt.Errorf("plugins enable requires a plugin directory path")
+		return fmt.Errorf("plugins enable requires a plugin name or path")
 	}
 	paths, err := ResolveConfigPaths()
 	if err != nil {
 		return err
 	}
-	loaded, err := loadPluginFromDir(ctx, paths, path, func(candidate string) error {
+	loaded, err := loadPluginArgument(ctx, paths, path, func(candidate string) error {
 		return checkPluginRootAllowed(paths, candidate)
 	})
 	if err != nil {
@@ -346,20 +364,11 @@ func runPluginsEnable(ctx context.Context, args []string, output io.Writer) erro
 	if _, exists := reg.Plugins[loaded.Manifest.Name]; !exists && len(reg.Plugins) >= maxRegisteredPlugins {
 		return fmt.Errorf("plugins configuration exceeds %d plugins", maxRegisteredPlugins)
 	}
-	entry := pluginRegistryEntry{
-		Path:    loaded.Root,
-		Enabled: true,
+	entry := reg.Plugins[loaded.Manifest.Name]
+	if !entry.Enabled {
+		entry = pluginRegistryEntry{Path: loaded.Root, Enabled: true}
 	}
 	status := pluginMCPStatus(ctx, entry, loaded)
-	if allowMCP && !loaded.MCPDisabled && len(loaded.MCPServers) > 0 {
-		mcpDigest, err := reviewPluginMCP(ctx, loaded)
-		if err != nil {
-			return err
-		}
-		entry.MCPApproved = true
-		entry.MCPDigest = mcpDigest
-		status = "approved"
-	}
 	reg.Plugins[loaded.Manifest.Name] = entry
 	if err := savePluginRegistry(paths, reg); err != nil {
 		return err
@@ -497,7 +506,7 @@ func runPluginsAllowMCP(ctx context.Context, args []string, output io.Writer) er
 	if !exists || !entry.Enabled {
 		return fmt.Errorf("plugin %q is not enabled", name)
 	}
-	loaded, err := loadPluginFromDir(ctx, paths, entry.Path, func(candidate string) error {
+	loaded, err := loadPluginAtRoot(ctx, paths, entry.Path, func(candidate string) error {
 		return checkPluginRootAllowed(paths, candidate)
 	})
 	if err != nil {

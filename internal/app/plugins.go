@@ -28,6 +28,7 @@ const (
 	pluginDataDirName          = "plugin-data"
 	maxPluginJSONBytes         = 1 << 20
 	maxRegisteredPlugins       = 64
+	maxPluginDiscoveryEntries  = 256
 	maxPluginMCPServers        = 16
 	pluginServerIDPrefix       = "plugin/"
 )
@@ -952,6 +953,10 @@ func loadPluginFromDir(ctx context.Context, paths ConfigPaths, dir string, check
 	if err != nil {
 		return nil, err
 	}
+	return loadPluginAtRoot(ctx, paths, canonicalRoot, checkPath)
+}
+
+func loadPluginAtRoot(ctx context.Context, paths ConfigPaths, canonicalRoot string, checkPath func(string) error) (*loadedPlugin, error) {
 	if checkPath != nil {
 		if err := checkPath(canonicalRoot); err != nil {
 			return nil, err
@@ -1097,6 +1102,91 @@ func buildPluginSubprocessEnv(configured map[string]string, pluginRoot, pluginDa
 	return env
 }
 
+func localPluginCatalog(ctx context.Context, paths ConfigPaths) (map[string][]pluginRegistryEntry, []string, error) {
+	reg, err := loadPluginRegistry(paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	catalog := make(map[string][]pluginRegistryEntry, len(reg.Plugins))
+	for name, entry := range reg.Plugins {
+		catalog[name] = []pluginRegistryEntry{entry}
+	}
+	warnings := []string{}
+	home, err := canonicalSkillHome(paths.Home)
+	if err != nil {
+		return nil, nil, err
+	}
+	dir := filepath.Join(home, "plugins")
+	root, err := openSkillDirectory(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return catalog, warnings, nil
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("scan plugin directory %s: %w", dir, err)
+	}
+	defer root.Close()
+	f, err := root.Open(".")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	children, err := f.ReadDir(maxPluginDiscoveryEntries + 1)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, nil, err
+	}
+	if len(children) > maxPluginDiscoveryEntries {
+		return nil, nil, fmt.Errorf("%s exceeds discovery limit of %d entries; use an explicit plugin path", dir, maxPluginDiscoveryEntries)
+	}
+	slices.SortFunc(children, func(a, b fs.DirEntry) int { return strings.Compare(a.Name(), b.Name()) })
+	for _, child := range children {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		if !child.IsDir() || strings.EqualFold(child.Name(), ".git") {
+			continue
+		}
+		path := filepath.Join(dir, child.Name())
+		manifest, _, err := loadPluginManifest(path)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				warnings = append(warnings, fmt.Sprintf("%s: %s", path, err))
+			}
+			continue
+		}
+		if reg.Plugins[manifest.Name].Path != path {
+			catalog[manifest.Name] = append(catalog[manifest.Name], pluginRegistryEntry{Path: path})
+		}
+	}
+	return catalog, warnings, nil
+}
+
+func loadPluginArgument(ctx context.Context, paths ConfigPaths, arg string, checkPath func(string) error) (*loadedPlugin, error) {
+	if validatePluginName(arg) != nil {
+		return loadPluginFromDir(ctx, paths, arg, checkPath)
+	}
+	catalog, _, err := localPluginCatalog(ctx, paths)
+	if err != nil {
+		return nil, err
+	}
+	entries := catalog[arg]
+	switch len(entries) {
+	case 0:
+		return nil, fmt.Errorf("plugin %q not found; run 'meldra plugins list' or specify a directory such as ./%s", arg, arg)
+	case 1:
+		path := entries[0].Path
+		loaded, err := loadPluginAtRoot(ctx, paths, path, checkPath)
+		if err != nil {
+			return nil, err
+		}
+		if loaded.Manifest.Name != arg {
+			return nil, fmt.Errorf("plugin %q no longer matches %s; run 'meldra plugins list'", arg, path)
+		}
+		return loaded, nil
+	default:
+		return nil, fmt.Errorf("multiple packages named %q; run 'meldra plugins list' and specify an explicit path", arg)
+	}
+}
+
 func loadPluginRegistry(paths ConfigPaths) (pluginRegistry, error) {
 	if _, err := verifyConfigHome(paths); err != nil {
 		return pluginRegistry{}, err
@@ -1217,11 +1307,7 @@ func loadApprovedPluginMCPConfigs(ctx context.Context, paths ConfigPaths) (map[s
 		if !entry.Enabled || !entry.MCPApproved {
 			continue
 		}
-		canonicalRoot, err := resolvePluginRoot(entry.Path)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf("Warning: plugin %s unavailable: %s", name, sanitizeTerminalText(err.Error())))
-			continue
-		}
+		canonicalRoot := entry.Path
 		if err := checkPluginRootAllowed(paths, canonicalRoot); err != nil {
 			warnings = append(warnings, fmt.Sprintf("Warning: plugin %s unavailable: %s", name, sanitizeTerminalText(err.Error())))
 			continue

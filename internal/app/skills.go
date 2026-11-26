@@ -170,11 +170,7 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 					catalog.warn(entry.Path, fmt.Errorf("discovery limit of %d entries reached; remaining plugins skipped", maxSkillEntries))
 					break
 				}
-				canonicalRoot, rootErr := resolvePluginRoot(entry.Path)
-				if rootErr != nil {
-					catalog.warn(entry.Path, rootErr)
-					continue
-				}
+				canonicalRoot := entry.Path
 				if err := checkPluginRootAllowed(paths, canonicalRoot); err != nil {
 					catalog.warn(entry.Path, err)
 					continue

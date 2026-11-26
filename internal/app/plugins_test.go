@@ -113,6 +113,15 @@ func testPluginPaths(t *testing.T) ConfigPaths {
 	return paths
 }
 
+func enableAndApproveTestPlugin(t *testing.T, path, name string) {
+	t.Helper()
+	for _, cmd := range [][]string{{"enable", path}, {"allow-mcp", name}} {
+		if err := runPluginsCommand(t.Context(), cmd, io.Discard); err != nil {
+			t.Fatalf("plugins %v: %v", cmd, err)
+		}
+	}
+}
+
 func TestPluginManifestValidationAndConformance(t *testing.T) {
 	paths := testPluginPaths(t)
 
@@ -679,7 +688,7 @@ func TestPluginEndToEndStdioRuntimeApprovalAndPersistence(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := runPluginsCommand(t.Context(), []string{"enable", dir, "--allow-mcp"}, &out); err != nil {
+	if err := runPluginsCommand(t.Context(), []string{"enable", dir}, &out); err != nil {
 		t.Fatalf("re-enable failed: %v", err)
 	}
 	out.Reset()
@@ -766,10 +775,7 @@ func TestPluginRemoteTransportsStreamableHTTPAndSSEAndHeaderOriginGuards(t *test
 	}`, streamEndpoint.URL, sseEndpoint.URL, redirectEndpoint.URL)
 	writeFileMode(t, filepath.Join(dir, "mcp.json"), mcpJSON, 0o600)
 
-	var out bytes.Buffer
-	if err := runPluginsCommand(t.Context(), []string{"enable", dir, "--allow-mcp"}, &out); err != nil {
-		t.Fatalf("enable --allow-mcp failed: %v", err)
-	}
+	enableAndApproveTestPlugin(t, dir, "remote-net")
 	w, _ := testWorkspace(t, t.TempDir(), "", true)
 	connections, err := connectMCP(t.Context(), paths, w, "")
 	if err != nil {
@@ -870,7 +876,7 @@ func TestPluginCLIListRevokeAndProtectedHomeRejection(t *testing.T) {
 		t.Fatal("registered a plugin containing private state")
 	}
 
-	allowedDir := filepath.Join(paths.Home, "plugins", "local-pack")
+	allowedDir := filepath.Join(paths.Home, "plugins", "local-pack-main")
 	writeFileMode(t, filepath.Join(allowedDir, "plugin.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"local-pack","version":"0.1.0"}`, 0o600)
 	writeFileMode(t, filepath.Join(allowedDir, "skills", "hello", "SKILL.md"), "---\nname: hello\ndescription: say hi\n---\nhi\n", 0o600)
 	writeFileMode(t, filepath.Join(allowedDir, "mcp.json"), `{
@@ -879,19 +885,54 @@ func TestPluginCLIListRevokeAndProtectedHomeRejection(t *testing.T) {
 	}`, 0o600)
 
 	out.Reset()
-	if err := runPluginsCommand(t.Context(), []string{"enable", allowedDir, "--allow-mcp"}, &out); err != nil {
-		t.Fatalf("expected plugin under MELDRA_HOME/plugins to succeed: %v", err)
+	if err := runPluginsCommand(t.Context(), []string{"list", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var list pluginListOutput
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil || len(list.Plugins) != 1 || list.Plugins[0].Name != "local-pack" || list.Plugins[0].Enabled || list.Plugins[0].MCPStatus != "not-approved" {
+		t.Fatalf("available plugins = %s, err = %v", out.String(), err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"inspect", "local-pack"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"enable", "local-pack", "--allow-mcp"}, io.Discard); err == nil {
+		t.Fatal("enable must not accept startup approval")
+	}
+	for _, file := range []string{pluginsRegistryFile, pluginsRegistryFile + ".lock", pluginDataDirName} {
+		if _, err := os.Stat(filepath.Join(paths.Home, file)); !os.IsNotExist(err) {
+			t.Fatalf("discovery created %s (err=%v)", file, err)
+		}
+	}
+	w, _ := testWorkspace(t, t.TempDir(), "", false)
+	if err := protectRuntimePaths(w, paths); err != nil {
+		t.Fatal(err)
+	}
+	if catalog, err := discoverSkills(t.Context(), w, paths); err != nil || len(catalog.Skills) != 0 {
+		t.Fatalf("discovery exposed a skill before enable: %+v, %v", catalog, err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"allow-mcp", "local-pack"}, io.Discard); err == nil {
+		t.Fatal("approved a discovered but disabled package")
+	}
+	out.Reset()
+	if err := runPluginsCommand(t.Context(), []string{"enable", "local-pack", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var enabled pluginEnableOutput
+	if err := json.Unmarshal(out.Bytes(), &enabled); err != nil || enabled.Name != "local-pack" || enabled.MCPStatus != "not-approved" {
+		t.Fatalf("name enable granted unexpected permissions: %s, %v", out.String(), err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"allow-mcp", "local-pack"}, io.Discard); err != nil {
+		t.Fatal(err)
 	}
 
 	out.Reset()
 	if err := runPluginsCommand(t.Context(), []string{"list", "--json"}, &out); err != nil {
 		t.Fatal(err)
 	}
-	var list pluginListOutput
 	if err := json.Unmarshal(out.Bytes(), &list); err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Plugins) != 1 || list.Plugins[0].MCPStatus != "approved" || list.Plugins[0].SkillsCount != 1 {
+	if len(list.Plugins) != 1 || !list.Plugins[0].Enabled || list.Plugins[0].MCPStatus != "approved" || list.Plugins[0].SkillsCount != 1 {
 		t.Fatalf("list=%+v", list)
 	}
 
@@ -910,10 +951,6 @@ func TestPluginCLIListRevokeAndProtectedHomeRejection(t *testing.T) {
 		t.Fatalf("expected not-approved after revoke-mcp, got %+v", list.Plugins[0])
 	}
 
-	w, _ := testWorkspace(t, t.TempDir(), "", false)
-	if err := protectRuntimePaths(w, paths); err != nil {
-		t.Fatal(err)
-	}
 	catalog, err := discoverSkills(t.Context(), w, paths)
 	if err != nil {
 		t.Fatal(err)
@@ -924,6 +961,63 @@ func TestPluginCLIListRevokeAndProtectedHomeRejection(t *testing.T) {
 	got, err := catalog.read(t.Context(), toolInput(t, map[string]any{"name": "hello", "path": nil}))
 	if err != nil || !strings.Contains(got, "hi") {
 		t.Fatalf("read_skill under MELDRA_HOME/plugins failed: got=%q err=%v", got, err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"disable", "local-pack"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runPluginsCommand(t.Context(), nil, &out); err != nil || !strings.Contains(out.String(), "[available]") || !strings.Contains(out.String(), "not-approved") {
+		t.Fatalf("disabled package should still be discoverable: %s, %v", out.String(), err)
+	}
+}
+
+func TestPluginDiscoveryNameConflictsAndScope(t *testing.T) {
+	paths := testPluginPaths(t)
+	base := filepath.Join(paths.Home, "plugins")
+	manifest := func(dir, name string) {
+		writeFileMode(t, filepath.Join(dir, "plugin.json"), fmt.Sprintf(`{"$schema":%q,"name":%q}`, agentPluginsManifestSchema, name), 0o600)
+	}
+	first := filepath.Join(base, "one")
+	second := filepath.Join(base, "two")
+	manifest(first, "reports")
+	manifest(second, "reports")
+	manifest(filepath.Join(base, "nested", "package"), "nested")
+	writeFileMode(t, filepath.Join(base, "broken", "plugin.json"), `{}`, 0o600)
+	t.Chdir(t.TempDir())
+	manifest("reports", "cwd-plugin")
+	if err := os.Symlink(filepath.Join(t.TempDir(), "unused"), filepath.Join(base, "dangling")); err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	manifest(outside, "linked")
+	if err := os.Symlink(outside, filepath.Join(base, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := runPluginsCommand(t.Context(), []string{"list", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var list pluginListOutput
+	if err := json.Unmarshal(out.Bytes(), &list); err != nil || len(list.Plugins) != 2 || list.Plugins[0].Name != "reports" || list.Plugins[1].Name != "reports" || list.Plugins[0].Path == list.Plugins[1].Path || !strings.Contains(strings.Join(list.Warnings, " "), "broken") {
+		t.Fatalf("discovery = %s, %v", out.String(), err)
+	}
+	for _, command := range []string{"inspect", "enable"} {
+		if err := runPluginsCommand(t.Context(), []string{command, "reports"}, io.Discard); err == nil || !strings.Contains(err.Error(), "multiple packages") {
+			t.Fatalf("%s silently selected a package: %v", command, err)
+		}
+	}
+	if err := runPluginsCommand(t.Context(), []string{"enable", first}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPluginsCommand(t.Context(), []string{"enable", second}, io.Discard); err == nil {
+		t.Fatal("explicit path replaced an existing registration")
+	}
+	if err := runPluginsCommand(t.Context(), []string{"enable", "./reports"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := runPluginsCommand(t.Context(), []string{"inspect", "cwd-plugin"}, &out); err != nil || !strings.Contains(out.String(), "Plugin: cwd-plugin") {
+		t.Fatalf("registered external plugin not found by name: %s, %v", out.String(), err)
 	}
 }
 
@@ -944,9 +1038,7 @@ func TestPluginCatalogCLIAndToolNames(t *testing.T) {
 	}`, endpoint.URL), 0o600)
 
 	var out bytes.Buffer
-	if err := runPluginsCommand(t.Context(), []string{"enable", dir, "--allow-mcp"}, &out); err != nil {
-		t.Fatal(err)
-	}
+	enableAndApproveTestPlugin(t, dir, "acme.docs")
 	serverID := pluginMCPServerID("acme.docs", "docs.api")
 	if got := mcpToolName(serverID, "search"); len(got) > 64 || !mcpNamePart.MatchString(got) {
 		t.Fatalf("invalid wire tool name %q", got)
@@ -1082,10 +1174,7 @@ func TestPluginCLIModesShadowingAndStdioDataCWD(t *testing.T) {
 		}
 	}
 
-	out.Reset()
-	if err := runPluginsCommand(t.Context(), []string{"enable", dir, "--allow-mcp"}, &out); err != nil {
-		t.Fatal(err)
-	}
+	enableAndApproveTestPlugin(t, dir, "data-cwd")
 
 	otherDir := t.TempDir()
 	writeFileMode(t, filepath.Join(otherDir, "plugin.json"), `{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"data-cwd"}`, 0o600)
@@ -1240,9 +1329,7 @@ func TestPluginPlanModeBlocksMCPStartWhileAllowingPluginSkill(t *testing.T) {
 	}`, startedMarker), 0o600)
 
 	var out bytes.Buffer
-	if err := runPluginsCommand(t.Context(), []string{"enable", pluginDir, "--allow-mcp"}, &out); err != nil {
-		t.Fatalf("enable --allow-mcp failed: %v", err)
-	}
+	enableAndApproveTestPlugin(t, pluginDir, "plan-guard")
 
 	serverID := pluginMCPServerID("plan-guard", "local")
 	mcpTool := mcpToolName(serverID, "env_probe")
@@ -1355,9 +1442,7 @@ func TestPluginStreamJSONSuspendResumeAndTamperRejection(t *testing.T) {
 	writeMCPConfig("v1")
 
 	var out bytes.Buffer
-	if err := runPluginsCommand(t.Context(), []string{"enable", pluginDir, "--allow-mcp"}, &out); err != nil {
-		t.Fatal(err)
-	}
+	enableAndApproveTestPlugin(t, pluginDir, "resume-guard")
 
 	serverID := pluginMCPServerID("resume-guard", "api")
 	mcpTool := mcpToolName(serverID, "deploy_check")
@@ -1455,7 +1540,7 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 	}
 	paths := testPluginPaths(t)
 	wsDir := t.TempDir()
-	pluginDir := t.TempDir()
+	pluginDir := filepath.Join(paths.Home, "plugins", "combo-main")
 
 	writeFileMode(t, filepath.Join(pluginDir, "plugin.json"), `{
 		"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
@@ -1476,9 +1561,7 @@ func TestPluginChatTurnCombinesReadSkillAndMCPWithApproval(t *testing.T) {
 	}`, 0o600)
 
 	var out bytes.Buffer
-	if err := runPluginsCommand(t.Context(), []string{"enable", pluginDir, "--allow-mcp"}, &out); err != nil {
-		t.Fatal(err)
-	}
+	enableAndApproveTestPlugin(t, "combo", "combo")
 
 	serverID := pluginMCPServerID("combo", "local")
 	mcpTool := mcpToolName(serverID, "env_probe")

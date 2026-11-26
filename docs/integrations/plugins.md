@@ -23,35 +23,41 @@ plugin activates its skills only, and starting its MCP servers requires a
 separate explicit approval bound to the plugin's MCP configuration and bundled
 executables.
 
-## Inspect and enable a plugin
+## Discover and enable a plugin
 
-Review a local plugin directory without writing configuration, creating data
-directories, or launching MCP servers:
-
-```sh wrap
-meldra plugins inspect /path/to/my-plugin
-meldra plugins inspect /path/to/my-plugin --json
-```
-
-Enable the plugin's skills in your private `$MELDRA_HOME/plugins.json`:
+Place each unpacked package directly under `$MELDRA_HOME/plugins/` (default:
+`~/.meldra/plugins/`). `list` shows both available and enabled packages;
+use the `name` from `plugin.json`, not the folder name:
 
 ```sh wrap
-meldra plugins enable /path/to/my-plugin
 meldra plugins list
+meldra plugins inspect my-plugin
+meldra plugins enable my-plugin
 ```
 
-After reviewing the plugin's `mcp.json`, approve or revoke its MCP servers:
+Listing and inspecting do not enable skills, write a registry, create plugin
+data, or start MCP servers. Discovery does not recurse, follow symlinked package
+directories, or scan the current project. If multiple packages declare the same
+name, use the path shown by `list` to select one. Explicit paths also work for
+packages outside the discovery directory:
+
+```sh wrap
+meldra plugins inspect ./my-plugin --json
+meldra plugins enable ./my-plugin
+```
+
+Enabling records the package location and activates its skills across sessions.
+MCP requires a separate step. After reviewing the plugin's `mcp.json`, approve
+or revoke its servers by registered name:
 
 ```sh wrap
 meldra plugins allow-mcp my-plugin
 meldra plugins revoke-mcp my-plugin
 ```
 
-You can also approve MCP servers during enablement with
-`meldra plugins enable /path/to/my-plugin --allow-mcp`.
-
 Disable a plugin while preserving its persistent `PLUGIN_DATA` directory across
-updates, or remove both the registration and `PLUGIN_DATA`:
+updates, or remove both the registration and `PLUGIN_DATA`. A package still in
+the discovery directory returns to the available state, without MCP approval:
 
 ```sh wrap
 meldra plugins disable my-plugin
