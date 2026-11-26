@@ -37,6 +37,8 @@ type skill struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Path        string `json:"path"`
+	Plugin      string `json:"plugin,omitempty"`
+	pluginRoot  string
 }
 
 type skillCatalog struct {
@@ -149,6 +151,52 @@ func discoverSkills(ctx context.Context, workspace *Workspace, paths ConfigPaths
 			catalog.Skills = append(catalog.Skills, item)
 		}
 	}
+	if catalog.meldraHome != "" {
+		pluginPaths := ConfigPaths{Home: catalog.meldraHome}
+		if reg, regErr := loadPluginRegistry(pluginPaths); regErr != nil {
+			catalog.warn(filepath.Join(catalog.meldraHome, pluginsRegistryFile), regErr)
+		} else {
+			for _, pluginName := range slices.Sorted(maps.Keys(reg.Plugins)) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				entry := reg.Plugins[pluginName]
+				if !entry.Enabled {
+					continue
+				}
+				canonicalRoot, rootErr := resolvePluginRoot(entry.Path)
+				if rootErr != nil {
+					catalog.warn(entry.Path, rootErr)
+					continue
+				}
+				pluginSkills, pluginWarnings, loadErr := loadPluginSkillsOnly(ctx, canonicalRoot, pluginName, catalog.checkPath)
+				if loadErr != nil {
+					catalog.warn(canonicalRoot, loadErr)
+					continue
+				}
+				catalog.Warnings = append(catalog.Warnings, pluginWarnings...)
+				for _, item := range pluginSkills {
+					if entries >= maxSkillEntries {
+						catalog.warn(item.Path, fmt.Errorf("discovery limit of %d entries exceeded; remaining plugin skills skipped", maxSkillEntries))
+						break
+					}
+					entries++
+					if seenNames[item.Name] {
+						catalog.warn(item.Path, fmt.Errorf("duplicate skill %q from plugin %q shadowed by higher-priority source", item.Name, item.Plugin))
+						continue
+					}
+					encoded, _ := json.Marshal(item)
+					if catalogBytes+len(encoded)+1 > maxSkillCatalogBytes {
+						catalog.warn(item.Path, fmt.Errorf("skill metadata catalog limit of %d bytes exceeded", maxSkillCatalogBytes))
+						continue
+					}
+					catalogBytes += len(encoded) + 1
+					seenNames[item.Name] = true
+					catalog.Skills = append(catalog.Skills, item)
+				}
+			}
+		}
+	}
 	slices.SortFunc(catalog.Skills, func(a, b skill) int { return strings.Compare(a.Name, b.Name) })
 	if _, err := canonicalSkillHome(paths.Home); err == nil {
 		catalog.Warnings = filterSkillWarnings(catalog.Warnings, paths)
@@ -228,13 +276,18 @@ func skillDisplayLine(text string) string {
 }
 
 func (c *skillCatalog) checkPath(path string) error {
-	nativeRoot := filepath.Join(c.meldraHome, "skills")
-	native := c.meldraHome != "" && within(nativeRoot, path)
+	nativeSkills := filepath.Join(c.meldraHome, "skills")
+	nativePlugins := filepath.Join(c.meldraHome, "plugins")
+	allowedSkills := c.meldraHome != "" && within(nativeSkills, path)
+	allowedPlugins := c.meldraHome != "" && within(nativePlugins, path)
 	for _, protected := range c.workspace.protected {
 		if !withinFold(protected, path) {
 			continue
 		}
-		if native && withinFold(protected, nativeRoot) {
+		if allowedSkills && withinFold(protected, nativeSkills) {
+			continue
+		}
+		if allowedPlugins && withinFold(protected, nativePlugins) {
 			continue
 		}
 		return fmt.Errorf("access to Meldra configuration, sessions and execution locks is forbidden")
@@ -430,7 +483,20 @@ func (c *skillCatalog) read(ctx context.Context, raw json.RawMessage) (string, e
 	if err := c.checkPath(path); err != nil {
 		return "", err
 	}
-	contents, err := readSkillFile(filepath.Dir(item.Path), in.Path)
+	var contents []byte
+	var err error
+	if item.pluginRoot != "" {
+		resolved, resErr := resolveContainedPath(item.pluginRoot, path)
+		if resErr != nil {
+			return "", resErr
+		}
+		if err := c.checkPath(resolved); err != nil {
+			return "", err
+		}
+		contents, err = readPluginSkillFile(item.pluginRoot, filepath.Dir(item.Path), in.Path)
+	} else {
+		contents, err = readSkillFile(filepath.Dir(item.Path), in.Path)
+	}
 	if err != nil {
 		return "", err
 	}
@@ -493,7 +559,11 @@ func runSkillsCommand(ctx context.Context, args []string, output io.Writer) erro
 	}
 	for _, item := range catalog.Skills {
 		description := skillDisplayLine(item.Description)
-		if _, err := fmt.Fprintf(output, "%s\t%s\n  %s\n", item.Name, description, skillDisplayLine(item.Path)); err != nil {
+		label := item.Name
+		if item.Plugin != "" {
+			label += " [plugin:" + item.Plugin + "]"
+		}
+		if _, err := fmt.Fprintf(output, "%s\t%s\n  %s\n", label, description, skillDisplayLine(item.Path)); err != nil {
 			return err
 		}
 	}

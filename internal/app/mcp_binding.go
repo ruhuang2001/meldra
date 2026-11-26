@@ -86,11 +86,17 @@ func mcpConnectionBinding(ctx context.Context, paths ConfigPaths, name string, c
 	}
 	raw, err := json.Marshal(struct {
 		Config           mcpServerConfig
+		Transport        string
+		CWD              string
+		Headers          map[string]string
+		PluginRoot       string
+		PluginData       string
+		FromPlugin       bool
 		Executable       string
 		ExecutableDigest string
 		Environment      []string
 		OAuthGeneration  string
-	}{config, executable, executableDigest, environment, oauthGeneration})
+	}{config, config.transport, config.cwd, config.headers, config.pluginRoot, config.pluginData, config.fromPlugin, executable, executableDigest, environment, oauthGeneration})
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +141,7 @@ func checkApprovalConnections(ctx context.Context, paths ConfigPaths, options Ch
 			}
 			return nil
 		}
-		servers, err := loadMCPConfig(paths)
+		servers, _, err := loadAllMCPConfigs(ctx, paths)
 		if err != nil {
 			return err
 		}

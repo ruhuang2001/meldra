@@ -78,6 +78,7 @@ Direct `<name>/SKILL.md` children of these directories, in order:
 2. Workspace `.agents/skills`
 3. `$MELDRA_HOME/skills`, default `~/.meldra/skills`
 4. `$HOME/.agents/skills`
+5. Enabled [Agent Plugins](./plugins.md) in `$MELDRA_HOME/plugins.json` (**Unreleased**), sorted by plugin name
 
 The first valid package wins a duplicate name; later copies are shadowed with a
 warning. The catalog is sorted by name. Missing directories are skipped, and one

@@ -10,6 +10,7 @@ import (
 	"maps"
 	"math/big"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +46,13 @@ type mcpServerConfig struct {
 	StartupTimeout     *int              `json:"startup_timeout_sec,omitempty"`
 	ToolTimeout        *int              `json:"tool_timeout_sec,omitempty"`
 	AllowDuringProcess []string          `json:"allow_during_process,omitempty"`
+	transport          string
+	cwd                string
+	headers            map[string]string
+	pluginName         string
+	pluginRoot         string
+	pluginData         string
+	fromPlugin         bool
 }
 
 type mcpConnections struct {
@@ -151,6 +159,21 @@ func mcpDefinitionSize(definition ToolDefinition) (int, error) {
 	return len(data), err
 }
 
+func loadAllMCPConfigs(ctx context.Context, paths ConfigPaths) (map[string]mcpServerConfig, []string, error) {
+	native, err := loadMCPConfig(paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	pluginServers, warnings, err := loadApprovedPluginMCPConfigs(ctx, paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	combined := make(map[string]mcpServerConfig, len(native)+len(pluginServers))
+	maps.Copy(combined, native)
+	maps.Copy(combined, pluginServers)
+	return combined, warnings, nil
+}
+
 func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, selected string, localToolCounts ...int) (*mcpConnections, error) {
 	limit := 112
 	if len(localToolCounts) > 0 {
@@ -159,11 +182,11 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 	if limit < 0 {
 		return nil, fmt.Errorf("local tool catalog exceeds 128 tools")
 	}
-	servers, err := loadMCPConfig(paths)
+	servers, pluginWarnings, err := loadAllMCPConfigs(ctx, paths)
 	if err != nil {
 		return nil, err
 	}
-	connections := &mcpConnections{}
+	connections := &mcpConnections{warnings: pluginWarnings}
 	catalogBytes := 2
 	names := map[string]bool{}
 	for _, name := range slices.Sorted(maps.Keys(servers)) {
@@ -219,6 +242,24 @@ func connectMCP(ctx context.Context, paths ConfigPaths, workspace *Workspace, se
 }
 
 func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, config mcpServerConfig, workspace *Workspace) (*mcp.ClientSession, []ToolDefinition, error) {
+	if config.fromPlugin && config.Command != "" {
+		dataDir, err := ensurePluginDataDir(paths, config.pluginName)
+		if err != nil {
+			return nil, nil, err
+		}
+		config.pluginData = dataDir
+		if config.cwd != "" {
+			rootBoundary := config.pluginRoot
+			if within(config.pluginData, config.cwd) {
+				rootBoundary = config.pluginData
+			}
+			resolvedCWD, err := resolveContainedPath(rootBoundary, config.cwd)
+			if err != nil {
+				return nil, nil, fmt.Errorf("plugin MCP working directory escapes boundary: %w", err)
+			}
+			config.cwd = resolvedCWD
+		}
+	}
 	binding, err := mcpConnectionBinding(ctx, paths, name, config, workspace)
 	if err != nil {
 		return nil, nil, err
@@ -240,23 +281,43 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 				return nil, nil, fmt.Errorf("bearer token environment variable is missing or invalid")
 			}
 		}
-		transport = &mcp.StreamableClientTransport{
-			Endpoint: config.URL, MaxRetries: -1, DisableStandaloneSSE: true, MaxEventSize: maxMCPMessage,
-			HTTPClient: &http.Client{Transport: mcpHTTPTransport{token: token},
-				CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("MCP redirects are disabled") }},
+		originURL, err := url.Parse(config.URL)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid MCP endpoint URL")
 		}
-		if config.OAuth != nil {
-			handler, cleanup, err := newMCPOAuth(startupCtx, paths, name, config, workspace.output, false)
-			if err != nil {
-				return nil, nil, err
+		httpClient := &http.Client{
+			Transport: mcpHTTPTransport{
+				token:     token,
+				originURL: originURL,
+				headers:   config.headers,
+				streamSSE: config.transport == "sse",
+			},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("MCP redirects are disabled") },
+		}
+		if config.transport == "sse" {
+			transport = mcpSSETransport{
+				endpoint: config.URL,
+				client:   httpClient,
+				outerCtx: ctx,
 			}
-			defer cleanup()
-			httpTransport := transport.(*mcp.StreamableClientTransport)
-			httpTransport.OAuthHandler = mcpOAuthSDKHandler{handler}
-			httpTransport.HTTPClient = mcpOAuthMCPClient(config, handler)
-			bearer := httpTransport.HTTPClient.Transport.(mcpOAuthBearerTransport)
-			bearer.refreshAllowed = func() bool { return oauthReady.Load() || startupCtx.Err() == nil }
-			httpTransport.HTTPClient.Transport = bearer
+		} else {
+			transport = &mcp.StreamableClientTransport{
+				Endpoint: config.URL, MaxRetries: -1, DisableStandaloneSSE: true, MaxEventSize: maxMCPMessage,
+				HTTPClient: httpClient,
+			}
+			if config.OAuth != nil {
+				handler, cleanup, err := newMCPOAuth(startupCtx, paths, name, config, workspace.output, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				defer cleanup()
+				httpTransport := transport.(*mcp.StreamableClientTransport)
+				httpTransport.OAuthHandler = mcpOAuthSDKHandler{handler}
+				httpTransport.HTTPClient = mcpOAuthMCPClient(config, handler)
+				bearer := httpTransport.HTTPClient.Transport.(mcpOAuthBearerTransport)
+				bearer.refreshAllowed = func() bool { return oauthReady.Load() || startupCtx.Err() == nil }
+				httpTransport.HTTPClient.Transport = bearer
+			}
 		}
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: "meldra", Version: version}, mcpClientOptions(workspace, name, config))
@@ -332,8 +393,16 @@ func connectMCPServer(ctx context.Context, paths ConfigPaths, name string, confi
 
 func newMCPCommand(config mcpServerConfig, workspace *Workspace) *exec.Cmd {
 	command := exec.Command(config.Command, config.Args...)
-	command.Dir = workspace.root
+	if config.cwd != "" {
+		command.Dir = config.cwd
+	} else {
+		command.Dir = workspace.root
+	}
 	command.WaitDelay = time.Second
+	if config.fromPlugin {
+		command.Env = buildPluginSubprocessEnv(config.Env, config.pluginRoot, config.pluginData)
+		return command
+	}
 	if configuredPath, ok := config.Env["PATH"]; ok && filepath.Base(config.Command) == config.Command && configuredPath != os.Getenv("PATH") {
 		command.Err = fmt.Errorf("MCP commands with a configured PATH must use an absolute command path")
 	}
@@ -349,12 +418,28 @@ func newMCPCommand(config mcpServerConfig, workspace *Workspace) *exec.Cmd {
 	return command
 }
 
+func sanitizeMCPNamePrefix(server string, maxLen int) string {
+	var b strings.Builder
+	for i := 0; i < len(server) && b.Len() < maxLen; i++ {
+		ch := server[i]
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' {
+			b.WriteByte(ch)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "server"
+	}
+	return b.String()
+}
+
 func mcpToolName(server, name string) string {
 	combined := "mcp__" + server + "__" + name
-	if len(combined) <= 64 && mcpNamePart.MatchString(name) {
+	if len(combined) <= 64 && mcpNamePart.MatchString(server) && mcpNamePart.MatchString(name) {
 		return combined
 	}
-	return "mcp__" + server[:min(len(server), 20)] + "__" + digest([]byte(combined))[:32]
+	return "mcp__" + sanitizeMCPNamePrefix(server, 20) + "__" + digest([]byte(combined))[:32]
 }
 
 func (w *Workspace) callMCP(session *mcp.ClientSession, server, name string, timeout *int, schema *jsonschema.Resolved, input json.RawMessage) (string, error) {
@@ -410,9 +495,60 @@ func mcpErrorKind(err error) string {
 
 var errMCPAuth = errors.New("authentication rejected; configure bearer_token_env or OAuth login")
 
-type mcpHTTPTransport struct{ token string }
+type mcpHTTPTransport struct {
+	token     string
+	originURL *url.URL
+	headers   map[string]string
+	streamSSE bool
+}
 
 type mcpCommandTransport struct{ command *exec.Cmd }
+
+type mcpSSETransport struct {
+	endpoint string
+	client   *http.Client
+	outerCtx context.Context
+}
+
+func (t mcpSSETransport) Connect(startupCtx context.Context) (mcp.Connection, error) {
+	connCtx, cancel := context.WithCancel(t.outerCtx)
+	var mu sync.Mutex
+	connected := false
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-startupCtx.Done():
+			mu.Lock()
+			if !connected {
+				cancel()
+			}
+			mu.Unlock()
+		case <-done:
+		}
+	}()
+	conn, err := (&mcp.SSEClientTransport{
+		Endpoint:     t.endpoint,
+		MaxEventSize: maxMCPMessage,
+		HTTPClient:   t.client,
+	}).Connect(connCtx)
+	mu.Lock()
+	connected = err == nil && connCtx.Err() == nil
+	mu.Unlock()
+	close(done)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if connCtx.Err() != nil {
+		_ = conn.Close()
+		cancel()
+		return nil, connCtx.Err()
+	}
+	return &mcpCommandConnection{Connection: conn, close: sync.OnceValue(func() error {
+		cancel()
+		return conn.Close()
+	})}, nil
+}
 
 func (t mcpCommandTransport) Connect(ctx context.Context) (mcp.Connection, error) {
 	prepareMCPProcess(t.command)
@@ -434,8 +570,35 @@ type mcpCommandConnection struct {
 
 func (c *mcpCommandConnection) Close() error { return c.close() }
 
+func isReservedClientHTTPHeader(name string) bool {
+	switch strings.ToLower(name) {
+	case "host", "content-length", "transfer-encoding", "connection", "proxy-authorization", "te", "trailer", "upgrade":
+		return true
+	default:
+		return false
+	}
+}
+
 func (t mcpHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	request = request.Clone(request.Context())
+	sameOrigin := t.originURL == nil || sameHTTPOrigin(request.URL, t.originURL)
+	if !sameOrigin && strings.EqualFold(request.URL.Scheme, "http") && !isLoopbackHostname(request.URL.Hostname()) {
+		return nil, fmt.Errorf("cross-origin insecure HTTP MCP endpoint is forbidden")
+	}
+	if sameOrigin && len(t.headers) > 0 {
+		for _, key := range slices.Sorted(maps.Keys(t.headers)) {
+			if isReservedClientHTTPHeader(key) {
+				continue
+			}
+			if t.token != "" && strings.EqualFold(key, "authorization") {
+				continue
+			}
+			if len(request.Header.Values(key)) > 0 {
+				continue
+			}
+			request.Header.Set(key, t.headers[key])
+		}
+	}
 	if t.token != "" {
 		request.Header.Set("Authorization", "Bearer "+t.token)
 	}
@@ -447,11 +610,14 @@ func (t mcpHTTPTransport) RoundTrip(request *http.Request) (*http.Response, erro
 		_ = response.Body.Close()
 		return nil, errMCPAuth
 	}
-	if response.ContentLength > maxMCPMessage {
-		_ = response.Body.Close()
-		return nil, fmt.Errorf("MCP response exceeds 16 MiB")
+	isEventStream := t.streamSSE && request.Method == http.MethodGet && strings.HasPrefix(strings.ToLower(response.Header.Get("Content-Type")), "text/event-stream")
+	if !isEventStream {
+		if response.ContentLength > maxMCPMessage {
+			_ = response.Body.Close()
+			return nil, fmt.Errorf("MCP response exceeds 16 MiB")
+		}
+		response.Body = http.MaxBytesReader(nil, response.Body, maxMCPMessage)
 	}
-	response.Body = http.MaxBytesReader(nil, response.Body, maxMCPMessage)
 	return response, nil
 }
 

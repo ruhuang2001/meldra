@@ -44,7 +44,7 @@ func mcpCatalogTools(session *mcp.ClientSession, server string, config mcpServer
 
 func mcpCatalogName(kind, server string) string {
 	name := "mcp_" + kind + "__" + server
-	if len(name) > 64 {
+	if len(name) > 64 || !mcpNamePart.MatchString(server) {
 		name = "mcp_" + kind + "__" + digest([]byte(server))[:32]
 	}
 	return name

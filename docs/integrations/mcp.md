@@ -100,7 +100,10 @@ permissions and are not sandboxed. Configure only trusted servers and keep secre
 out of command arguments and URLs.
 
 Only private user configuration is read; repository MCP configuration does not
-start servers automatically. Tool arguments and results may enter private task
+start servers automatically. **Unreleased:** [Agent Plugins](./plugins.md) can
+also provide MCP servers after explicit per-plugin approval with
+`meldra plugins allow-mcp <name>`, using server IDs of the form
+`plugin/<plugin-name>/<server-name>`. Tool arguments and results may enter private task
 history and artifacts, which are not encrypted or automatically redacted. On
 macOS/Linux, connection cleanup terminates the server's process group. Processes
 that deliberately detach from the group can survive; SIGKILL or power loss cannot

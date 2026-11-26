@@ -62,6 +62,8 @@ func runCLIContext(ctx context.Context, args []string, stdin io.Reader, stdout i
 			return runCommandsCommand(ctx, args[1:], stdout)
 		case "skills":
 			return runSkillsCommand(ctx, args[1:], stdout)
+		case "plugins":
+			return runPluginsCommand(ctx, args[1:], stdout)
 		case "mcp":
 			if len(args) >= 2 {
 				switch args[1] {
@@ -1081,6 +1083,8 @@ const usageText = `Usage:
   meldra sessions                List saved sessions.
   meldra commands [--json]       List custom slash commands; accepts --workspace PATH.
   meldra skills [--json]         List skills; accepts --workspace PATH.
+  meldra plugins [list|inspect|enable|disable|allow-mcp|revoke-mcp]
+                                 Manage local Agent Plugins (v1.0.0).
   meldra tasks [--json]           List recorded tasks.
   meldra task show ID [--json]    Inspect task runs, tools, processes, and approvals.
   meldra task events ID --json    Read up to 1000 events; use --after SEQUENCE.
